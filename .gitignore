@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Database (cache lokal, bukan sumber data)
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# Chart debug lama yang nyasar ke root (chart sekarang di-cache di Redis
+# lewat tempfile, bukan ditulis permanen ke sini lagi -- lihat _render_chart
+# di web/app.py). Root-only supaya tidak ikut meng-ignore assets/*.png atau
+# web/static/*.png yang memang bagian dari source.
+/*.png
+
+# Env lokal
+.env
