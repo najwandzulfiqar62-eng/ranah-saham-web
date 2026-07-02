@@ -28,10 +28,33 @@ import pandas as pd
 from core.config import YF_BATCH_SIZE, YF_BATCH_DELAY_SECONDS
 
 
-async def async_download(*args, **kwargs) -> pd.DataFrame:
+async def async_download(*args, max_retries: int = 2, **kwargs) -> pd.DataFrame:
     """Versi non-blocking dari yf.download(). Dipakai untuk SATU ticker
-    atau SATU panggilan batch, dipanggil langsung dari handler async."""
-    return await asyncio.to_thread(yf.download, *args, **kwargs)
+    atau SATU panggilan batch, dipanggil langsung dari handler async.
+
+    Retry ringan (default 2x percobaan, jeda 0.4 detik) untuk gangguan
+    Yahoo Finance sesaat -- baik yang melempar exception maupun yang cuma
+    balik DataFrame kosong tanpa error (pola gagal-diam yang sama sudah
+    ditemukan nyata di async_download_many). Sengaja lebih ringan dari
+    retry batch di bawah (2x tetap vs 3x escalating) karena ini dipanggil
+    langsung dalam siklus request/response -- pengguna menunggu di depan
+    layar, jadi tidak boleh menambah latency terlalu besar saat gagal."""
+    last_exc = None
+    df = None
+    for attempt in range(max_retries):
+        try:
+            df = await asyncio.to_thread(yf.download, *args, **kwargs)
+            if df is not None and not df.empty:
+                return df
+            last_exc = None
+        except Exception as e:
+            last_exc = e
+            df = None
+        if attempt < max_retries - 1:
+            await asyncio.sleep(0.4)
+    if last_exc is not None:
+        raise last_exc
+    return df
 
 
 async def async_ticker_info(ticker: str) -> dict:

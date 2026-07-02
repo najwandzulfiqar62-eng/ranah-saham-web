@@ -138,6 +138,61 @@ def test_x15_and_insider_filter_correctly(client, monkeypatch):
     assert insider_kodes == {"TLKM", "ASII"}
 
 
+def test_clean_coalesces_concurrent_requests_for_same_ticker(monkeypatch, fake_df):
+    """Regresi: banyak request bersamaan untuk ticker yang SAMA (sebelum
+    cache Redis sempat terisi) dulu memicu fetch terpisah ke Yahoo Finance
+    untuk masing-masing. Sekarang harus di-coalesce jadi SATU fetch saja."""
+    import asyncio
+    import time as _time
+
+    import core.async_yf as async_yf
+    import web.app as app_module
+
+    calls = {"n": 0}
+
+    def _slow_download(*a, **kw):
+        calls["n"] += 1
+        _time.sleep(0.2)  # simulasikan network delay supaya 3 caller overlap
+        return fake_df.copy()
+
+    monkeypatch.setattr(async_yf.yf, "download", _slow_download)
+
+    async def _run():
+        return await asyncio.gather(
+            app_module._clean("BBCA.JK"),
+            app_module._clean("BBCA.JK"),
+            app_module._clean("BBCA.JK"),
+        )
+
+    results = asyncio.run(_run())
+    assert calls["n"] == 1
+    assert all(r is not None and not r.empty for r in results)
+
+
+def test_async_download_retries_on_transient_failure(monkeypatch, fake_df):
+    """Regresi: async_download dulu langsung menyerah di percobaan pertama.
+    Sekarang retry ringan (2x) untuk kegagalan sesaat (exception dari
+    yfinance), supaya gangguan jaringan sekali tidak langsung jadi
+    'Gagal memuat data' di UI."""
+    import asyncio
+
+    import core.async_yf as async_yf
+
+    calls = {"n": 0}
+
+    def _flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("network blip")
+        return fake_df.copy()
+
+    monkeypatch.setattr(async_yf.yf, "download", _flaky)
+
+    df = asyncio.run(async_yf.async_download("BBCA.JK", period="1y", interval="1d"))
+    assert calls["n"] == 2
+    assert not df.empty
+
+
 def test_chart_returns_png(client):
     r = client.get("/api/chart/BBCA")
     assert r.status_code == 200

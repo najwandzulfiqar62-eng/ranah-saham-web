@@ -354,15 +354,37 @@ async def _render_chart(label: str, kind: str, df: pd.DataFrame, gen_fn, *gen_ar
 
 
 # ---------- helper ----------
+_inflight: dict[str, asyncio.Task] = {}
+
+
 async def _clean(ticker: str, period: str = "1y", interval: str = "1d"):
     key = f"df:{ticker}:{period}:{interval}"
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    df = await async_download(ticker, period=period, interval=interval, progress=False)
-    df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
-    _cache_set(key, df)
-    return df
+
+    # Request coalescing: kalau ticker+period+interval yang SAMA sedang
+    # di-fetch oleh request lain yang datang lebih dulu (belum sempat masuk
+    # cache), tunggu hasil fetch itu saja -- jangan tembak Yahoo Finance
+    # dobel. Ditemukan perlu nyata: banyak pengguna simultan sering minta
+    # ticker populer yang sama (mis. BBCA) dalam detik yang hampir
+    # bersamaan, sebelum cache Redis sempat terisi dari permintaan pertama.
+    existing = _inflight.get(key)
+    if existing is not None:
+        return await existing
+
+    async def _fetch():
+        df = await async_download(ticker, period=period, interval=interval, progress=False)
+        df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+        _cache_set(key, df)
+        return df
+
+    task = asyncio.ensure_future(_fetch())
+    _inflight[key] = task
+    try:
+        return await task
+    finally:
+        _inflight.pop(key, None)
 
 
 def _py(o):
