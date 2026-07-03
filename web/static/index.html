@@ -703,11 +703,154 @@ html{scroll-behavior:smooth}
   /* Market Breadth cards */
   #v-pasar [style*="minmax(130px"]{grid-template-columns:1fr 1fr!important}
 }
+
+/* ===== RANAH SAHAM UI REFRESH: disciplined, not decorative ===== */
+:root{
+  --bg:#06110F;
+  --panel:#0B1714;
+  --panel2:#101F1B;
+  --elev:#142721;
+  --line:#213832;
+  --line-soft:#172924;
+  --gold:#C79A2A;
+  --gold-soft:rgba(199,154,42,.12);
+  --gold-dim:rgba(199,154,42,.48);
+  --text:#F2EFE7;
+  --muted:#9AA69F;
+  --faint:#66736C;
+  --bull:#2FB57E;
+  --bear:#D65A4A;
+  --neutral:#6E8178;
+  --accent:var(--gold);
+  --green:var(--bull);
+  --red:var(--bear);
+  --fg:var(--text);
+  --text2:var(--muted);
+  --radius:8px;
+}
+body{
+  background:
+    linear-gradient(180deg,rgba(199,154,42,.035),transparent 260px),
+    linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px),
+    linear-gradient(180deg,rgba(255,255,255,.014) 1px,transparent 1px),
+    var(--bg);
+  background-size:auto,48px 48px,48px 48px,auto;
+}
+header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
+.brand{gap:10px;letter-spacing:.12em}
+.brand i{display:none}
+.brand-mark{
+  width:32px;height:32px;border:1px solid var(--gold-dim);border-radius:8px;
+  display:inline-flex;align-items:center;justify-content:center;
+  color:var(--gold);background:rgba(199,154,42,.08);
+  font-family:"Space Grotesk";font-weight:700;letter-spacing:-.04em;
+}
+.panel,.pulse-card,.news-headline-card,.news-card,.news-list-wrap,.port-sum-card,.alert-row{
+  border-radius:8px;
+}
+.panel:hover{border-color:rgba(199,154,42,.22);box-shadow:0 8px 22px rgba(0,0,0,.22)}
+.cell:hover,.chip:hover{transform:none;box-shadow:none}
+.tab{border-radius:6px}
+.btn{border-radius:7px}
+.btn:hover{filter:none;background:#D7A83A}
+.btn.ghost:hover{background:rgba(199,154,42,.08);border-color:var(--gold-dim)}
+.eyebrow{letter-spacing:.18em;color:#B8B0A0}
+.eyebrow::before{background:var(--gold);width:18px}
+
+.rs-research-hero{
+  text-align:left;
+  display:grid;
+  grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);
+  gap:28px;
+  align-items:end;
+  padding:34px 0 24px;
+}
+.home-brandline{display:flex;align-items:center;gap:12px;margin-bottom:18px;color:var(--text);font-family:"Space Grotesk";font-weight:700;letter-spacing:.16em}
+.home-brandline .rs-mark{width:46px;height:46px;border-radius:10px;border:1px solid var(--gold-dim);display:inline-flex;align-items:center;justify-content:center;color:var(--gold);background:rgba(199,154,42,.08);letter-spacing:-.05em;font-size:20px}
+.home-kicker{font-size:12px;color:var(--gold);letter-spacing:.22em;text-transform:uppercase;margin:0 0 8px;font-family:"JetBrains Mono"}
+.rs-research-hero .home-title{margin:0 0 12px;max-width:760px;font-size:clamp(30px,5vw,56px);line-height:1.02;letter-spacing:0}
+.rs-research-hero .home-sub{margin:0;max-width:690px;font-size:15px;color:#B9C3BD}
+.home-search-card{
+  background:rgba(11,23,20,.78);border:1px solid rgba(199,154,42,.2);border-radius:8px;
+  padding:16px;box-shadow:0 16px 40px rgba(0,0,0,.18);
+}
+.home-search-title{font-family:"Space Grotesk";font-weight:700;font-size:16px;margin:0 0 10px;color:var(--text)}
+.home-search{max-width:none;margin:0}
+.home-search input{background:#07120F;border-color:rgba(199,154,42,.22);border-radius:7px}
+.home-search input:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(199,154,42,.11)}
+.home-quick{justify-content:flex-start}
+.home-quick button{border-radius:6px;background:#0A1713;border-color:rgba(199,154,42,.18);color:#C7CEC8}
+.home-section-label{display:flex;justify-content:space-between;align-items:center;margin:4px 0 10px;color:var(--muted);font-size:12px}
+.home-section-label b{font-family:"Space Grotesk";font-size:15px;color:var(--text)}
+.home-pulse,.home-cols{gap:12px}
+.pulse-card{background:linear-gradient(180deg,rgba(255,255,255,.018),transparent),var(--panel);min-height:110px}
+.pc-label{letter-spacing:.14em;color:#AEB8B1}
+.pc-code{display:inline-flex;align-items:center;justify-content:center;min-width:32px;height:20px;border:1px solid rgba(199,154,42,.26);border-radius:5px;margin-right:7px;color:var(--gold);font-family:"JetBrains Mono";font-size:10px;letter-spacing:.06em}
+.pc-tag{border-radius:6px}
+
+.analysis-shell{
+  background:linear-gradient(180deg,rgba(199,154,42,.06),rgba(199,154,42,.015)),var(--panel);
+  border:1px solid rgba(199,154,42,.23);
+  border-radius:8px;
+  padding:22px;
+  margin:0 0 14px;
+}
+.analysis-head{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:18px;align-items:start}
+.analysis-title{font-family:"Space Grotesk";font-size:40px;line-height:1;font-weight:700;letter-spacing:0;margin:4px 0 8px}
+.analysis-sub{color:#B9C3BD;font-size:14px;max-width:720px}
+.analysis-score-card{border:1px solid var(--line);background:#07120F;border-radius:8px;padding:16px;text-align:center}
+.analysis-score-card .score{font-size:54px;color:var(--text)}
+.analysis-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.analysis-actions .watch-btn{border-radius:7px;margin:0}
+.decision-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px}
+.decision-card{background:#07120F;border:1px solid var(--line);border-radius:8px;padding:13px 14px;min-width:0}
+.decision-card .label{font-size:10px;text-transform:uppercase;letter-spacing:.13em;color:var(--muted);margin-bottom:6px}
+.decision-card .value{font-family:"Space Grotesk";font-weight:700;font-size:20px;line-height:1.1;color:var(--text)}
+.decision-card .sub{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.35}
+.level-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:14px}
+.level-cell{background:var(--panel);padding:13px 14px}
+.level-cell .k{font-size:10px;text-transform:uppercase;letter-spacing:.13em;color:var(--muted)}
+.level-cell .v{font-family:"JetBrains Mono";font-weight:700;margin-top:4px}
+.analysis-layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px;align-items:start}
+.analysis-main,.analysis-side{min-width:0}
+.analysis-side{display:flex;flex-direction:column;gap:14px}
+.chart-panel #chart{height:430px;background:#07120F}
+.chart-meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}
+.thesis-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.case-card{border:1px solid var(--line);border-radius:8px;padding:15px;background:var(--panel2)}
+.case-card h3{font-family:"Space Grotesk";font-size:17px;margin:0 0 10px}
+.case-card ul{margin:0;padding-left:18px;color:#DCE4DE;font-size:13px;line-height:1.65}
+.case-card li{margin:4px 0}
+.case-bull h3{color:var(--bull)}.case-bear h3{color:var(--bear)}
+.risk-list{display:flex;flex-direction:column;gap:8px}
+.risk-item{border:1px solid var(--line);background:#07120F;border-radius:8px;padding:10px 12px;font-size:13px;color:#DCE4DE}
+.audit-note{font-size:13px;color:#DCE4DE;line-height:1.6}
+.audit-note b{color:var(--gold)}
+.side-tool-stack{display:flex;flex-direction:column;gap:8px}
+.side-tool-stack .btn{width:100%;text-align:center}
+.quickbadges .chip{border-radius:6px}
+
+@media(max-width:900px){
+  .rs-research-hero,.analysis-head,.analysis-layout{grid-template-columns:1fr}
+  .analysis-score-card{text-align:left}
+  .decision-grid,.level-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .analysis-title{font-size:34px}
+}
+@media(max-width:640px){
+  .rs-research-hero{padding:22px 0 14px;gap:16px}
+  .home-brandline{margin-bottom:12px}
+  .rs-research-hero .home-title{font-size:31px}
+  .home-search-card{padding:13px}
+  .analysis-shell{padding:16px}
+  .analysis-title{font-size:30px}
+  .decision-grid,.level-grid,.thesis-grid{grid-template-columns:1fr}
+  .chart-panel #chart{height:320px}
+}
 </style>
 </head>
 <body>
 <header><div class="wrap nav">
-  <div class="brand" onclick="route('beranda')" style="cursor:pointer">RANAH<i></i>SAHAM<sup>IDX</sup></div>
+  <div class="brand" onclick="route('beranda')" style="cursor:pointer"><span class="brand-mark">RS</span><span>RANAH SAHAM</span><sup>IDX</sup></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-v="beranda">Beranda</button>
     <button class="tab" data-v="analisis">Analisis</button>
@@ -764,17 +907,24 @@ html{scroll-behavior:smooth}
   <!-- ANALISIS -->
   <!-- BERANDA -->
   <div class="view on" id="v-beranda">
-    <section class="home-hero">
-      <p class="eyebrow">RANAH SAHAM</p>
-      <h1 class="home-title">Analisis saham IDX — jujur & menyeluruh.</h1>
-      <p class="home-sub">Teknikal, IHSG, screener, SMC, fundamental & valuasi, hingga insight naratif. Satu tempat, tanpa klaim ramalan ajaib.</p>
-      <div class="home-search">
-        <input id="homeSearch" placeholder="Ketik kode saham, mis. BBCA, TLKM, GOTO…" autocomplete="off">
-        <button class="btn" id="homeSearchBtn">Analisis →</button>
-        <div class="home-sug" id="homeSug"></div>
+    <section class="home-hero rs-research-hero">
+      <div>
+        <div class="home-brandline"><span class="rs-mark">RS</span><span>RANAH SAHAM</span></div>
+        <p class="home-kicker">Discipline. Strategy. Growth.</p>
+        <h1 class="home-title">Research cockpit saham IDX.</h1>
+        <p class="home-sub">Baca kondisi pasar, cari peluang, lalu cek alasan dan risikonya dalam satu alur yang rapi. Transparan, edukatif, dan tanpa klaim profit instan.</p>
       </div>
-      <div class="home-quick" id="homeQuick"></div>
+      <div class="home-search-card">
+        <p class="home-search-title">Mulai dari kode saham</p>
+        <div class="home-search">
+          <input id="homeSearch" placeholder="BBCA, TLKM, GOTO..." autocomplete="off">
+          <button class="btn" id="homeSearchBtn">Analisis</button>
+          <div class="home-sug" id="homeSug"></div>
+        </div>
+        <div class="home-quick" id="homeQuick"></div>
+      </div>
     </section>
+    <div class="home-section-label"><b>Market Pulse</b><span>Ringkasan cepat sebelum memilih saham</span></div>
     <div id="homePulse"></div>
     <div class="home-cols">
       <div id="homeMovers"></div>
@@ -1354,6 +1504,43 @@ function _quickBadges(d){
   </p>`;
   return `<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">${b.join('')}</div>${caption}`;
 }
+function _rrRatio(d){
+  const up=Number(d.potensi_naik_pct),down=Number(d.risiko_turun_pct);
+  if(!isFinite(up)||!isFinite(down)||up<=0||down<=0)return null;
+  return up/down;
+}
+function _rrText(d){const r=_rrRatio(d);return r==null?'Belum cukup data':'1 : '+fmt(r,2)}
+function _li(items){return items.map(x=>`<li>${x}</li>`).join('')}
+function _analysisCases(d){
+  const bull=[],bear=[];
+  const rec=(d.recommendation||'').toUpperCase();
+  const score=Number(d.score||0),rsi=Number(d.rsi||0),vol=Number(d.vol_ratio||0);
+  const rr=_rrRatio(d);
+  if(score>=65||/BUY|BELI/.test(rec))bull.push(`Skor teknikal ${score}/100 memberi dukungan awal untuk skenario positif.`);
+  if(d.macd_bullish)bull.push('MACD masih berada di sisi bullish, momentum belum patah.');
+  if((d.change_5d||0)>0)bull.push(`Harga menguat ${fmt(d.change_5d,2)}% dalam 5 hari terakhir.`);
+  if(vol>=1.2)bull.push(`Volume ${fmt(vol,2)}x rata-rata, ada partisipasi lebih besar dari biasanya.`);
+  if(rr!=null&&rr>=1.5)bull.push(`Potensi ke R1 lebih besar dari risiko ke S1 (RR teknikal ${_rrText(d)}).`);
+  if(d.bandar&&/Akumulasi/.test(d.bandar.label||''))bull.push(`Proxy volume menunjukkan ${d.bandar.label}; tetap bukan data broker flow asli.`);
+  if(score<45||/SELL|AVOID|JUAL/.test(rec))bear.push(`Skor teknikal ${score}/100 belum cukup kuat untuk agresif.`);
+  if(!d.macd_bullish)bear.push('MACD masih negatif, momentum perlu konfirmasi lebih dulu.');
+  if(rsi>=70)bear.push(`RSI ${fmt(rsi,1)} mendekati area jenuh beli; rawan pullback pendek.`);
+  if(rr!=null&&rr<1)bear.push(`Risiko ke S1 lebih besar daripada potensi ke R1 (RR teknikal ${_rrText(d)}).`);
+  if(vol>0&&vol<.7)bear.push(`Volume hanya ${fmt(vol,2)}x rata-rata; sinyal kurang dikonfirmasi transaksi.`);
+  if(d.bandar&&/Distribusi/.test(d.bandar.label||''))bear.push(`Proxy volume membaca ${d.bandar.label}; waspadai tekanan jual.`);
+  if(d.likuiditas==='Kurang Likuid'||d.likuiditas==='Tidak Likuid')bear.push(`Likuiditas ${d.likuiditas}; eksekusi dan spread bisa jadi risiko utama.`);
+  if(!bull.length)bull.push('Belum ada dominasi alasan bullish yang bersih; tunggu konfirmasi tambahan.');
+  if(!bear.length)bear.push('Risiko utama belum mencolok, tetapi level support dan kondisi IHSG tetap perlu dipantau.');
+  return {bull:bull.slice(0,5),bear:bear.slice(0,5)};
+}
+function _riskItems(d){
+  const out=[];
+  if(d.risiko_turun_pct!=null)out.push(`Support terdekat S1 di Rp${fmt(d.s1)}; jarak risiko sekitar ${fmt(d.risiko_turun_pct,1)}%.`);
+  if(d.atr_pct!=null)out.push(`ATR ${fmt(d.atr_pct,1)}% menggambarkan ayunan harian; semakin besar, stop loss makin mudah tersentuh.`);
+  if(d.likuiditas)out.push(`Likuiditas: ${d.likuiditas}. Ranking teknikal bagus tetap perlu disaring dengan nilai transaksi.`);
+  if(d.bandar)out.push(`${d.bandar.label} adalah proxy Chaikin A/D Line, bukan data bandar atau broker flow asli.`);
+  return out;
+}
 function countUp(node,to){let t0=null;const dur=700;function f(ts){if(!t0)t0=ts;const p=Math.min((ts-t0)/dur,1);node.textContent=Math.round(p*to);if(p<1)requestAnimationFrame(f)}requestAnimationFrame(f)}
 
 /* ---------- MOBILE NAV ---------- */
@@ -1442,79 +1629,108 @@ async function analyze(kode){
 
   const tot=(d.bullish_count||0)+(d.bearish_count||0)+(d.netral_count||0)||1;
   const bw=100*(d.bullish_count||0)/tot,rw=100*(d.bearish_count||0)/tot,nw=100*(d.netral_count||0)/tot;
+  const cases=_analysisCases(d),risks=_riskItems(d),rrTxt=_rrText(d),rr=_rrRatio(d);
+  const rrColor=rr==null?'var(--muted)':rr>=1.5?'var(--bull)':rr>=1?'var(--gold)':'var(--bear)';
+  const signalColor=vColor(d.recommendation),gradeCol=gradeColor(d.grade);
   body.innerHTML='';
   body.innerHTML=(`
-  <section class="panel">
-    <div class="hero">
-      <div class="scorewrap">
-        <div class="score"><span id="scoreNum">0</span><small>/100</small></div>
-        <div class="gaugetrack"><div class="gaugefill" id="gauge"></div></div>
-      </div>
+  <section class="analysis-shell">
+    <div class="analysis-head">
       <div>
-        <div class="ticker">${d.kode}</div>
-        <button id="shareBtn" class="watch-btn" onclick="shareCard()">Bagikan kartu</button>
-        <button id="ohlcBtn" class="watch-btn" onclick="exportOHLC('${d.kode}')">⬇ Data CSV</button>
-        <span class="rating" style="color:${vColor(d.rating)}">${d.rating} · ${d.recommendation}</span>
-        <div class="pricerow">Rp<span id="anzPrice">${fmt(d.price)}</span> ·
+        <p class="eyebrow" style="margin-bottom:10px">Analisis Saham</p>
+        <div class="analysis-title">${d.kode}</div>
+        <div class="analysis-sub">Harga Rp<span id="anzPrice">${fmt(d.price)}</span> ·
           <span id="anzChg1d" class="${d.change_1d>=0?'up':'down'}">${d.change_1d>=0?'+':''}${fmt(d.change_1d,2)}% (1h)</span> ·
           <span class="${d.change_5d>=0?'up':'down'}">${d.change_5d>=0?'+':''}${fmt(d.change_5d,2)}% (5h)</span> ${liveBadge('analisis')}</div>
         ${_quickBadges(d)}
-        <div class="confluence">
-          <div class="cbar"><i id="cb-b" style="background:var(--bull)"></i><i id="cb-n" style="background:var(--neutral)"></i><i id="cb-r" style="background:var(--bear)"></i></div>
-          <div class="clabels"><span>▲ ${d.bullish_count} bullish</span><span>● ${d.netral_count} netral</span><span>${d.bearish_count} bearish ▼</span></div>
+        <div class="analysis-actions">
+          <button id="shareBtn" class="watch-btn" onclick="shareCard()">Bagikan kartu</button>
+          <button id="ohlcBtn" class="watch-btn" onclick="exportOHLC('${d.kode}')">Data CSV</button>
+          <a class="watch-btn" href="/api/report/${d.kode}" target="_blank">Laporan PDF</a>
         </div>
       </div>
+      <div class="analysis-score-card">
+        <div class="score"><span id="scoreNum">0</span><small>/100</small></div>
+        <div class="gaugetrack"><div class="gaugefill" id="gauge"></div></div>
+        <div class="rating" style="color:${vColor(d.rating)};margin-top:12px">${d.rating}</div>
+      </div>
+    </div>
+    <div class="decision-grid">
+      <div class="decision-card"><div class="label">Grade</div><div class="value" style="color:${gradeCol}">${d.grade||'-'}</div><div class="sub">AI Score + likuiditas</div></div>
+      <div class="decision-card"><div class="label">Sinyal</div><div class="value" style="color:${signalColor}">${d.recommendation||'-'}</div><div class="sub">Bukan rekomendasi investasi</div></div>
+      <div class="decision-card"><div class="label">RR Teknikal</div><div class="value" style="color:${rrColor}">${rrTxt}</div><div class="sub">R1 dibanding S1</div></div>
+      <div class="decision-card"><div class="label">Likuiditas</div><div class="value" style="color:${likColor(d.likuiditas)}">${d.likuiditas||'-'}</div><div class="sub">Nilai transaksi 20 hari</div></div>
+    </div>
+    <div class="level-grid">
+      <div class="level-cell"><div class="k">Harga</div><div class="v">Rp${fmt(d.price)}</div></div>
+      <div class="level-cell"><div class="k">Resistance R1</div><div class="v up">Rp${fmt(d.r1)} (+${fmt(d.potensi_naik_pct,1)}%)</div></div>
+      <div class="level-cell"><div class="k">Support S1</div><div class="v down">Rp${fmt(d.s1)} (-${fmt(d.risiko_turun_pct,1)}%)</div></div>
+      <div class="level-cell"><div class="k">Volatilitas</div><div class="v">${fmt(d.atr_pct,1)}% ATR</div></div>
     </div>
   </section>
-  <section class="panel"><p class="eyebrow">Grafik Interaktif</p><div id="chart"></div>
-    <div id="phaseRibbon"></div>
-    <div style="margin-top:10px;color:var(--muted);font-size:12px"><span class="ma-dot" style="background:#C8A24B"></span>MA20 · <span class="ma-dot" style="background:#2FB57E"></span>MA50 · seret untuk zoom/geser</div></section>
-  <section class="panel"><p class="eyebrow">Analisis Teknikal</p><p class="insight">${d.insight||''}</p>
-    <div class="grid" style="margin-top:16px">
-      <div class="cell"><div class="k">RSI (14)</div><div class="v">${fmt(d.rsi,1)}</div></div>
-      <div class="cell"><div class="k">MACD</div><div class="v" style="color:${d.macd_bullish?'var(--bull)':'var(--bear)'}">${d.macd_bullish?'Bullish':'Bearish'}</div></div>
-      <div class="cell"><div class="k">Rasio Volume</div><div class="v">${fmt(d.vol_ratio,2)}×</div></div>
-      <div class="cell"><div class="k">Volatilitas (ATR)</div><div class="v">${fmt(d.atr_pct,1)}%</div></div>
-      <div class="cell"><div class="k">Potensi Naik (ke R1 Rp${fmt(d.r1)})</div><div class="v" style="color:var(--bull)">+${fmt(d.potensi_naik_pct,1)}%</div></div>
-      <div class="cell"><div class="k">Risiko Turun (ke S1 Rp${fmt(d.s1)})</div><div class="v" style="color:var(--bear)">-${fmt(d.risiko_turun_pct,1)}%</div></div>
-    </div></section>
-  ${_buildTechSummary(d)}
-  <section class="panel"><p class="eyebrow">Relative Strength & Beta</p>
-    <button class="btn ghost" id="rsbBtn" style="padding:9px 16px">Lihat RS vs IHSG & Beta</button><div id="rsbBox"></div></section>
-  <section class="panel"><p class="eyebrow">Analisis Lanjutan</p>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn ghost" data-adv="confluence" style="padding:9px 14px">Confluence 6 indikator</button>
-      <button class="btn ghost" data-adv="multitimeframe" style="padding:9px 14px">Multi-Timeframe</button>
-      <button class="btn ghost" data-adv="patternscan" style="padding:9px 14px">Pattern Scan</button>
-      <button class="btn ghost" data-adv="backtestpro" style="padding:9px 14px">Backtest Pro</button>
-    </div><div id="advBox"></div></section>
-  <section class="panel"><p class="eyebrow">Rencana Trading & Level</p>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn ghost" data-plan="plan" style="padding:9px 14px">Rencana Trading</button>
-      <button class="btn ghost" data-plan="snr" style="padding:9px 14px">Support & Resistance</button>
-    </div><div id="planBox"></div></section>
-  <section class="panel"><p class="eyebrow">Fundamental & Valuasi</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-      <button class="btn ghost" id="fundBtn" style="padding:9px 16px">Lihat data fundamental & harga wajar</button>
-      <button class="btn ghost" id="profileBtn" style="padding:9px 16px;border-color:var(--gold)44;color:var(--gold)">Profil Investor</button>
-    </div><div id="fundBox"></div></section>
-  <section class="panel"><p class="eyebrow">Insight Naratif</p>
-    <button class="btn ghost" id="insightBtn" style="padding:9px 16px">Buat insight naratif</button><div id="insightBox"></div></section>
-  ${d.vwap_fv?`<section class="panel"><p class="eyebrow">VWAP Fair Value</p>
-    <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
-      <div><div class="score" style="font-size:40px">${fmt(d.vwap_fv.vwap)}</div><div class="muted" style="font-size:12px">nilai wajar (VWAP ${d.vwap_fv.lookback}h)</div></div>
-      <div>
-        <span class="rating" style="color:${/Discount/.test(d.vwap_fv.label)?'var(--bull)':/Premium/.test(d.vwap_fv.label)?'var(--bear)':'var(--gold)'}">${d.vwap_fv.label}</span>
-        <div class="pricerow" style="margin-top:8px">Harga ${d.vwap_fv.dev_pct>=0?'+':''}${fmt(d.vwap_fv.dev_pct,2)}% vs VWAP · dislokasi ${d.vwap_fv.z>=0?'+':''}${d.vwap_fv.z}σ</div>
-        <p class="insight muted" style="margin-top:8px;font-size:13px">${/Discount/.test(d.vwap_fv.label)?'Diperdagangkan di bawah harga rata-rata tertimbang volume — relatif "murah" terhadap di mana mayoritas saham berpindah tangan.':/Premium/.test(d.vwap_fv.label)?'Diperdagangkan di atas harga rata-rata tertimbang volume — relatif "mahal".':'Diperdagangkan selaras dengan harga rata-rata tertimbang volume.'}</p>
-      </div>
-    </div></section>`:''}
-  ${d.smc?`<section class="panel"><p class="eyebrow">Smart Money Concepts</p><p class="insight">${d.smc.narasi||''}</p>
-    <div class="chips"><span class="chip">${d.smc.n_bos} BOS / ${d.smc.n_choch} CHoCH</span><span class="chip">OB ${d.smc.ob_bullish}↑ / ${d.smc.ob_bearish}↓</span><span class="chip">FVG ${d.smc.fvg_unfilled} belum terisi</span><span class="chip">Liquidity ${d.smc.liq_high}H / ${d.smc.liq_low}L</span></div>
-    <button class="btn ghost" id="smcBtn" style="margin-top:14px;padding:9px 16px">Tampilkan chart SMC interaktif</button>
-    <div id="smcCharts"></div></section>`:''}
-  <section style="display:flex;gap:10px;flex-wrap:wrap"><a class="btn" href="/api/report/${d.kode}" target="_blank">⬇ Unduh Laporan PDF Lengkap</a></section>
-  <section class="panel news" id="newsBox"><p class="eyebrow">Berita Terkait</p><div class="skel loadbar"></div></section>`);
+  <div class="analysis-layout">
+    <div class="analysis-main">
+      <section class="panel chart-panel"><p class="eyebrow">Grafik Interaktif</p><div id="chart"></div>
+        <div id="phaseRibbon"></div>
+        <div class="chart-meta"><span><span class="ma-dot" style="background:#C8A24B"></span>MA20 · <span class="ma-dot" style="background:#2FB57E"></span>MA50</span><span>Seret untuk zoom/geser</span></div></section>
+      <section class="panel"><p class="eyebrow">Tesis Cepat</p>
+        <p class="insight" style="margin-bottom:14px">${d.insight||''}</p>
+        <div class="thesis-grid">
+          <div class="case-card case-bull"><h3>Bull case</h3><ul>${_li(cases.bull)}</ul></div>
+          <div class="case-card case-bear"><h3>Bear case</h3><ul>${_li(cases.bear)}</ul></div>
+        </div>
+      </section>
+      <section class="panel"><p class="eyebrow">Analisis Teknikal</p>
+        <div class="grid">
+          <div class="cell"><div class="k">RSI (14)</div><div class="v">${fmt(d.rsi,1)}</div></div>
+          <div class="cell"><div class="k">MACD</div><div class="v" style="color:${d.macd_bullish?'var(--bull)':'var(--bear)'}">${d.macd_bullish?'Bullish':'Bearish'}</div></div>
+          <div class="cell"><div class="k">Rasio Volume</div><div class="v">${fmt(d.vol_ratio,2)}x</div></div>
+          <div class="cell"><div class="k">ATR</div><div class="v">${fmt(d.atr_pct,1)}%</div></div>
+          <div class="cell"><div class="k">Potensi ke R1</div><div class="v up">+${fmt(d.potensi_naik_pct,1)}%</div></div>
+          <div class="cell"><div class="k">Risiko ke S1</div><div class="v down">-${fmt(d.risiko_turun_pct,1)}%</div></div>
+        </div>
+      </section>
+      ${_buildTechSummary(d)}
+      <section class="panel news" id="newsBox"><p class="eyebrow">Berita Terkait</p><div class="skel loadbar"></div></section>
+    </div>
+    <aside class="analysis-side">
+      <section class="panel"><p class="eyebrow">Risiko Utama</p><div class="risk-list">${risks.map(x=>`<div class="risk-item">${x}</div>`).join('')}</div></section>
+      <section class="panel"><p class="eyebrow">Validasi & Audit</p>
+        <p class="audit-note"><b>Belum ada angka audit sinyal otomatis di kartu ini.</b> Gunakan Backtest/Backtest Pro untuk validasi historis. Angka win rate baru boleh ditampilkan setelah signal history benar-benar disimpan.</p>
+        <div class="confluence" style="margin-top:12px">
+          <div class="cbar"><i id="cb-b" style="background:var(--bull)"></i><i id="cb-n" style="background:var(--neutral)"></i><i id="cb-r" style="background:var(--bear)"></i></div>
+          <div class="clabels"><span>${d.bullish_count} bullish</span><span>${d.netral_count} netral</span><span>${d.bearish_count} bearish</span></div>
+        </div>
+      </section>
+      <section class="panel"><p class="eyebrow">Tools Lanjutan</p>
+        <div class="side-tool-stack">
+          <button class="btn ghost" id="rsbBtn">Relative Strength & Beta</button>
+          <button class="btn ghost" data-adv="confluence">Confluence 6 indikator</button>
+          <button class="btn ghost" data-adv="multitimeframe">Multi-Timeframe</button>
+          <button class="btn ghost" data-adv="patternscan">Pattern Scan</button>
+          <button class="btn ghost" data-adv="backtestpro">Backtest Pro</button>
+          <button class="btn ghost" data-plan="plan">Rencana Trading</button>
+          <button class="btn ghost" data-plan="snr">Support & Resistance</button>
+        </div>
+        <div id="rsbBox"></div><div id="advBox"></div><div id="planBox"></div>
+      </section>
+      <section class="panel"><p class="eyebrow">Fundamental & Valuasi</p>
+        <div class="side-tool-stack">
+          <button class="btn ghost" id="fundBtn">Data fundamental & harga wajar</button>
+          <button class="btn ghost" id="profileBtn" style="border-color:var(--gold)44;color:var(--gold)">Profil Investor</button>
+        </div><div id="fundBox"></div></section>
+      <section class="panel"><p class="eyebrow">Insight Naratif</p>
+        <button class="btn ghost" id="insightBtn" style="width:100%">Buat insight naratif</button><div id="insightBox"></div></section>
+      ${d.vwap_fv?`<section class="panel"><p class="eyebrow">VWAP Fair Value</p>
+        <div class="decision-card" style="margin-bottom:10px"><div class="label">VWAP ${d.vwap_fv.lookback} hari</div><div class="value">${fmt(d.vwap_fv.vwap)}</div><div class="sub">${d.vwap_fv.label} · ${d.vwap_fv.dev_pct>=0?'+':''}${fmt(d.vwap_fv.dev_pct,2)}% vs VWAP</div></div>
+        <p class="audit-note">VWAP adalah harga rata-rata tertimbang volume; dipakai sebagai konteks fair value teknikal, bukan valuasi fundamental.</p>
+      </section>`:''}
+      ${d.smc?`<section class="panel"><p class="eyebrow">Smart Money Concepts</p><p class="audit-note">${d.smc.narasi||''}</p>
+        <div class="chips"><span class="chip">${d.smc.n_bos} BOS / ${d.smc.n_choch} CHoCH</span><span class="chip">OB ${d.smc.ob_bullish} naik / ${d.smc.ob_bearish} turun</span><span class="chip">FVG ${d.smc.fvg_unfilled} belum terisi</span></div>
+        <button class="btn ghost" id="smcBtn" style="margin-top:12px;width:100%">Chart SMC interaktif</button>
+        <div id="smcCharts"></div></section>`:''}
+    </aside>
+  </div>`);
   // animate
   staggerPanels(body, 60);
   countUp($('#scoreNum'),d.score);
@@ -4461,7 +4677,7 @@ async function loadHomeMakroStrip(){
 
 function _homeSignalCard(id,title,icon){
   return`<div class="pulse-card" id="${id}" style="min-height:80px;padding:16px 18px">
-    <div class="pc-label">${icon} ${title}</div>
+    <div class="pc-label"><span class="pc-code">${icon}</span>${title}</div>
     <div class="skel loadbar" style="height:12px;border-radius:4px;margin-top:10px"></div>
     <div class="skel loadbar" style="height:12px;border-radius:4px;margin-top:7px;width:70%"></div>
   </div>`;
@@ -4477,9 +4693,9 @@ async function loadHomeSignals(){
   const box=$('#homeSignals');if(!box)return;
   // Render 3 kartu dengan skeleton dulu
   box.innerHTML=`<div class="home-cols" style="margin-top:0">
-    ${_homeSignalCard('hsFiring','Sinyal Firing','⚡')}
-    ${_homeSignalCard('hsBreakout','Signal Breakout','📈')}
-    ${_homeSignalCard('hsBsjp','BSJP','🌙')}
+    ${_homeSignalCard('hsFiring','Sinyal Firing','FIR')}
+    ${_homeSignalCard('hsBreakout','Signal Breakout','BRK')}
+    ${_homeSignalCard('hsBsjp','BSJP','BSJ')}
   </div>`;
 
   // Fetch 3 sumber secara paralel
@@ -4494,7 +4710,7 @@ async function loadHomeSignals(){
   if(card1){
     const items=(uniItems.status==='fulfilled'?uniItems.value:[])||[];
     const firing=items.filter(r=>r.firing).sort((a,b)=>b.score-a.score);
-    card1.innerHTML=`<div class="pc-label">⚡ Sinyal Firing</div>
+    card1.innerHTML=`<div class="pc-label"><span class="pc-code">FIR</span>Sinyal Firing</div>
       ${_homeSignalRows(firing,r=>r.kode,r=>'Score '+r.score)}`;
   }
 
@@ -4503,7 +4719,7 @@ async function loadHomeSignals(){
   if(card2){
     const d=signalData.status==='fulfilled'?signalData.value:null;
     const items=(d&&d.items)||[];
-    card2.innerHTML=`<div class="pc-label">📈 Signal Breakout</div>
+    card2.innerHTML=`<div class="pc-label"><span class="pc-code">BRK</span>Signal Breakout</div>
       ${_homeSignalRows(items,r=>r.ticker,r=>r.signal||'MA5>MA20')}`;
   }
 
@@ -4512,7 +4728,7 @@ async function loadHomeSignals(){
   if(card3){
     const d=bsjpData.status==='fulfilled'?bsjpData.value:null;
     const items=(d&&d.items)||[];
-    card3.innerHTML=`<div class="pc-label">🌙 BSJP</div>
+    card3.innerHTML=`<div class="pc-label"><span class="pc-code">BSJ</span>BSJP</div>
       ${_homeSignalRows(items,r=>r.ticker,r=>'+'+(r.change>=0?'':'')+fmt(r.change,1)+'%')}`;
   }
 }
