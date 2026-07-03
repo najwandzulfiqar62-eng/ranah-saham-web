@@ -151,8 +151,20 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
 
     poc = max(volume_profile, key=lambda x: x[1])[0]
 
-    recent_volume = df_daily['Volume'].tail(5).mean()
-    avg_volume_50 = df_daily['Volume'].tail(50).mean()
+    # Yahoo Finance kadang balikin bar hari "sekarang" dengan Volume=0
+    # sebelum sesi bursa IHSG benar-benar tertutup (ditemukan nyata: cek
+    # live ^JKSE, volume hari berjalan 0 padahal 4 hari sebelumnya normal
+    # ratusan juta). Kalau bar ini dipakai mentah di rata-rata 5 hari,
+    # bobotnya 1/5 -- cukup besar untuk menyeret recent_volume turun ~20%+
+    # dan bisa salah membaca volume_trend jadi "DECREASING" padahal bukan.
+    # Buang KHUSUS untuk kalkulasi volume kalau bar terakhir volume-nya
+    # persis 0 (bar riil yang sudah closed nyaris tidak pernah benar 0).
+    vol_series = df_daily['Volume']
+    if len(vol_series) > 1 and vol_series.iloc[-1] == 0:
+        vol_series = vol_series.iloc[:-1]
+
+    recent_volume = vol_series.tail(5).mean()
+    avg_volume_50 = vol_series.tail(50).mean()
     volume_trend = ("INCREASING" if recent_volume > avg_volume_50 * 1.2
                      else "DECREASING" if recent_volume < avg_volume_50 * 0.8 else "STABLE")
 

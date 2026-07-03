@@ -217,6 +217,37 @@ def test_ihsg_entry_zone_upper_bound_is_sane(fake_df):
     assert upper > lower
 
 
+def test_ihsg_volume_trend_ignores_incomplete_zero_volume_bar():
+    """Regresi: Yahoo Finance kadang balikin Volume=0 untuk bar hari
+    berjalan (sesi bursa belum tertutup) -- ditemukan nyata di data live
+    ^JKSE. Bar itu harus dibuang dari kalkulasi volume_trend, bukan ikut
+    mencemari rata-rata 5 hari terakhir (bobot 1/5 cukup besar untuk
+    membuatnya salah baca "DECREASING")."""
+    import numpy as np
+    import pandas as pd
+
+    from core.ihsg.ihsg_analysis import analyze_ihsg_advanced
+
+    n = 60
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    close = np.linspace(1000, 1100, n)
+    volume = np.full(n, 200_000_000.0)  # volume stabil tiap hari...
+    volume[-1] = 0  # ...KECUALI bar hari ini (belum lengkap)
+    df_daily = pd.DataFrame(
+        {"Open": close, "High": close * 1.001, "Low": close * 0.999, "Close": close, "Volume": volume},
+        index=dates,
+    )
+    df_weekly = df_daily.resample("W").agg({
+        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
+    }).dropna()
+
+    result = analyze_ihsg_advanced(df_daily, df_weekly)
+    assert result is not None
+    # Volume stabil 200jt/hari (kecuali bar terakhir yang harus dibuang)
+    # -> recent_volume == avg_volume_50 -> STABLE, bukan DECREASING.
+    assert result["volume_trend"] == "STABLE"
+
+
 def test_chart_returns_png(client):
     r = client.get("/api/chart/BBCA")
     assert r.status_code == 200
