@@ -86,6 +86,7 @@ from core.risk_management import (
 from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
 from core.volume_patterns import calculate_ad_line
+from core.charts.snr_chart import calculate_snr_levels
 from core.config import SAHAM_XLSX_PATH
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
@@ -533,9 +534,18 @@ async def _analyze_payload(kode: str):
         avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
         ad = calculate_ad_line(df)
         current_price = ai.get("price") or 0
-        target = calculate_target_levels(df)
-        r1 = target["resistance_levels"][0]
-        s1 = target["support_levels"][0]
+        # R1/S1 utk Potensi Naik/Risiko Turun pakai calculate_snr_levels()
+        # (core/charts/snr_chart.py), BUKAN calculate_target_levels() yang
+        # dipakai /api/target -- calculate_target_levels murni pivot point
+        # dari 1 candle TERAKHIR saja (rawan bias kalau hari itu range-nya
+        # tidak biasa). calculate_snr_levels pakai rumus pivot yang sama
+        # TAPI dikombinasikan dengan swing high/low SUNGGUHAN dari histori
+        # harga (titik-titik di mana harga benar-benar pernah berbalik
+        # arah), jadi level yang dipilih lebih berpatokan ke level yang
+        # teruji di pasar, bukan cuma hasil matematika 1 hari.
+        snr = calculate_snr_levels(df)
+        r1 = snr["r1"]
+        s1 = snr["s1"]
         potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
         risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
         likuiditas = _liquidity_label(avg_value_20)

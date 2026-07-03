@@ -74,8 +74,20 @@ def calculate_snr_levels(df: pd.DataFrame) -> dict:
         if df["Low"].iloc[i] == df["Low"].iloc[i - 5:i + 6].min():
             swing_lows.append(df["Low"].iloc[i])
 
-    support_levels = [s1, s2, s3] + swing_lows[-10:]
-    resistance_levels = [r1, r2, r3] + swing_highs[-10:]
+    # BUG NYATA yang diperbaiki: swing high/low historis BISA berada di
+    # sisi yang salah dari harga saat ini kalau saham sudah bergerak jauh
+    # sejak titik swing itu terjadi (mis. saham turun tajam -> swing low
+    # LAMA yang terjadi saat harga masih tinggi kini malah ada DI ATAS
+    # harga sekarang -- itu bukan support lagi, itu level yang sudah
+    # ditembus dan lebih berperan sebagai resistance dari atas). Tanpa
+    # filter ini, S1 bisa muncul di atas harga (risiko turun jadi negatif,
+    # tidak masuk akal) atau R1 di bawah harga. Filter memastikan kandidat
+    # support SELALU <= harga terakhir, kandidat resistance SELALU >=.
+    swing_lows_valid = [v for v in swing_lows if v <= last_close]
+    swing_highs_valid = [v for v in swing_highs if v >= last_close]
+
+    support_levels = [s1, s2, s3] + swing_lows_valid[-10:]
+    resistance_levels = [r1, r2, r3] + swing_highs_valid[-10:]
 
     # _cluster_levels() selalu return level terurut ASCENDING (kecil -> besar).
     # Resistance ada DI ATAS harga, jadi 3 terkecil = 3 TERDEKAT dgn harga --

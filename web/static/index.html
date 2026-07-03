@@ -1344,7 +1344,15 @@ function _quickBadges(d){
   if(d.likuiditas)b.push(`<span class="chip" style="color:${likColor(d.likuiditas)}" title="Rata-rata nilai transaksi 20 hari: Rp${fmt(d.avg_value_20)}">${d.likuiditas}</span>`);
   if(d.gaya_trading)b.push(`<span class="chip" title="Berdasarkan volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)">${d.gaya_trading}</span>`);
   if(d.bandar)b.push(`<span class="chip" style="color:${bandarColor(d.bandar.label)}" title="${d.bandar.sinyal} — proxy dari Chaikin A/D Line, bukan data transaksi bandar sungguhan">${d.bandar.label}</span>`);
-  return `<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">${b.join('')}</div>`;
+  // Penjelasan metodologi selalu TERLIHAT (bukan cuma title/tooltip --
+  // tooltip hover tidak muncul di layar sentuh HP, jadi user mobile tidak
+  // pernah lihatnya). Ditulis singkat supaya tidak makan banyak ruang.
+  const bandarLine=d.bandar?` · <b>${d.bandar.label}</b> = proxy tren Chaikin A/D Line (harga vs volume 20h), <u>bukan</u> data insider/bandar sungguhan`:'';
+  const caption=`<p class="muted" style="font-size:11px;margin:6px 0 0;line-height:1.5">
+    <b>Grade</b> = AI Score + likuiditas · <b>Likuiditas</b> = rata-rata nilai transaksi 20 hari
+    (Rp${fmtCap(d.avg_value_20)}) · <b>Gaya trading</b> = volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)${bandarLine}.
+  </p>`;
+  return `<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">${b.join('')}</div>${caption}`;
 }
 function countUp(node,to){let t0=null;const dur=700;function f(ts){if(!t0)t0=ts;const p=Math.min((ts-t0)/dur,1);node.textContent=Math.round(p*to);if(p<1)requestAnimationFrame(f)}requestAnimationFrame(f)}
 

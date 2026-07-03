@@ -510,3 +510,21 @@ def test_snr_levels_pick_nearest_support_not_furthest():
     )
     assert levels["s1"] > levels["s2"] > levels["s3"]
     assert levels["r1"] < levels["r2"] < levels["r3"]
+
+
+def test_snr_levels_support_never_above_current_price(fake_df):
+    """Regresi: swing low/high HISTORIS bisa berada di sisi yang salah dari
+    harga saat ini kalau saham sudah bergerak jauh sejak titik swing itu
+    terjadi (mis. swing low lama dari saat harga masih tinggi kini malah
+    ada DI ATAS harga sekarang setelah saham turun tajam -- itu bukan
+    support lagi). Tanpa filter validitas, S1 bisa muncul di atas harga
+    (bikin 'risiko turun' di /api/analyze jadi negatif, tidak masuk akal).
+
+    fake_df (seed=0, random walk 300 hari) DIKONFIRMASI memicu bug ini
+    sebelum diperbaiki (S1 lama = 1039.5 padahal harga = 821.8)."""
+    from core.charts.snr_chart import calculate_snr_levels
+
+    levels = calculate_snr_levels(fake_df)
+    price = float(fake_df["Close"].iloc[-1])
+    assert levels["s1"] <= price, f"S1 ({levels['s1']}) di atas harga saat ini ({price}) -- bukan support valid"
+    assert levels["r1"] >= price, f"R1 ({levels['r1']}) di bawah harga saat ini ({price}) -- bukan resistance valid"
