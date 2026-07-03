@@ -193,6 +193,30 @@ def test_async_download_retries_on_transient_failure(monkeypatch, fake_df):
     assert not df.empty
 
 
+def test_ihsg_entry_zone_upper_bound_is_sane(fake_df):
+    """Regresi: entry_zone dulu SELALU menampilkan 'Rp0' sebagai batas atas
+    (bug min(resistance, 0) -- resistance selalu positif jadi min-nya
+    selalu jatuh ke 0). Batas atas sekarang harus > 0 dan > batas bawah."""
+    import re
+
+    from core.ihsg.ihsg_analysis import analyze_ihsg_advanced
+
+    df_daily = fake_df
+    df_weekly = df_daily.resample("W").agg({
+        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
+    }).dropna()
+
+    result = analyze_ihsg_advanced(df_daily, df_weekly)
+    assert result is not None
+
+    m = re.match(r"Rp([\d,]+) - Rp([\d,]+)", result["entry_zone"])
+    assert m, f"format entry_zone tidak dikenali: {result['entry_zone']!r}"
+    lower = float(m.group(1).replace(",", ""))
+    upper = float(m.group(2).replace(",", ""))
+    assert upper > 0
+    assert upper > lower
+
+
 def test_chart_returns_png(client):
     r = client.get("/api/chart/BBCA")
     assert r.status_code == 200

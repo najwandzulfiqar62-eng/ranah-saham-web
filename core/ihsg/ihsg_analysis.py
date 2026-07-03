@@ -437,7 +437,7 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
         "day_of_week": dow_performance.get(day_of_week, "UNKNOWN"),
         "is_month_end": is_month_end,
         "is_month_start": is_month_start,
-        "entry_zone": f"Rp{max(support_levels[0] if support_levels else current_price * 0.97, 0):,.0f} - Rp{min(resistance_levels[0] if resistance_levels else current_price * 1.03, 0):,.0f}",
+        "entry_zone": f"Rp{(support_levels[0] if support_levels else current_price * 0.97):,.0f} - Rp{(resistance_levels[0] if resistance_levels else current_price * 1.03):,.0f}",
         "stop_loss": round(current_price * 0.97, 0),
         "take_profit": round(current_price * 1.02, 0),
         "risk_reward": "1:1.5",
