@@ -343,6 +343,38 @@ def condition_golden_cross_ma(df: pd.DataFrame, i: int) -> bool:
     return ma5.iloc[i - 1] <= ma20.iloc[i - 1] and ma5.iloc[i] > ma20.iloc[i]
 
 
+def _ihsg_condition_indicators(df: pd.DataFrame) -> dict:
+    """Cache RSI/MACD/MA20/MA50 di df.attrs, dipakai bersama oleh
+    condition_ihsg_bullish_strong & condition_ihsg_bearish_strong.
+
+    DITEMUKAN NYATA: kedua fungsi kondisi itu dulu menghitung ulang RSI
+    dan MACD dari NOL di setiap panggilan -- dan _detect_signal_occurrences
+    memanggil condition_fn(df, i) untuk SETIAP baris saat scan ratusan
+    hari histori, jadi total kerjanya O(n) per baris x n baris = O(n^2)
+    padahal nilainya identik untuk df yang sama. df.attrs aman dipakai
+    sebagai cache karena scoped ke instance DataFrame itu sendiri (bukan
+    cache global/modul yang bisa nyasar ke df lain)."""
+    cache_key = "_ihsg_cond_cache"
+    cached = df.attrs.get(cache_key)
+    if cached is not None:
+        return cached
+
+    close = df["Close"]
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+
+    result = {
+        "ma20": close.rolling(20).mean(),
+        "ma50": close.rolling(50).mean(),
+        "rsi": calculate_rsi(close),
+        "macd_hist": macd_line - signal_line,
+    }
+    df.attrs[cache_key] = result
+    return result
+
+
 def condition_ihsg_bullish_strong(df: pd.DataFrame, i: int) -> bool:
     """Versi ringkas dari 'skor bullish TINGGI' di analyze_ihsg_advanced
     (core/ihsg/ihsg_analysis.py): trend MA daily kuat (close > MA20 >
@@ -352,18 +384,12 @@ def condition_ihsg_bullish_strong(df: pd.DataFrame, i: int) -> bool:
     ratusan hari) -- ini APROKSIMASI dari kondisi penuh, dipakai khusus
     untuk mengukur win-rate historis yang menggantikan accuracy_estimate
     yang dulu rumus arbitrer (lihat catatan di ihsg_analysis.py)."""
-    ma20 = df["Close"].rolling(20).mean().iloc[i]
-    ma50 = df["Close"].rolling(50).mean().iloc[i]
+    ind = _ihsg_condition_indicators(df)
+    ma20 = ind["ma20"].iloc[i]
+    ma50 = ind["ma50"].iloc[i]
     close = df["Close"].iloc[i]
-
-    rsi = calculate_rsi(df["Close"])
-    current_rsi = rsi.iloc[i]
-
-    ema12 = df["Close"].ewm(span=12, adjust=False).mean()
-    ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    macd_hist = (macd_line - signal_line).iloc[i]
+    current_rsi = ind["rsi"].iloc[i]
+    macd_hist = ind["macd_hist"].iloc[i]
 
     trend_strong = close > ma20 and ma20 > ma50
     rsi_ok = 40 < current_rsi < 70  # bullish tapi belum overbought
@@ -375,18 +401,12 @@ def condition_ihsg_bullish_strong(df: pd.DataFrame, i: int) -> bool:
 def condition_ihsg_bearish_strong(df: pd.DataFrame, i: int) -> bool:
     """Kebalikan dari condition_ihsg_bullish_strong -- versi ringkas
     'skor bearish TINGGI'. Lihat catatan di condition_ihsg_bullish_strong."""
-    ma20 = df["Close"].rolling(20).mean().iloc[i]
-    ma50 = df["Close"].rolling(50).mean().iloc[i]
+    ind = _ihsg_condition_indicators(df)
+    ma20 = ind["ma20"].iloc[i]
+    ma50 = ind["ma50"].iloc[i]
     close = df["Close"].iloc[i]
-
-    rsi = calculate_rsi(df["Close"])
-    current_rsi = rsi.iloc[i]
-
-    ema12 = df["Close"].ewm(span=12, adjust=False).mean()
-    ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    macd_hist = (macd_line - signal_line).iloc[i]
+    current_rsi = ind["rsi"].iloc[i]
+    macd_hist = ind["macd_hist"].iloc[i]
 
     trend_weak = close < ma20 and ma20 < ma50
     rsi_ok = 30 < current_rsi < 60  # bearish tapi belum oversold

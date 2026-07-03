@@ -248,6 +248,32 @@ def test_ihsg_volume_trend_ignores_incomplete_zero_volume_bar():
     assert result["volume_trend"] == "STABLE"
 
 
+def test_ihsg_backtest_conditions_cache_indicators_per_dataframe(monkeypatch, fake_df):
+    """Regresi: condition_ihsg_bullish_strong/bearish_strong dulu
+    menghitung ulang RSI & MACD dari nol untuk SETIAP baris saat backtest
+    scan ratusan hari histori (O(n) per baris x n baris). Sekarang
+    di-cache di df.attrs per-DataFrame, jadi cuma dihitung sekali
+    meskipun _detect_signal_occurrences memanggil condition_fn(df, i)
+    ratusan kali."""
+    import core.backtest as backtest
+
+    calls = {"n": 0}
+    original_rsi = backtest.calculate_rsi
+
+    def _counting_rsi(*a, **kw):
+        calls["n"] += 1
+        return original_rsi(*a, **kw)
+
+    monkeypatch.setattr(backtest, "calculate_rsi", _counting_rsi)
+
+    backtest.backtest_condition(fake_df, backtest.condition_ihsg_bullish_strong, forward_days=5)
+    assert calls["n"] == 1
+
+    calls["n"] = 0
+    backtest.backtest_condition(fake_df, backtest.condition_ihsg_bearish_strong, forward_days=5)
+    assert calls["n"] == 0  # sudah ke-cache dari panggilan bullish_strong di atas (df sama)
+
+
 def test_chart_returns_png(client):
     r = client.get("/api/chart/BBCA")
     assert r.status_code == 200
