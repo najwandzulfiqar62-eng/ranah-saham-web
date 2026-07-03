@@ -1679,6 +1679,9 @@ async function showIhsg(){
     <p class="eyebrow">Indeks Harga Saham Gabungan ${liveBadge('ihsg')}</p>
     <div class="ihsg-head"><div class="big" style="color:${vColor(d.prediction)}">${d.prediction||'–'}</div>
       <div class="muted">Keyakinan: ${d.confidence||'–'}</div>${d.target_move?`<div class="muted">Target: ${d.target_move}</div>`:''}</div>
+    ${d.bandar?`<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
+      <span class="chip" style="color:${bandarColor(d.bandar.label)}">${d.bandar.label}</span></div>
+      <p class="muted" style="font-size:11px;margin:6px 0 0;line-height:1.5"><b>${d.bandar.label}</b> = proxy tren Chaikin A/D Line pada IHSG (harga vs volume gabungan pasar 20 hari), <u>bukan</u> data transaksi bandar/asing sungguhan.</p>`:''}
     ${d.action?`<p class="insight" style="margin:4px 0 0">${d.action}</p>`:''}
     <div class="grid" style="margin-top:14px">
       <div class="cell"><div class="k">Harga</div><div class="v" id="ihsgPrice">${fmt(d.current_price)}</div></div>
@@ -1710,6 +1713,8 @@ async function showIhsg(){
       <div class="cell"><div class="k">Fibonacci .382/.5/.618</div><div class="v" style="font-size:13px">${fmt(d.fib_382)} / ${fmt(d.fib_500)} / ${fmt(d.fib_618)}</div></div>
       <div class="cell"><div class="k">Zona Entry</div><div class="v" style="font-size:13px">${d.entry_zone||'–'}</div></div>
       <div class="cell"><div class="k">Stop Loss (acuan)</div><div class="v">${fmt(d.stop_loss)}</div></div>
+      ${d.potensi_naik_pct!=null?`<div class="cell"><div class="k">Potensi Naik (ke R1 ${fmt(d.resistance_1)})</div><div class="v" style="color:var(--bull)">+${fmt(d.potensi_naik_pct,1)}%</div></div>`:''}
+      ${d.risiko_turun_pct!=null?`<div class="cell"><div class="k">Risiko Turun (ke S1 ${fmt(d.support_1)})</div><div class="v" style="color:var(--bear)">-${fmt(d.risiko_turun_pct,1)}%</div></div>`:''}
     </div></section>
   ${d.smc?`<section class="panel"><p class="eyebrow">Smart Money Concepts — IHSG</p><p class="insight">${d.smc.narasi||''}</p>
     <div class="chips"><span class="chip">${d.smc.n_bos} BOS / ${d.smc.n_choch} CHoCH</span><span class="chip">OB ${d.smc.ob_bullish}↑ / ${d.smc.ob_bearish}↓</span><span class="chip">FVG ${d.smc.fvg_unfilled} belum terisi</span><span class="chip">Liquidity ${d.smc.liq_high}H / ${d.smc.liq_low}L</span></div>

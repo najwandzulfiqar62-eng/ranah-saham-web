@@ -48,6 +48,32 @@ def _cluster_levels(levels: list, tolerance: float = 0.005) -> list:
     return clusters
 
 
+def _pad_and_order_levels(levels: list, current_price: float, step: float, reverse: bool) -> list:
+    """Lengkapi `levels` (kandidat resistance/support VALID, hasil cluster
+    asli) jadi minimal 2 elemen dengan fallback proporsional, LALU urutkan
+    ulang gabungan asli+fallback bareng, baru ambil 2 teratas.
+
+    BUG NYATA yang jadi alasan fungsi ini dipisah: sebelumnya level_1/
+    level_2 diisi terpisah (level_1 dari cluster asli KALAU ADA, level_2
+    dari fallback KALAU cluster kedua tidak ada) TANPA re-order gabungan
+    keduanya. Kalau cuma 1 cluster asli ketemu dan kebetulan jauh dari
+    harga (mis. resistance asli +8.5%), sedangkan fallback level_2 pakai
+    step lebih KECIL (mis. +3.5%), hasilnya level_1 (8.5%) > level_2
+    (3.5%) -- TERBALIK, padahal level_1 harus SELALU lebih dekat ke harga
+    daripada level_2. Menggabung dulu baru urutkan menjamin urutan benar
+    apapun kombinasi asli vs fallback yang akhirnya dipakai.
+
+    reverse=False utk resistance (ascending, makin dekat harga = makin
+    kecil), reverse=True utk support (descending, makin dekat harga =
+    makin besar)."""
+    result = list(levels)
+    while len(result) < 2:
+        base = result[-1] if result else current_price
+        result.append(round(base * step, 0))
+    result = sorted(result, reverse=reverse)[:2]
+    return result
+
+
 def _calculate_target_move(atr: float, current_price: float, confidence: str, is_bullish: bool) -> str:
     """Hitung target pergerakan harga berbasis ATR (volatilitas riil),
     diskalakan menurut confidence level.
@@ -130,8 +156,28 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
         if df_daily['Low'].iloc[i] == df_daily['Low'].iloc[i - 10:i + 11].min():
             pivots_low.append(float(df_daily['Low'].iloc[i]))
 
-    resistance_levels = _cluster_levels(pivots_high[-20:])[-3:]
-    support_levels = _cluster_levels(pivots_low[-20:])[:3]
+    # BUG NYATA ditemukan & diperbaiki (2 bagian):
+    # 1. Pivot swing LAMA bisa berada di SISI YANG SALAH dari harga sekarang
+    #    kalau IHSG sudah bergerak jauh sejak titik itu terjadi (mis. swing
+    #    low lama dari saat indeks masih tinggi kini malah di ATAS harga
+    #    sekarang setelah indeks turun -- itu bukan support lagi). Baris
+    #    341/347 di bawah SUDAH menyadari & memfilter ini untuk scoring
+    #    internal ("nearest_support"/"nearest_resistance"), TAPI field
+    #    support_1/resistance_1/entry_zone yang ditampilkan ke USER
+    #    sebelumnya TIDAK ikut difilter -- diperbaiki di sini, di akar
+    #    masalahnya, supaya SEMUA pemakai konsisten benar.
+    # 2. _cluster_levels() return ascending (kecil->besar). Resistance ada
+    #    DI ATAS harga -> 3 TERKECIL (paling dekat harga) yang relevan,
+    #    seharusnya [:3], TAPI kode lama pakai [-3:] (3 terbesar/terjauh).
+    #    Support ada DI BAWAH harga -> 3 TERBESAR (paling dekat harga) yang
+    #    relevan, seharusnya [-3:], TAPI kode lama pakai [:3] (3 terkecil/
+    #    terjauh). Kedua arah TERBALIK -- pola bug yang sama persis dengan
+    #    yang ditemukan & diperbaiki di core/charts/snr_chart.py.
+    pivots_high_valid = [p for p in pivots_high if p >= current_price]
+    pivots_low_valid = [p for p in pivots_low if p <= current_price]
+
+    resistance_levels = _cluster_levels(pivots_high_valid[-20:])[:3]
+    support_levels = _cluster_levels(pivots_low_valid[-20:])[-3:][::-1]
 
     # ===== 4. VOLUME PROFILE (POC) =====
     volumes = df_daily['Volume'].values
@@ -415,6 +461,9 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
             return default
         return v
 
+    resistance_display = _pad_and_order_levels(resistance_levels, current_price, 1.02, reverse=False)
+    support_display = _pad_and_order_levels(support_levels, current_price, 0.98, reverse=True)
+
     return {
         "current_price": current_price,
         "daily_change": _safe_float(daily_change),
@@ -436,10 +485,10 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
         "fib_500": round(fib_500, 0),
         "fib_618": round(fib_618, 0),
         "poc": round(poc, 0),
-        "support_1": support_levels[0] if support_levels else round(current_price * 0.98, 0),
-        "support_2": support_levels[1] if len(support_levels) > 1 else round(current_price * 0.965, 0),
-        "resistance_1": resistance_levels[0] if resistance_levels else round(current_price * 1.02, 0),
-        "resistance_2": resistance_levels[1] if len(resistance_levels) > 1 else round(current_price * 1.035, 0),
+        "support_1": support_display[0],
+        "support_2": support_display[1],
+        "resistance_1": resistance_display[0],
+        "resistance_2": resistance_display[1],
         "ma20": round(_safe_float(ma20_d, current_price), 0),
         "ma50": round(_safe_float(ma50_d, current_price), 0),
         "ma_trend": "BULLISH" if current_price > ma20_d > ma50_d else "BEARISH" if current_price < ma20_d < ma50_d else "MIXED",
@@ -449,7 +498,7 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
         "day_of_week": dow_performance.get(day_of_week, "UNKNOWN"),
         "is_month_end": is_month_end,
         "is_month_start": is_month_start,
-        "entry_zone": f"Rp{(support_levels[0] if support_levels else current_price * 0.97):,.0f} - Rp{(resistance_levels[0] if resistance_levels else current_price * 1.03):,.0f}",
+        "entry_zone": f"Rp{support_display[0]:,.0f} - Rp{resistance_display[0]:,.0f}",
         "stop_loss": round(current_price * 0.97, 0),
         "take_profit": round(current_price * 1.02, 0),
         "risk_reward": "1:1.5",

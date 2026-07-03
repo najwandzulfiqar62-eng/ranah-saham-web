@@ -864,6 +864,25 @@ async def ihsg():
             raise HTTPException(422, "Gagal menganalisis IHSG.")
         bt = analysis.get("backtest_result") or {}
         smc = build_smc_summary(dd)
+        # ===== RINGKASAN CEPAT untuk IHSG (sama semangat dgn /api/analyze) =====
+        # HANYA 2 tambahan yang genuinely masuk akal utk INDEKS (bukan saham
+        # individual) -- "Likuiditas"/"Grade"/"Gaya Trading" dari versi saham
+        # SENGAJA tidak dipaksakan ke sini karena tidak relevan: IHSG bukan
+        # instrumen yang "kurang likuid" atau "cocok utk scalping", konsepnya
+        # cuma masuk akal per-saham individual.
+        # 1. Bandar/psikologi pasar -- proxy sama (Chaikin A/D Line) tapi
+        #    dihitung di atas data ^JKSE, jadi baca "akumulasi/distribusi
+        #    pasar secara keseluruhan", bukan 1 saham.
+        # 2. Potensi Naik/Risiko Turun % -- REUSE murni dari resistance_1/
+        #    support_1 yang SUDAH dihitung analyze_ihsg_with_backtest(),
+        #    cuma dibingkai ulang jadi persentase jarak dari harga sekarang
+        #    (bukan komputasi baru).
+        ihsg_ad = calculate_ad_line(dd)
+        ihsg_price = analysis.get("current_price") or 0
+        ihsg_r1 = analysis.get("resistance_1")
+        ihsg_s1 = analysis.get("support_1")
+        ihsg_potensi_naik_pct = ((ihsg_r1 / ihsg_price) - 1) * 100 if (ihsg_price and ihsg_r1) else None
+        ihsg_risiko_turun_pct = (1 - (ihsg_s1 / ihsg_price)) * 100 if (ihsg_price and ihsg_s1) else None
         payload = {
             "prediction": analysis.get("prediction"),
             "confidence": analysis.get("confidence"),
@@ -891,6 +910,9 @@ async def ihsg():
             "entry_zone": analysis.get("entry_zone"),
             "stop_loss": analysis.get("stop_loss"),
             "candle_patterns": analysis.get("candle_patterns"),
+            "bandar": None if not ihsg_ad else {"label": ihsg_ad["label"], "sinyal": ihsg_ad["sinyal"]},
+            "potensi_naik_pct": round(ihsg_potensi_naik_pct, 2) if ihsg_potensi_naik_pct is not None else None,
+            "risiko_turun_pct": round(ihsg_risiko_turun_pct, 2) if ihsg_risiko_turun_pct is not None else None,
             "backtest": {"win_rate": bt.get("win_rate"), "base_rate": bt.get("base_rate"),
                          "edge": bt.get("edge"), "n": bt.get("n")} if bt else None,
             "smc": None if not smc else {

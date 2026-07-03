@@ -299,6 +299,58 @@ def test_ihsg_entry_zone_upper_bound_is_sane(fake_df):
     assert upper > lower
 
 
+def test_ihsg_pad_and_order_levels_keeps_r1_le_r2():
+    """Regresi: kalau cuma 1 cluster resistance ASLI ketemu dan kebetulan
+    JAUH dari harga (dikonfirmasi nyata terjadi: +8.5% saat cluster kedua
+    tidak ketemu), fallback R2 lama pakai step LEBIH KECIL (+3.5%
+    independen) sehingga hasilnya resistance_1 (jauh) > resistance_2
+    (dekat, cuma fallback) -- TERBALIK. _pad_and_order_levels() harus
+    menggabung dulu baru urutkan, menjamin level_1 selalu <= level_2
+    utk resistance (dan sebaliknya, selalu >= utk support)."""
+    from core.ihsg.ihsg_analysis import _pad_and_order_levels
+
+    current_price = 5875.78
+    # Skenario nyata: cuma 1 cluster resistance ketemu, jauh dari harga (+8.5%)
+    result = _pad_and_order_levels([6377.0], current_price, step=1.02, reverse=False)
+    assert result[0] <= result[1], f"resistance_1 ({result[0]}) > resistance_2 ({result[1]})"
+
+    # Skenario cermin utk support (descending -- S1 harus >= S2)
+    result_s = _pad_and_order_levels([5318.0], current_price, step=0.98, reverse=True)
+    assert result_s[0] >= result_s[1], f"support_1 ({result_s[0]}) < support_2 ({result_s[1]})"
+
+    # Tanpa cluster asli sama sekali -- murni fallback, tetap harus terurut benar
+    assert _pad_and_order_levels([], current_price, 1.02, reverse=False)[0] <= \
+        _pad_and_order_levels([], current_price, 1.02, reverse=False)[1]
+
+
+def test_ihsg_support_resistance_on_correct_side_of_price(fake_df):
+    """Regresi: support_1/resistance_1 IHSG dulu punya 2 bug tumpuk:
+    (1) pivot swing LAMA bisa di sisi yang SALAH dari harga sekarang kalau
+    indeks sudah bergerak jauh sejak titik itu (swing low lama muncul DI
+    ATAS harga skrg setelah indeks turun -- bukan support lagi), (2)
+    _cluster_levels() return ascending TAPI resistance_levels dipotong
+    [-3:] (harusnya [:3], ambil resistance TERDEKAT bukan TERJAUH) dan
+    support_levels dipotong [:3] (harusnya [-3:], ambil support TERDEKAT).
+    Kombinasi keduanya bikin support_1 BISA muncul di atas harga & sebalik-
+    nya -- dikonfirmasi nyata pakai fake_df (S1 lama = 891.0 padahal harga
+    = 821.8). Pola bug SAMA PERSIS dengan yang ditemukan & diperbaiki di
+    core/charts/snr_chart.py::calculate_snr_levels()."""
+    from core.ihsg.ihsg_analysis import analyze_ihsg_advanced
+
+    df_daily = fake_df
+    df_weekly = df_daily.resample("W").agg({
+        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
+    }).dropna()
+
+    result = analyze_ihsg_advanced(df_daily, df_weekly)
+    assert result is not None
+    price = float(df_daily["Close"].iloc[-1])
+    assert result["support_1"] < price, f"support_1 ({result['support_1']}) di atas harga ({price})"
+    assert result["resistance_1"] > price, f"resistance_1 ({result['resistance_1']}) di bawah harga ({price})"
+    assert result["support_1"] > result["support_2"]
+    assert result["resistance_1"] < result["resistance_2"]
+
+
 def test_ihsg_volume_trend_ignores_incomplete_zero_volume_bar():
     """Regresi: Yahoo Finance kadang balikin Volume=0 untuk bar hari
     berjalan (sesi bursa belum tertutup) -- ditemukan nyata di data live
@@ -465,6 +517,23 @@ def test_macro_ok(client):
     assert r.status_code == 200
     data = r.json()
     assert "items" in data and "impacts" in data
+
+
+def test_ihsg_includes_bandar_and_potensi_risiko_fields(client):
+    """Regresi: /api/ihsg harus menyertakan badge Bandar/Psikologi (proxy
+    A/D Line pada ^JKSE) dan Potensi Naik/Risiko Turun % (dari resistance_1/
+    support_1 yang sudah dihitung analyze_ihsg_with_backtest) -- adaptasi
+    dari Ringkasan Cepat di /api/analyze, TANPA memaksakan konsep likuiditas/
+    gaya-trading yang cuma relevan utk saham individual, bukan indeks."""
+    r = client.get("/api/ihsg")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["bandar"] is not None
+    assert data["bandar"]["label"] in ("Akumulasi", "Distribusi", "Akumulasi Tersembunyi", "Distribusi Tersembunyi")
+    assert data["potensi_naik_pct"] is not None
+    assert data["risiko_turun_pct"] is not None
+    assert data["resistance_1"] > data["current_price"]
+    assert data["support_1"] < data["current_price"]
 
 
 def test_snr_levels_pick_nearest_support_not_furthest():
