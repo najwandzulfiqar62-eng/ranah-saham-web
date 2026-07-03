@@ -597,3 +597,86 @@ def test_snr_levels_support_never_above_current_price(fake_df):
     price = float(fake_df["Close"].iloc[-1])
     assert levels["s1"] <= price, f"S1 ({levels['s1']}) di atas harga saat ini ({price}) -- bukan support valid"
     assert levels["r1"] >= price, f"R1 ({levels['r1']}) di bawah harga saat ini ({price}) -- bukan resistance valid"
+
+
+def test_bull_case_does_not_mislabel_stochrsi_as_plain_rsi():
+    """Regresi: is_oversold/is_overbought DIHITUNG dari StochRSI (K/D),
+    BUKAN dari RSI biasa (lihat core/ai_score.py) -- tapi _bull_case/
+    _bear_case dulu menampilkan ai['rsi'] (RSI biasa) di kalimat yang
+    mengklaim 'RSI di area oversold/overbought'. Dikonfirmasi nyata: BBCA
+    dengan RSI biasa 52.5 (jelas BUKAN oversold) muncul sebagai argumen
+    bullish 'RSI di area oversold (52.5)' -- membingungkan & salah. Teks
+    sekarang harus menyebut StochRSI + nilai K/D, bukan RSI biasa."""
+    from core.report import _bull_case, _bear_case
+
+    ai_oversold = {
+        "rsi": 52.5, "stoch_k": 15.0, "stoch_d": 12.0, "is_oversold": True, "is_overbought": False,
+        "cond_ma": True, "golden_cross": False, "macd_bullish": True, "ma200": None,
+        "price": 6050, "cond_volume_spike": False, "change_5d": 0, "bb_position": 50,
+    }
+    bull = _bull_case(ai_oversold)
+    joined = " ".join(bull)
+    assert "StochRSI" in joined, f"argumen bullish harus sebut StochRSI, bukan RSI biasa: {bull}"
+    assert "52.5" not in joined, "RSI biasa (52.5, bukan oversold) tidak boleh dipakai sebagai bukti oversold"
+
+    ai_overbought = {
+        "rsi": 48.0, "stoch_k": 88.0, "stoch_d": 85.0, "is_oversold": False, "is_overbought": True,
+        "cond_ma": True, "golden_cross": True, "macd_bullish": True, "ma200": 5000,
+        "price": 6050, "atr_pct": 1.0, "bb_position": 50, "change_5d": 0,
+    }
+    bear = _bear_case(ai_overbought)
+    joined_bear = " ".join(bear)
+    assert "StochRSI" in joined_bear, f"argumen bearish harus sebut StochRSI, bukan RSI biasa: {bear}"
+    assert "48.0" not in joined_bear
+
+
+def test_indikator_status_rsi_row_uses_plain_rsi_not_stochrsi():
+    """Regresi: baris 'RSI' di tabel indikator laporan PDF dulu diberi
+    status OVERSOLD/OVERBOUGHT dari StochRSI (is_oversold/is_overbought),
+    padahal detail angkanya RSI biasa -- bisa tampil 'RSI: OVERSOLD' dengan
+    detail RSI 52.5 (bukan oversold). Baris 'RSI' sekarang harus
+    diklasifikasi dari RSI biasa sendiri; StochRSI dapat baris terpisah."""
+    from core.report import build_report_data
+
+    ai = {
+        "price": 6050, "change_1d": 0, "change_5d": 0, "score": 50, "rating": "NETRAL",
+        "rsi": 52.5, "stoch_k": 15.0, "stoch_d": 12.0, "is_oversold": True, "is_overbought": False,
+        "macd_bullish": True, "macd_hist": 1.0, "vol_ratio": 1.0, "atr_pct": 2.0,
+        "cond_ma": True, "golden_cross": False, "ma5_ma20": "MA5 > MA20",
+        "ma50": 6000, "ma200": 5900, "cond_volume_spike": False,
+        "recommendation": "HOLD", "signal": "-",
+    }
+    data = build_report_data("BBCA", "Bank BCA", ai)
+    rows = {row[0]: row for row in data["indikator_status"]}
+    assert "RSI" in rows and "StochRSI" in rows
+    assert rows["RSI"][1] == "NETRAL", f"RSI biasa 52.5 harus NETRAL, dapat: {rows['RSI']}"
+    assert rows["StochRSI"][1] == "OVERSOLD", f"StochRSI K=15/D=12 harus OVERSOLD, dapat: {rows['StochRSI']}"
+
+
+def test_insight_stock_includes_bull_bear_and_critical_crosscheck(client):
+    """Regresi: /api/insight/{kode} harus menyertakan bull_case/bear_case
+    (argumen dua arah, REUSE dari core/report.py) dan analisis_kritis
+    (silang-cek skor AI vs likuiditas/bandar) -- upgrade yang diminta user
+    supaya insight 'lebih kritis, menganalisa semuanya', bukan cuma narasi
+    satu arah seperti sebelumnya."""
+    r = client.get("/api/insight/BBCA")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data.get("bull_case"), list) and len(data["bull_case"]) > 0
+    assert isinstance(data.get("bear_case"), list) and len(data["bear_case"]) > 0
+    assert data.get("analisis_kritis")
+
+
+def test_insight_ihsg_includes_deep_analysis_and_backtest_critique(client):
+    """Regresi: /api/insight/IHSG dulu CUMA pakai skor generik ala saham
+    (calculate_ai_score_from_df), TIDAK PERNAH memakai analyze_ihsg_with_
+    backtest() yang punya validasi historis edge vs baseline -- padahal
+    /api/ihsg sudah menghitungnya. analisis_mendalam sekarang harus berisi
+    kritik edge backtest, bukan cuma narasi teknikal generik."""
+    r = client.get("/api/insight/IHSG")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data.get("bull_case"), list)
+    assert isinstance(data.get("bear_case"), list)
+    assert data.get("analisis_mendalam")
+    assert "Prediksi sistem" in data["analisis_mendalam"]

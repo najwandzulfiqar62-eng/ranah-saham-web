@@ -56,6 +56,149 @@
 
 from core.messages import sanitize_for_markdown
 
+# =========================
+# REVISI KETIGA (Juli 2026): "insight lebih kritis, analisa semuanya"
+# =========================
+# Permintaan eksplisit user setelah fitur Ringkasan Cepat (Grade/Likuiditas/
+# Gaya Trading/Bandar/Potensi Naik/Risiko Turun di /api/analyze & /api/ihsg)
+# dibangun: insight NARATIF di halaman ini masih belum memanfaatkan semua
+# sinyal itu, dan belum pernah secara eksplisit MENIMBANG argumen dua arah
+# (bull vs bear) atau MENANDAI KONTRADIKSI antar sinyal -- cuma menjumlah
+# indikator jadi satu skor & narasi satu arah. Tiga tambahan di revisi ini:
+# 1. Argumen Bull vs Bear eksplisit -- REUSE _bull_case()/_bear_case() dari
+#    core/report.py (sudah ada & dipakai laporan PDF, TIDAK ditulis ulang)
+#    supaya /insight juga menimbang dua sisi, bukan cuma narasi satu arah.
+# 2. "Analisis kritis" -- silang-cek eksplisit antara skor AI dengan
+#    Ringkasan Cepat (likuiditas, proxy bandar/A-D Line, rasio potensi
+#    naik:risiko turun) -- MENANDAI kontradiksi (skor bagus tapi tidak
+#    likuid, atau skor bagus tapi bandar distribusi) alih-alih diam saja.
+# 3. KHUSUS IHSG: sebelumnya /insight IHSG cuma pakai calculate_ai_score_
+#    from_df() (skor generik ala saham), TIDAK PERNAH memakai
+#    analyze_ihsg_with_backtest() yang punya validasi historis (edge vs
+#    baseline), level S/R, RSI divergence, BB squeeze, pola candlestick --
+#    padahal /api/ihsg SUDAH menghitung semua itu. _narrate_ihsg_deep()
+#    mengisi kekosongan ini, terutama kritik edge backtest (kalau tipis/
+#    negatif, prediksi TIDAK lebih baik dari menebak acak -- ditandai
+#    eksplisit, bukan disembunyikan di balik kata "prediksi").
+
+
+def _narrate_bull_bear(ai: dict) -> tuple[list[str], list[str]]:
+    """Argumen BULLISH & BEARISH eksplisit dari data ai_score -- REUSE
+    _bull_case()/_bear_case() (core/report.py, sudah dipakai laporan PDF)
+    supaya insight tidak menulis ulang logic yang sama, dan supaya
+    keduanya SELALU konsisten (satu sumber kebenaran)."""
+    from core.report import _bull_case, _bear_case
+    return _bull_case(ai), _bear_case(ai)
+
+
+def _narrate_ringkasan_kritis(ringkasan: dict | None, ai: dict) -> str:
+    """Silang-cek KRITIS antara skor AI dan Ringkasan Cepat (likuiditas,
+    proxy bandar/A-D Line, rasio potensi naik:risiko turun) -- secara
+    EKSPLISIT menandai kontradiksi yang gampang luput kalau cuma baca skor
+    teknikal sendirian. `ringkasan` bisa None (caller lama/gagal fetch)
+    ATAU cuma berisi subset field (IHSG cuma punya bandar+potensi/risiko,
+    tanpa grade/likuiditas -- lihat _compute_ringkasan_cepat di web/app.py)
+    -- semua dicek via .get() supaya aman untuk kedua bentuk."""
+    if not ringkasan:
+        return ""
+    catatan = []
+    score = ai.get("score", 50)
+    grade = ringkasan.get("grade")
+    likuiditas = ringkasan.get("likuiditas")
+    bandar = ringkasan.get("bandar")
+
+    if likuiditas in ("Tidak Likuid", "Kurang Likuid") and score >= 60:
+        catatan.append(
+            f"PERINGATAN: skor teknikal tergolong bagus ({score}/100) TAPI likuiditas "
+            f"'{likuiditas}' -- entry/exit dalam jumlah besar berisiko menggerakkan harga "
+            f"sendiri (slippage tinggi), dan grade gabungan turun jadi {grade} karena faktor ini."
+        )
+    if bandar and bandar.get("label") in ("Distribusi", "Distribusi Tersembunyi") and score >= 55:
+        catatan.append(
+            f"KONTRADIKSI: skor teknikal condong positif ({score}/100) TAPI proxy Chaikin A/D "
+            f"Line menunjukkan '{bandar['label']}' -- volume tidak mengonfirmasi penguatan "
+            f"harga, sinyal campuran ini layak diwaspadai."
+        )
+    elif bandar and bandar.get("label") in ("Akumulasi", "Akumulasi Tersembunyi") and score < 45:
+        catatan.append(
+            f"MENARIK: skor teknikal lemah ({score}/100) TAPI proxy Chaikin A/D Line "
+            f"menunjukkan '{bandar['label']}' -- ada indikasi tekanan beli tersembunyi yang "
+            f"belum tercermin di harga."
+        )
+
+    naik = ringkasan.get("potensi_naik_pct")
+    turun = ringkasan.get("risiko_turun_pct")
+    if naik is not None and turun is not None and turun > 0:
+        rr = naik / turun
+        catatan.append(
+            f"Rasio risiko-imbalan teknikal saat ini (jarak ke level S/R terdekat): potensi "
+            f"naik +{naik:.1f}% berbanding risiko turun -{turun:.1f}% (rasio {rr:.1f}:1)."
+        )
+
+    if not catatan:
+        return "Tidak ada kontradiksi mencolok antara skor teknikal, likuiditas, dan proxy bandar saat ini."
+    return " ".join(catatan)
+
+
+def _narrate_ihsg_deep(analysis: dict | None) -> str:
+    """Analisis kritis TAMBAHAN khusus IHSG dari analyze_ihsg_with_backtest()
+    -- data yang SEBELUMNYA tidak pernah dipakai /insight (dulu cuma pakai
+    skor generik ala saham lewat calculate_ai_score_from_df), padahal
+    SUDAH dihitung & dipakai /api/ihsg (backtest edge, level S/R, RSI
+    divergence, BB squeeze, pola candlestick). `analysis` di sini adalah
+    payload TRIMMED /api/ihsg (bukan dict mentah analyze_ihsg_with_backtest),
+    supaya bentuknya konsisten dengan yang sudah dipakai frontend."""
+    if not analysis:
+        return ""
+    catatan = []
+    pred = analysis.get("prediction", "-")
+    conf = analysis.get("confidence", "-")
+    catatan.append(f"Prediksi sistem: {pred} (keyakinan {conf}).")
+
+    bt = analysis.get("backtest") or {}
+    edge = bt.get("edge")
+    wr = bt.get("win_rate")
+    base = bt.get("base_rate")
+    if edge is not None:
+        if edge <= 1:
+            catatan.append(
+                f"KRITIS: validasi historis pada kondisi serupa menunjukkan win rate {wr}% vs "
+                f"base rate {base}% -- edge cuma {edge:+.1f} poin persen, TIPIS/NEGATIF. Prediksi "
+                "di atas TIDAK lebih baik dari sekadar menebak arah pasar secara acak; "
+                "perlakukan dengan skeptis."
+            )
+        else:
+            catatan.append(
+                f"Validasi historis mendukung: win rate {wr}% vs base rate {base}% "
+                f"(edge +{edge:.1f} poin persen di atas baseline)."
+            )
+
+    if analysis.get("rsi_divergence") not in (None, "NONE"):
+        catatan.append(
+            f"Terdeteksi RSI divergence {analysis['rsi_divergence']} -- sinyal potensi "
+            "pembalikan yang perlu dikonfirmasi lebih lanjut, bukan langsung ditindaklanjuti."
+        )
+
+    if analysis.get("bb_squeeze"):
+        catatan.append(
+            "Bollinger Band sedang squeeze (volatilitas terkompresi) -- pergerakan besar ke "
+            "arah manapun berpotensi terjadi tidak lama lagi."
+        )
+
+    r1, s1 = analysis.get("resistance_1"), analysis.get("support_1")
+    if r1 and s1:
+        catatan.append(
+            f"Level kunci terdekat: resistance Rp{r1:,.0f}, support Rp{s1:,.0f} "
+            f"(zona entry {analysis.get('entry_zone', '-')})."
+        )
+
+    patterns = analysis.get("candle_patterns") or []
+    names = [p[0] if isinstance(p, (list, tuple)) else p for p in patterns[:3] if p]
+    if names:
+        catatan.append(f"Pola candlestick terdeteksi: {', '.join(str(x) for x in names)}.")
+
+    return " ".join(catatan)
+
 
 def _narrate_technical(ai: dict) -> str:
     """Bangun narasi kondisi teknikal dari hasil AI Score -- DIPERKAYA
@@ -354,13 +497,21 @@ def _narrate_market_synthesis(ai_ihsg: dict, sector_data: list[dict] | None) -> 
 
 
 async def generate_insight(ticker: str, ai_score: dict, ai_ihsg: dict | None,
-                              rs_data: dict | None, news_items: list[dict] | None) -> dict:
+                              rs_data: dict | None, news_items: list[dict] | None,
+                              ringkasan: dict | None = None) -> dict:
     """Rangkai data jadi narasi insight PER-SAHAM. Fungsi ini PURE
     (caller bertanggung jawab fetch data dari modul masing-masing).
 
     ai_ihsg & rs_data BISA None (kalau data IHSG gagal diambil) --
-    fungsi ini TETAP menghasilkan narasi yang masuk akal, BUKAN crash."""
+    fungsi ini TETAP menghasilkan narasi yang masuk akal, BUKAN crash.
+
+    ringkasan (BARU, opsional): dict Ringkasan Cepat dari _compute_
+    ringkasan_cepat() (web/app.py) -- {grade, likuiditas, gaya_trading,
+    bandar, potensi_naik_pct, risiko_turun_pct}. None = caller lama/gagal
+    hitung, bagian 'analisis_kritis' dilewati dengan aman."""
     teknikal_text = _narrate_technical(ai_score)
+    bull_points, bear_points = _narrate_bull_bear(ai_score)
+    kritis_text = _narrate_ringkasan_kritis(ringkasan, ai_score)
 
     if ai_ihsg is not None:
         ihsg_text = _narrate_ihsg_context(ai_ihsg, rs_data)
@@ -374,7 +525,9 @@ async def generate_insight(ticker: str, ai_score: dict, ai_ihsg: dict | None,
 
     news_text = _narrate_news(news_items)
 
-    full_narrative = f"{teknikal_text}\n\n{ihsg_text}\n\n{news_text}\n\n{synthesis_text}"
+    full_narrative = (
+        f"{teknikal_text}\n\n{ihsg_text}\n\n{kritis_text}\n\n{news_text}\n\n{synthesis_text}"
+    )
 
     recommendation = _derive_recommendation(ai_score, ai_ihsg)
 
@@ -382,6 +535,9 @@ async def generate_insight(ticker: str, ai_score: dict, ai_ihsg: dict | None,
         "ticker": ticker,
         "recommendation": recommendation,
         "teknikal": teknikal_text,
+        "bull_case": bull_points,
+        "bear_case": bear_points,
+        "analisis_kritis": kritis_text,
         "konteks_ihsg": ihsg_text,
         "berita": news_text,
         "sintesis": synthesis_text,
@@ -390,7 +546,9 @@ async def generate_insight(ticker: str, ai_score: dict, ai_ihsg: dict | None,
 
 
 async def generate_market_insight(ai_ihsg: dict, sector_data: list[dict] | None,
-                                     news_items: list[dict] | None) -> dict:
+                                     news_items: list[dict] | None,
+                                     ihsg_analysis: dict | None = None,
+                                     ringkasan: dict | None = None) -> dict:
     """Rangkai data jadi narasi insight MARKET-WIDE untuk IHSG itu
     sendiri (BARU). BEDA dari generate_insight (per-saham): TIDAK ADA
     perbandingan "vs IHSG" (membandingkan IHSG dengan dirinya sendiri
@@ -403,17 +561,35 @@ async def generate_market_insight(ai_ihsg: dict, sector_data: list[dict] | None,
     OHLCV biasa.
     sector_data: hasil get_sector_performance() (core/sector_rotation.py).
     Bisa None kalau gagal diambil -- TETAP menghasilkan narasi masuk
-    akal, BUKAN crash."""
+    akal, BUKAN crash.
+
+    ihsg_analysis (BARU, opsional): payload /api/ihsg (analyze_ihsg_with_
+    backtest, TRIMMED) -- backtest edge, level S/R, RSI divergence, BB
+    squeeze, pola candle. Sebelumnya insight IHSG TIDAK PERNAH memakai
+    data ini, cuma skor generik ala saham dari ai_ihsg.
+    ringkasan (BARU, opsional): {bandar, potensi_naik_pct, risiko_turun_pct}
+    dari /api/ihsg -- subset dari bentuk saham (tanpa grade/likuiditas,
+    tidak relevan utk indeks). Lihat _narrate_ringkasan_kritis."""
     teknikal_text = _narrate_technical(ai_ihsg)
+    bull_points, bear_points = _narrate_bull_bear(ai_ihsg)
+    deep_text = _narrate_ihsg_deep(ihsg_analysis)
+    kritis_text = _narrate_ringkasan_kritis(ringkasan, ai_ihsg)
     sektor_text = _narrate_sector_leadership(sector_data)
     news_text = _narrate_news(news_items)
     synthesis_text = _narrate_market_synthesis(ai_ihsg, sector_data)
 
-    full_narrative = f"{teknikal_text}\n\n{sektor_text}\n\n{news_text}\n\n{synthesis_text}"
+    full_narrative = (
+        f"{teknikal_text}\n\n{deep_text}\n\n{sektor_text}\n\n{kritis_text}\n\n"
+        f"{news_text}\n\n{synthesis_text}"
+    )
 
     return {
         "ticker": "IHSG",
         "teknikal": teknikal_text,
+        "bull_case": bull_points,
+        "bear_case": bear_points,
+        "analisis_mendalam": deep_text,
+        "analisis_kritis": kritis_text,
         "sektor": sektor_text,
         "berita": news_text,
         "sintesis": synthesis_text,

@@ -3072,6 +3072,23 @@ async function loadInsight(kode,containerId,btnId,isMarket){
   box.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
   let d; try{d=await api('/api/insight/'+encodeURIComponent(kode))}catch(e){box.innerHTML=`<p class="muted" style="margin-top:12px;font-size:13px">${e.message}</p>`;return}
   const block=(label,text)=>text?`<div class="insight-block" style="margin-bottom:14px"><div style="font-family:Space Grotesk;font-weight:700;color:var(--gold);font-size:13px;margin-bottom:4px">${label}</div><p class="insight" style="margin:0;font-size:14px;line-height:1.6">${text}</p></div>`:'';
+  const bullBearBlock=(bull,bear)=>{
+    if(!(bull&&bull.length)&&!(bear&&bear.length))return'';
+    const li=items=>(items||[]).map(x=>`<li style="margin-bottom:6px;line-height:1.5">${x}</li>`).join('');
+    return `<div class="insight-block" style="margin-bottom:14px">
+      <div style="font-family:Space Grotesk;font-weight:700;color:var(--gold);font-size:13px;margin-bottom:8px">Argumen Bull vs Bear</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+        <div style="background:rgba(63,185,80,.08);border:1px solid rgba(63,185,80,.25);border-radius:10px;padding:12px">
+          <div style="color:var(--bull);font-weight:700;font-size:12px;margin-bottom:6px">▲ BULLISH</div>
+          <ul style="margin:0;padding-left:16px;font-size:13px;color:var(--text)">${li(bull)}</ul>
+        </div>
+        <div style="background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.25);border-radius:10px;padding:12px">
+          <div style="color:var(--bear);font-weight:700;font-size:12px;margin-bottom:6px">▼ BEARISH</div>
+          <ul style="margin:0;padding-left:16px;font-size:13px;color:var(--text)">${li(bear)}</ul>
+        </div>
+      </div>
+    </div>`;
+  };
 
   // Badge rekomendasi BUY / HOLD / SELL
   let recHtml='';
@@ -3095,6 +3112,9 @@ async function loadInsight(kode,containerId,btnId,isMarket){
 
   let html='<div style="margin-top:4px">'+recHtml;
   html+=block('Teknikal',d.teknikal);
+  html+=isMarket?block('Analisis Mendalam',d.analisis_mendalam):'';
+  html+=bullBearBlock(d.bull_case,d.bear_case);
+  html+=block('Analisis Kritis',d.analisis_kritis);
   html+=isMarket?block('Rotasi Sektor',d.sektor):block('Konteks IHSG',d.konteks_ihsg);
   html+=block('Berita',d.berita);
   html+=block('Sintesis',d.sintesis);

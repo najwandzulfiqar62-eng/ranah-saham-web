@@ -513,6 +513,37 @@ def _compute_grade(score: float, likuiditas: str) -> str:
     return "D"
 
 
+def _compute_ringkasan_cepat(df, ai: dict) -> dict:
+    """Hitung field Ringkasan Cepat (grade, likuiditas, gaya trading,
+    bandar/A-D Line, potensi naik/risiko turun) dari df OHLCV + hasil
+    calculate_ai_score_from_df(). DIPISAH dari _analyze_payload supaya
+    /api/insight bisa REUSE persis logic yang sama (satu sumber kebenaran)
+    alih-alih menghitung ulang terpisah -- menghindari risiko dua endpoint
+    menampilkan angka Ringkasan Cepat yang berbeda untuk saham yang sama."""
+    avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
+    ad = calculate_ad_line(df)
+    current_price = ai.get("price") or 0
+    # R1/S1 pakai calculate_snr_levels() (core/charts/snr_chart.py), lihat
+    # catatan lengkap soal kenapa BUKAN calculate_target_levels() di commit
+    # sebelumnya (pivot 1-candle vs pivot+swing histori sungguhan).
+    snr = calculate_snr_levels(df)
+    r1 = snr["r1"]
+    s1 = snr["s1"]
+    potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
+    risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
+    likuiditas = _liquidity_label(avg_value_20)
+    return {
+        "likuiditas": likuiditas,
+        "avg_value_20": round(avg_value_20, 0),
+        "gaya_trading": _trading_style_label(ai.get("atr_pct") or 0),
+        "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
+        "grade": _compute_grade(ai.get("score") or 0, likuiditas),
+        "potensi_naik_pct": round(potensi_naik_pct, 2),
+        "risiko_turun_pct": round(risiko_turun_pct, 2),
+        "r1": round(r1, 2), "s1": round(s1, 2),
+    }
+
+
 async def _analyze_payload(kode: str):
     """Bangun payload analisis untuk satu kode (dipakai /api/analyze &
     /api/compare). Mengembalikan dict atau melempar HTTPException."""
@@ -531,24 +562,9 @@ async def _analyze_payload(kode: str):
         if ai is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
         smc = build_smc_summary(df)
-        avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
-        ad = calculate_ad_line(df)
-        current_price = ai.get("price") or 0
-        # R1/S1 utk Potensi Naik/Risiko Turun pakai calculate_snr_levels()
-        # (core/charts/snr_chart.py), BUKAN calculate_target_levels() yang
-        # dipakai /api/target -- calculate_target_levels murni pivot point
-        # dari 1 candle TERAKHIR saja (rawan bias kalau hari itu range-nya
-        # tidak biasa). calculate_snr_levels pakai rumus pivot yang sama
-        # TAPI dikombinasikan dengan swing high/low SUNGGUHAN dari histori
-        # harga (titik-titik di mana harga benar-benar pernah berbalik
-        # arah), jadi level yang dipilih lebih berpatokan ke level yang
-        # teruji di pasar, bukan cuma hasil matematika 1 hari.
-        snr = calculate_snr_levels(df)
-        r1 = snr["r1"]
-        s1 = snr["s1"]
-        potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
-        risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
-        likuiditas = _liquidity_label(avg_value_20)
+        # ===== RINGKASAN CEPAT (badge di atas halaman Analisis, & dipakai
+        # ulang oleh /api/insight -- lihat _compute_ringkasan_cepat) =====
+        ringkasan = _compute_ringkasan_cepat(df, ai)
         payload = {
             "kode": kode,
             "score": ai.get("score"), "rating": ai.get("rating"),
@@ -561,23 +577,14 @@ async def _analyze_payload(kode: str):
             "netral_count": ai.get("netral_count"),
             "insight": _narrate_technical(ai),
             "vwap_fv": _vwap_fair_value(df),
-            # ===== RINGKASAN CEPAT (badge di atas halaman Analisis) =====
-            # Semua reuse dari data yang SUDAH dihitung di atas -- likuiditas
-            # & gaya trading pakai heuristik baru (lihat catatan jujur di
-            # masing-masing fungsi), bandar/psikologi pakai Chaikin A/D Line
-            # yang SUDAH ADA & teruji (core/volume_patterns.py) sebagai proxy
-            # teknikal, BUKAN data insider transaksi sungguhan -- insider
-            # transaction asli (fitur Pemegang Saham) sifatnya event harian
-            # yang jarang muncul per saham, tidak cocok untuk badge yang
-            # harus selalu tampil di setiap analisis.
-            "likuiditas": likuiditas,
-            "avg_value_20": round(avg_value_20, 0),
-            "gaya_trading": _trading_style_label(ai.get("atr_pct") or 0),
-            "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
-            "grade": _compute_grade(ai.get("score") or 0, likuiditas),
-            "potensi_naik_pct": round(potensi_naik_pct, 2),
-            "risiko_turun_pct": round(risiko_turun_pct, 2),
-            "r1": round(r1, 2), "s1": round(s1, 2),
+            "likuiditas": ringkasan["likuiditas"],
+            "avg_value_20": ringkasan["avg_value_20"],
+            "gaya_trading": ringkasan["gaya_trading"],
+            "bandar": ringkasan["bandar"],
+            "grade": ringkasan["grade"],
+            "potensi_naik_pct": ringkasan["potensi_naik_pct"],
+            "risiko_turun_pct": ringkasan["risiko_turun_pct"],
+            "r1": ringkasan["r1"], "s1": ringkasan["s1"],
             "smc": None if not smc else {
                 "narasi": smc.get("narasi"),
                 "n_bos": smc.get("n_bos"), "n_choch": smc.get("n_choch"),
@@ -2011,7 +2018,28 @@ async def insight(kode: str):
             news_items = await _market_news_pool(10)
         except Exception:
             news_items = None
-        res = await generate_market_insight(ai_ihsg, sector_data, news_items)
+        # Insight IHSG sebelumnya CUMA pakai ai_ihsg (skor generik ala
+        # saham) -- tidak pernah memakai analyze_ihsg_with_backtest() yang
+        # punya validasi historis (edge vs baseline), level S/R, RSI
+        # divergence, BB squeeze, pola candlestick, PADAHAL /api/ihsg
+        # SUDAH menghitung semua itu. Panggil langsung handler /api/ihsg
+        # (fungsi biasa, cache 300s-nya ikut kepakai) supaya tidak
+        # menghitung ulang analyze_ihsg_with_backtest() dari nol di sini.
+        try:
+            ihsg_payload = await ihsg()
+        except Exception:
+            ihsg_payload = None
+        ringkasan_ihsg = None
+        if ihsg_payload:
+            ringkasan_ihsg = {
+                "bandar": ihsg_payload.get("bandar"),
+                "potensi_naik_pct": ihsg_payload.get("potensi_naik_pct"),
+                "risiko_turun_pct": ihsg_payload.get("risiko_turun_pct"),
+            }
+        res = await generate_market_insight(
+            ai_ihsg, sector_data, news_items,
+            ihsg_analysis=ihsg_payload, ringkasan=ringkasan_ihsg,
+        )
         return _py(res)
 
     kode_n = _norm_kode(kode)
@@ -2032,7 +2060,11 @@ async def insight(kode: str):
         news_items = await fetch_news(keyword=kode_n, limit=8)
     except Exception:
         news_items = None
-    res = await generate_insight(kode_n, ai_score, ai_ihsg, rs_data, news_items)
+    try:
+        ringkasan = _compute_ringkasan_cepat(sdf, ai_score)
+    except Exception:
+        ringkasan = None
+    res = await generate_insight(kode_n, ai_score, ai_ihsg, rs_data, news_items, ringkasan=ringkasan)
     return _py(res)
 
 

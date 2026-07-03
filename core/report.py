@@ -214,7 +214,15 @@ def _bull_case(ai: dict) -> list[str]:
     if ai.get("macd_bullish"):
         pts.append("MACD berada di atas garis sinyal — momentum bullish sedang terbentuk.")
     if ai.get("is_oversold"):
-        pts.append(f"RSI di area oversold ({ai.get('rsi')}) — ada potensi rebound teknikal dari titik jenuh jual.")
+        # BUG NYATA yang diperbaiki: is_oversold DIHITUNG dari StochRSI
+        # (core/ai_score.py: current_k<20 and current_d<20), BUKAN dari RSI
+        # biasa -- tapi teks lama menampilkan ai['rsi'] (RSI biasa) seolah
+        # itu angka yang "oversold", padahal RSI biasa bisa saja 50+ (netral)
+        # SAAT BERSAMAAN StochRSI-nya oversold (StochRSI jauh lebih
+        # sensitif/cepat daripada RSI biasa) -- ditemukan nyata: BBCA dengan
+        # RSI 52.5 (jelas bukan oversold) muncul di argumen bullish sebagai
+        # "RSI di area oversold (52.5)", membingungkan & tidak akurat.
+        pts.append(f"StochRSI di area oversold (K={ai.get('stoch_k')}, D={ai.get('stoch_d')}) — ada potensi rebound teknikal dari titik jenuh jual jangka pendek.")
     ma200 = ai.get("ma200")
     if ma200 and ai.get("price", 0) > ma200:
         pts.append(f"Harga ({_fmt(ai['price'])}) masih di atas MA200 ({_fmt(ma200)}) — tren jangka panjang relatif sehat.")
@@ -242,7 +250,9 @@ def _bear_case(ai: dict) -> list[str]:
     if not ai.get("macd_bullish"):
         pts.append("MACD masih di bawah garis sinyal — momentum belum berbalik positif.")
     if ai.get("is_overbought"):
-        pts.append(f"RSI di area overbought ({ai.get('rsi')}) — rawan koreksi jangka pendek.")
+        # Sama seperti catatan di _bull_case: is_overbought dari StochRSI,
+        # bukan RSI biasa -- pakai stoch_k/stoch_d, bukan ai['rsi'].
+        pts.append(f"StochRSI di area overbought (K={ai.get('stoch_k')}, D={ai.get('stoch_d')}) — rawan koreksi jangka pendek.")
     if ai.get("atr_pct", 0) >= 3:
         pts.append(f"Volatilitas tinggi (ATR {ai['atr_pct']:.1f}% dari harga) — risiko ayunan harga besar, stop loss rentan tersapu.")
     if ai.get("bb_position") is not None and ai["bb_position"] > 80:
@@ -350,8 +360,19 @@ def build_report_data(ticker: str, nama: str, ai: dict,
          ai.get("ma5_ma20", "")),
         ("Golden/Death Cross", "GOLDEN CROSS" if ai.get("golden_cross") else "BELUM",
          f"MA50 {_fmt(ai.get('ma50'))} vs MA200 {_fmt(ai.get('ma200')) if ai.get('ma200') else 'n/a'}"),
-        ("RSI", "OVERSOLD" if ai.get("is_oversold") else "OVERBOUGHT" if ai.get("is_overbought") else "NETRAL",
+        # BUG NYATA yang diperbaiki: baris ini diberi label "RSI" dan
+        # detail menampilkan RSI biasa (ai['rsi']), TAPI status OVERSOLD/
+        # OVERBOUGHT-nya dulu memakai is_oversold/is_overbought yang
+        # DIHITUNG dari StochRSI (lihat core/ai_score.py) -- bisa
+        # menampilkan mis. "RSI: OVERSOLD" dengan detail "52.5" (RSI biasa
+        # 52.5 jelas BUKAN oversold). Status baris "RSI" sekarang
+        # diklasifikasi dari RSI biasa itu sendiri (ambang baku <30/>70),
+        # StochRSI ditampilkan terpisah di baris sendiri di bawah supaya
+        # kedua indikator tetap ada TAPI tidak saling tertukar label.
+        ("RSI", "OVERSOLD" if (ai.get("rsi") or 50) < 30 else "OVERBOUGHT" if (ai.get("rsi") or 50) > 70 else "NETRAL",
          f"{ai.get('rsi')}"),
+        ("StochRSI", "OVERSOLD" if ai.get("is_oversold") else "OVERBOUGHT" if ai.get("is_overbought") else "NETRAL",
+         f"K={ai.get('stoch_k')}, D={ai.get('stoch_d')}"),
         ("MACD", "BULLISH" if ai.get("macd_bullish") else "BEARISH",
          f"Histogram {ai.get('macd_hist')}"),
         ("Volume", "SPIKE" if ai.get("cond_volume_spike") else "NORMAL",
