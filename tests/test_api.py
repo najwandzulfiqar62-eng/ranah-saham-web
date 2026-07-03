@@ -318,6 +318,33 @@ def test_sector_leader_laggard_no_overlap_when_few_stocks(monkeypatch):
     )
 
 
+def test_narrate_sector_leadership_no_overlap_when_few_sectors():
+    """Regresi: _narrate_sector_leadership() dulu bisa menyebut sektor
+    yang SAMA sebagai 'paling kuat' sekaligus 'paling lemah' dalam satu
+    kalimat kalau sector_data cuma berisi sedikit entri. Data sengaja
+    TANPA field 'ticker' di sini -- bentuk asli dari /api/insight/{kode}
+    (lewat sektor() di web/app.py) cuma punya nama_sektor/return_pct/
+    n_saham, BEDA dari core/sector_rotation.py::get_sector_performance()
+    yang punya 'ticker'. Versi pertama fix ini pakai key 'ticker' dan
+    crash KeyError persis di jalur /api/insight/IHSG -- tes ini menjaga
+    supaya regresi itu tidak terulang."""
+    from core.insight import _narrate_sector_leadership
+
+    sector_data = [
+        {"nama_sektor": "Sektor A", "return_pct": 5.0, "n_saham": 4},
+        {"nama_sektor": "Sektor B", "return_pct": 3.0, "n_saham": 3},
+        {"nama_sektor": "Sektor C", "return_pct": -1.0, "n_saham": 5},
+    ]
+    text = _narrate_sector_leadership(sector_data)
+    laggard_part = text.split("Sektor paling lemah:")[1].split(".")[0]
+    assert "Sektor paling kuat saat ini: Sektor A" in text
+    # Ketiga sektor sudah habis dipakai sebagai leader (top_n=3, cuma ada
+    # 3 sektor) -- laggard harus KOSONG (pesan fallback), bukan mengulang
+    # salah satu dari Sektor A/B/C.
+    for nama in ("Sektor A", "Sektor B", "Sektor C"):
+        assert nama not in laggard_part, f"{nama} tidak boleh muncul di bagian laggard: {laggard_part!r}"
+
+
 def test_chart_returns_png(client):
     r = client.get("/api/chart/BBCA")
     assert r.status_code == 200

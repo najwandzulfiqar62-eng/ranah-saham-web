@@ -164,16 +164,34 @@ def _narrate_ihsg_context(ai_ihsg: dict, rs_data: dict | None) -> str:
 def _narrate_sector_leadership(sector_data: list[dict] | None) -> str:
     """Narasikan sektor mana yang memimpin/tertinggal pergerakan IHSG
     -- KHUSUS insight market-wide (IHSG), TIDAK dipakai di insight
-    per-saham. REUSE get_sector_performance() (core/sector_rotation.py,
-    logic SAMA yang dipakai /sektor), bukan kalkulasi baru."""
+    per-saham.
+
+    CATATAN: dokumentasi lama fungsi ini bilang sector_data "REUSE
+    get_sector_performance() dari core/sector_rotation.py" -- itu TIDAK
+    akurat untuk semua caller. /api/insight/{kode} (web/app.py) sebenarnya
+    memberi data dari endpoint sektor() lokalnya sendiri, bentuknya beda
+    (nama_sektor/return_pct/n_saham, TANPA field 'ticker'). Makanya kode
+    di bawah dedup pakai 'nama_sektor' (ada di SEMUA bentuk data sektor
+    yang beredar di codebase ini), bukan 'ticker' (ditemukan nyata:
+    versi awal fix ini pakai 'ticker' dan crash KeyError persis di jalur
+    /api/insight/IHSG)."""
     if not sector_data:
         return "Data performa sektor tidak tersedia untuk melengkapi insight ini."
 
     leaders = sector_data[:3]
-    laggards = sector_data[-3:][::-1]
+    # Laggard TIDAK BOLEH tumpang tindih dengan leader -- ditemukan nyata:
+    # data performa sektor bisa gagal SEBAGIAN (rate-limit Yahoo Finance),
+    # jadi sector_data bisa tersisa <=6 entri. Pada kondisi itu,
+    # sector_data[:3] dan sector_data[-3:] overlap -- sektor yang SAMA
+    # disebut "paling kuat" SEKALIGUS "paling lemah" di kalimat yang sama
+    # (pola bug yang sama dengan get_leader_laggard() di
+    # core/sector_rotation.py).
+    leader_keys = {s["nama_sektor"] for s in leaders}
+    laggards = [s for s in reversed(sector_data) if s["nama_sektor"] not in leader_keys][:3]
 
     leader_text = ", ".join(f"{s['nama_sektor']} ({s['return_pct']:+.1f}%)" for s in leaders)
-    laggard_text = ", ".join(f"{s['nama_sektor']} ({s['return_pct']:+.1f}%)" for s in laggards)
+    laggard_text = (", ".join(f"{s['nama_sektor']} ({s['return_pct']:+.1f}%)" for s in laggards)
+                    if laggards else "tidak ada (semua sektor yang berhasil dimuat sudah masuk daftar terkuat)")
 
     n_positive = sum(1 for s in sector_data if s["return_pct"] > 0)
     n_total = len(sector_data)
