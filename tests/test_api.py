@@ -274,6 +274,50 @@ def test_ihsg_backtest_conditions_cache_indicators_per_dataframe(monkeypatch, fa
     assert calls["n"] == 0  # sudah ke-cache dari panggilan bullish_strong di atas (df sama)
 
 
+def test_sector_leader_laggard_no_overlap_when_few_stocks(monkeypatch):
+    """Regresi: get_leader_laggard() dulu bisa menampilkan saham yang SAMA
+    di leader DAN laggard sekaligus kalau sektornya cuma punya sedikit
+    saham -- SECTOR_MAP saat ini cuma 3-4 saham/sektor, dan top_n default
+    3, jadi results[:3] dan results[-3:] overlap total/sebagian. Sekarang
+    laggard harus selalu exclusive dari leader."""
+    import asyncio
+
+    import numpy as np
+    import pandas as pd
+
+    import core.sector_rotation as sr
+
+    # Sektor uji 3 saham -- kondisi yang PASTI overlap kalau bug masih ada
+    # (top_n default 3 == jumlah saham -> leader & laggard identik).
+    monkeypatch.setitem(sr.SECTOR_MAP, "TESTSECTOR", ["AAA.JK", "BBB.JK", "CCC.JK"])
+    monkeypatch.setattr(sr, "SECTOR_MAP_TO_INDEX", {})
+
+    def _make_df(end_price):
+        n = 30
+        dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+        close = np.linspace(end_price / 1.1, end_price, n)
+        return pd.DataFrame(
+            {"Open": close, "High": close * 1.001, "Low": close * 0.999,
+             "Close": close, "Volume": np.full(n, 1_000_000.0)},
+            index=dates,
+        )
+
+    price_map = {"AAA.JK": 130.0, "BBB.JK": 110.0, "CCC.JK": 90.0}
+
+    async def _fake_retry(ticker, period="2mo", interval="1d", **kw):
+        return _make_df(price_map[ticker])
+
+    monkeypatch.setattr(sr, "_download_with_retry", _fake_retry)
+
+    result = asyncio.run(sr.get_leader_laggard("TESTSECTOR", top_n=3))
+    assert result is not None
+    leader_tickers = {r["ticker"] for r in result["leader"]}
+    laggard_tickers = {r["ticker"] for r in result["laggard"]}
+    assert leader_tickers.isdisjoint(laggard_tickers), (
+        f"leader dan laggard tumpang tindih: {leader_tickers & laggard_tickers}"
+    )
+
+
 def test_chart_returns_png(client):
     r = client.get("/api/chart/BBCA")
     assert r.status_code == 200

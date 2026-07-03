@@ -260,11 +260,24 @@ async def get_leader_laggard(sector_key: str, top_n: int = 3) -> dict | None:
         except Exception:
             sector_index_return = None
 
+    leader = results[:top_n]
+    # Laggard TIDAK BOLEH tumpang tindih dengan leader -- ditemukan nyata:
+    # SECTOR_MAP saat ini cuma berisi 3-4 saham per sektor, jadi dengan
+    # top_n=3 default, results[-top_n:] dan results[:top_n] overlap
+    # SEBAGIAN (sektor 4 saham) atau TOTAL (sektor 3 saham) -- membuat
+    # saham yang SAMA muncul sebagai "leader" sekaligus "laggard" di
+    # sektor yang sama. Filter laggard supaya cuma berisi saham yang
+    # BUKAN sudah masuk leader (kalau saham tersisa lebih sedikit dari
+    # top_n, laggard cukup sependek itu -- lebih jujur daripada memaksa
+    # duplikat).
+    leader_tickers = {r["ticker"] for r in leader}
+    laggard = [r for r in reversed(results) if r["ticker"] not in leader_tickers][:top_n]
+
     return {
         "sector_key": sector_key_upper,
         "total_saham_di_sektor_ini": len(results),
-        "leader": results[:top_n],
-        "laggard": results[-top_n:][::-1],
+        "leader": leader,
+        "laggard": laggard,
         "sector_index_ticker": sector_index_ticker,
         "sector_index_return": sector_index_return,
     }
