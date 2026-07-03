@@ -34,8 +34,14 @@ def generate_ai_gauge_chart(ticker_name: str, result: dict, output_path: str = N
         else:
             bar_color = '#ff4444'
 
-        ax.barh(0, score, color=bar_color, height=0.3, alpha=0.9)
+        # Track abu-abu (0-100 penuh) HARUS digambar DULU, baru bar skor
+        # berwarna di atasnya -- urutan sebelumnya TERBALIK (bar skor
+        # duluan, baru track abu-abu semi-transparan menimpa SELURUH
+        # lebar termasuk bagian yang sudah berwarna), bikin seluruh gauge
+        # kelihatan pudar/keabuan alih-alih warna solid + track kosong
+        # yang benar.
         ax.barh(0, 100, color='#333333', height=0.3, alpha=0.3)
+        ax.barh(0, score, color=bar_color, height=0.3, alpha=0.9)
 
         ax.text(score / 2, 0, f'{score:.0f}', fontsize=28, color='white',
                  ha='center', va='center', fontweight='bold')

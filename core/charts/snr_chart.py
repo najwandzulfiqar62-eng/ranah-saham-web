@@ -77,7 +77,15 @@ def calculate_snr_levels(df: pd.DataFrame) -> dict:
     support_levels = [s1, s2, s3] + swing_lows[-10:]
     resistance_levels = [r1, r2, r3] + swing_highs[-10:]
 
-    clustered_supports = _cluster_levels(support_levels)[:3]
+    # _cluster_levels() selalu return level terurut ASCENDING (kecil -> besar).
+    # Resistance ada DI ATAS harga, jadi 3 terkecil = 3 TERDEKAT dgn harga --
+    # [:3] benar. Support ada DI BAWAH harga, jadi 3 terkecil justru 3
+    # TERJAUH (support paling dalam/lemah) -- BUG NYATA: sebelumnya juga
+    # dipotong [:3] di sini, membuang level support yang paling dekat &
+    # relevan (dekat harga saat ini) dan malah menampilkan level jauh di
+    # bawah sebagai S1/S2/S3. Diperbaiki jadi [-3:] supaya ambil 3 yang
+    # PALING DEKAT harga (nanti diurutkan ulang descending di bawah).
+    clustered_supports = _cluster_levels(support_levels)[-3:]
     clustered_resistances = _cluster_levels(resistance_levels)[:3]
 
     while len(clustered_supports) < 3:

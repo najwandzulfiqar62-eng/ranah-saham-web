@@ -163,10 +163,30 @@ def apply_centered_watermark_to_file(file_path: str, alpha: float = 0.10,
             draw = ImageDraw.Draw(new_chart)
             font_size = max(int(chart_w * 0.022), 14)
             font = None
+            # BUG NYATA yang diperbaiki: daftar font sebelumnya HANYA path
+            # Linux (/usr/share/fonts/...) -- di dev environment Windows
+            # (tempat bot ini SERING dijalankan langsung tanpa Docker,
+            # lihat README) semua path itu tidak ada, jadi selalu jatuh ke
+            # ImageFont.load_default() yang bitmap kecil & jelek, BUKAN
+            # bold font yang dimaksud. Font DejaVu Sans Bold BAWAAN
+            # matplotlib (dependency wajib project ini) dicoba PERTAMA --
+            # itu SELALU ada di path yang sama persis di Windows, Linux,
+            # maupun macOS karena ikut ter-install bareng paket matplotlib
+            # via pip, jadi ini fallback yang jauh lebih andal daripada
+            # menebak lokasi font sistem OS.
+            try:
+                import matplotlib as _mpl
+                _mpl_dejavu = os.path.join(_mpl.get_data_path(), "fonts", "ttf", "DejaVuSans-Bold.ttf")
+            except Exception:
+                _mpl_dejavu = None
             for font_path in (
+                _mpl_dejavu,
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                r"C:\Windows\Fonts\arialbd.ttf",
             ):
+                if not font_path:
+                    continue
                 try:
                     font = ImageFont.truetype(font_path, font_size)
                     break

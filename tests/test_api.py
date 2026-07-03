@@ -383,3 +383,48 @@ def test_macro_ok(client):
     assert r.status_code == 200
     data = r.json()
     assert "items" in data and "impacts" in data
+
+
+def test_snr_levels_pick_nearest_support_not_furthest():
+    """Regresi: calculate_snr_levels() dulu memotong hasil _cluster_levels()
+    (yang SELALU terurut ascending) dengan [:3] untuk SUPPORT juga -- benar
+    untuk resistance (di atas harga, ascending = terdekat duluan) tapi
+    SALAH untuk support (di bawah harga, ascending = TERJAUH duluan).
+    Akibatnya S1/S2/S3 yang ditampilkan ke user adalah level jauh di bawah
+    harga (support terlemah/tidak relevan/paling jarang kepakai trader),
+    bukan level yang PALING dekat dan actionable.
+
+    Data uji pakai noise harian kecil (BUKAN harga flat -- flat persis bisa
+    memicu false-positive swing point dari tie di np.min(), artefak data uji,
+    bukan perilaku data harga sungguhan) + beberapa swing low historis pada
+    level yang jauh terpisah (700/800/850/900/950) supaya _cluster_levels()
+    menghasilkan >3 cluster berbeda -- exactly kondisi yang membedakan
+    [:3] (bug) dari [-3:] (benar)."""
+    import numpy as np
+    import pandas as pd
+
+    from core.charts.snr_chart import calculate_snr_levels
+
+    rng = np.random.default_rng(42)
+    n = 200
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    close = 1000.0 + rng.normal(0, 1.5, n)
+    for idx, price in [(20, 950.0), (50, 900.0), (80, 850.0), (110, 800.0), (140, 700.0)]:
+        close[idx] = price
+    high = close + rng.uniform(1, 3, n)
+    low = close - rng.uniform(1, 3, n)
+    df = pd.DataFrame({"Open": close, "High": high, "Low": low, "Close": close,
+                        "Volume": np.full(n, 1_000_000.0)}, index=dates)
+
+    levels = calculate_snr_levels(df)
+    current_price = 1000.0
+
+    # S1 (support terkuat/terdekat) harus dalam jarak wajar dari harga saat
+    # ini (pivot-based, ~995-998 untuk range harian sekecil ini) -- BUKAN
+    # salah satu swing low historis yang jauh (700/800/850).
+    assert levels["s1"] > current_price * 0.98, (
+        f"S1 ({levels['s1']}) terlalu jauh dari harga saat ini ({current_price}) -- "
+        "kemungkinan memilih cluster support TERJAUH, bukan TERDEKAT"
+    )
+    assert levels["s1"] > levels["s2"] > levels["s3"]
+    assert levels["r1"] < levels["r2"] < levels["r3"]

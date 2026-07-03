@@ -232,12 +232,21 @@ def _deduplikasi(items: list[dict]) -> list[dict]:
             if item.get("source") and item["source"] not in lain \
                     and item["source"] != duplikat_dari.get("source"):
                 lain.append(item["source"])
-            # Pertahankan yang ringkasannya lebih panjang/informatif
+            # Pertahankan yang ringkasannya lebih panjang/informatif. Ikut
+            # timpa pub_date/_parsed_date bersamaan dengan title/link --
+            # BUG NYATA yang diperbaiki: sebelumnya cuma title/summary/link
+            # yang ditimpa, jadi tanggal yang ditampilkan bisa jadi milik
+            # artikel sumber LAIN dari yang link-nya ditampilkan (mis. link
+            # menuju artikel Detik tapi tanggalnya masih tanggal CNBC yang
+            # ditemukan lebih dulu) -- sekarang seluruh field ikut sinkron
+            # ke sumber yang dipertahankan.
             if len(item.get("summary", "")) > len(duplikat_dari.get("summary", "")):
                 duplikat_dari["title"] = item.get("title", duplikat_dari.get("title", ""))
                 duplikat_dari["summary"] = item.get("summary", "")
                 if item.get("link"):
                     duplikat_dari["link"] = item["link"]
+                duplikat_dari["pub_date"] = item.get("pub_date", duplikat_dari.get("pub_date", ""))
+                duplikat_dari["_parsed_date"] = item.get("_parsed_date")
 
     return disimpan
 
