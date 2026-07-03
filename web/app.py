@@ -487,6 +487,31 @@ def _trading_style_label(atr_pct: float) -> str:
     return "Investasi Jangka Menengah-Panjang"
 
 
+def _compute_grade(score: float, likuiditas: str) -> str:
+    """Grade huruf A-D: ringkasan sekali-huruf dari AI Score + likuiditas.
+    Likuiditas sengaja ikut mempengaruhi grade (bukan cuma skor teknikal
+    mentah) karena AI Score sendiri TIDAK memperhitungkan likuiditas sama
+    sekali -- saham dengan skor teknikal bagus tapi susah ditransaksikan
+    (bid/ask tipis, sering ARB/suspend) secara PRAKTIS kurang layak untuk
+    dieksekusi, meski chart-nya kelihatan menarik. Heuristik gabungan
+    sederhana untuk ringkasan cepat, BUKAN rating agency formal."""
+    adj = score
+    if likuiditas == "Tidak Likuid":
+        adj -= 20
+    elif likuiditas == "Kurang Likuid":
+        adj -= 10
+    elif likuiditas == "Sangat Likuid":
+        adj += 5
+
+    if adj >= 80:
+        return "A"
+    if adj >= 65:
+        return "B"
+    if adj >= 50:
+        return "C"
+    return "D"
+
+
 async def _analyze_payload(kode: str):
     """Bangun payload analisis untuk satu kode (dipakai /api/analyze &
     /api/compare). Mengembalikan dict atau melempar HTTPException."""
@@ -507,6 +532,13 @@ async def _analyze_payload(kode: str):
         smc = build_smc_summary(df)
         avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
         ad = calculate_ad_line(df)
+        current_price = ai.get("price") or 0
+        target = calculate_target_levels(df)
+        r1 = target["resistance_levels"][0]
+        s1 = target["support_levels"][0]
+        potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
+        risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
+        likuiditas = _liquidity_label(avg_value_20)
         payload = {
             "kode": kode,
             "score": ai.get("score"), "rating": ai.get("rating"),
@@ -528,10 +560,14 @@ async def _analyze_payload(kode: str):
             # transaction asli (fitur Pemegang Saham) sifatnya event harian
             # yang jarang muncul per saham, tidak cocok untuk badge yang
             # harus selalu tampil di setiap analisis.
-            "likuiditas": _liquidity_label(avg_value_20),
+            "likuiditas": likuiditas,
             "avg_value_20": round(avg_value_20, 0),
             "gaya_trading": _trading_style_label(ai.get("atr_pct") or 0),
             "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
+            "grade": _compute_grade(ai.get("score") or 0, likuiditas),
+            "potensi_naik_pct": round(potensi_naik_pct, 2),
+            "risiko_turun_pct": round(risiko_turun_pct, 2),
+            "r1": round(r1, 2), "s1": round(s1, 2),
             "smc": None if not smc else {
                 "narasi": smc.get("narasi"),
                 "n_bos": smc.get("n_bos"), "n_choch": smc.get("n_choch"),

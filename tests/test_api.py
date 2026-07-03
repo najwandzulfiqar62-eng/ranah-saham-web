@@ -43,6 +43,26 @@ def test_analyze_includes_ringkasan_cepat_fields(client):
     # tapi dengan fake_df default (300 baris) seharusnya selalu terisi.
     assert data["bandar"] is not None
     assert data["bandar"]["label"] in ("Akumulasi", "Distribusi", "Akumulasi Tersembunyi", "Distribusi Tersembunyi")
+    assert data["grade"] in ("A", "B", "C", "D")
+    # R1 (resistance terdekat) harus di ATAS harga -> potensi naik positif;
+    # S1 (support terdekat) harus di BAWAH harga -> risiko turun positif.
+    assert data["r1"] > data["price"]
+    assert data["s1"] < data["price"]
+    assert data["potensi_naik_pct"] > 0
+    assert data["risiko_turun_pct"] > 0
+
+
+def test_compute_grade_liquidity_adjustment():
+    """Regresi: grade harus turun kalau likuiditas buruk meski skor sama --
+    AI Score sendiri tidak memperhitungkan likuiditas sama sekali, jadi
+    grade WAJIB menurunkan skor mentah untuk saham tidak likuid supaya
+    tidak menyesatkan (skor teknikal bagus tapi susah dieksekusi nyatanya)."""
+    import web.app as app_module
+
+    assert app_module._compute_grade(90, "Sangat Likuid") == "A"
+    assert app_module._compute_grade(90, "Tidak Likuid") == "B"  # 90-20=70
+    assert app_module._compute_grade(55, "Tidak Likuid") == "D"  # 55-20=35
+    assert app_module._compute_grade(20, "Likuid") == "D"
 
 
 def test_liquidity_label_thresholds():

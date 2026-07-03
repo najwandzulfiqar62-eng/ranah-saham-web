@@ -1336,8 +1336,11 @@ function errBox(m){return `<div class="err">${m}</div>`}
 /* ---- Ringkasan Cepat: badge sekali-lihat di atas halaman Analisis ---- */
 function likColor(l){if(l==='Sangat Likuid'||l==='Likuid')return'var(--bull)';if(l==='Tidak Likuid')return'var(--bear)';return'#ff8c00'}
 function bandarColor(label){if(label==='Akumulasi')return'var(--bull)';if(label==='Distribusi')return'var(--bear)';return'#ff8c00'}
+function gradeColor(g){if(g==='A')return'var(--bull)';if(g==='B')return'var(--gold)';if(g==='C')return'#ff8c00';return'var(--bear)'}
 function _quickBadges(d){
-  const b=[`<span class="chip" style="color:${vColor(d.recommendation)};border-color:${vColor(d.recommendation)}66" title="Sinyal utama dari AI Score">${d.recommendation}</span>`];
+  const b=[];
+  if(d.grade)b.push(`<span class="chip" style="color:${gradeColor(d.grade)};border-color:${gradeColor(d.grade)}66;font-weight:700" title="Grade gabungan AI Score + likuiditas — bukan rating formal">Grade ${d.grade}</span>`);
+  b.push(`<span class="chip" style="color:${vColor(d.recommendation)};border-color:${vColor(d.recommendation)}66" title="Sinyal utama dari AI Score">${d.recommendation}</span>`);
   if(d.likuiditas)b.push(`<span class="chip" style="color:${likColor(d.likuiditas)}" title="Rata-rata nilai transaksi 20 hari: Rp${fmt(d.avg_value_20)}">${d.likuiditas}</span>`);
   if(d.gaya_trading)b.push(`<span class="chip" title="Berdasarkan volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)">${d.gaya_trading}</span>`);
   if(d.bandar)b.push(`<span class="chip" style="color:${bandarColor(d.bandar.label)}" title="${d.bandar.sinyal} — proxy dari Chaikin A/D Line, bukan data transaksi bandar sungguhan">${d.bandar.label}</span>`);
@@ -1464,6 +1467,8 @@ async function analyze(kode){
       <div class="cell"><div class="k">MACD</div><div class="v" style="color:${d.macd_bullish?'var(--bull)':'var(--bear)'}">${d.macd_bullish?'Bullish':'Bearish'}</div></div>
       <div class="cell"><div class="k">Rasio Volume</div><div class="v">${fmt(d.vol_ratio,2)}×</div></div>
       <div class="cell"><div class="k">Volatilitas (ATR)</div><div class="v">${fmt(d.atr_pct,1)}%</div></div>
+      <div class="cell"><div class="k">Potensi Naik (ke R1 Rp${fmt(d.r1)})</div><div class="v" style="color:var(--bull)">+${fmt(d.potensi_naik_pct,1)}%</div></div>
+      <div class="cell"><div class="k">Risiko Turun (ke S1 Rp${fmt(d.s1)})</div><div class="v" style="color:var(--bear)">-${fmt(d.risiko_turun_pct,1)}%</div></div>
     </div></section>
   ${_buildTechSummary(d)}
   <section class="panel"><p class="eyebrow">Relative Strength & Beta</p>
