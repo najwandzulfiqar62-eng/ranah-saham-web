@@ -1333,6 +1333,16 @@ setTimeout(_updateTabsFade,0);
 async function api(p){const r=await fetch(p);if(!r.ok){let m='Gagal memuat data.';try{m=(await r.json()).detail||m}catch{}throw new Error(m)}return r.json()}
 function vColor(r){r=(r||'').toUpperCase();if(/BAGUS|BULLISH|KUAT|AKUMULASI/.test(r))return'var(--bull)';if(/BURUK|BEARISH|LEMAH|AVOID/.test(r))return'var(--bear)';if(/CUKUP|WATCH/.test(r))return'#ff8c00';return'var(--gold)'}
 function errBox(m){return `<div class="err">${m}</div>`}
+/* ---- Ringkasan Cepat: badge sekali-lihat di atas halaman Analisis ---- */
+function likColor(l){if(l==='Sangat Likuid'||l==='Likuid')return'var(--bull)';if(l==='Tidak Likuid')return'var(--bear)';return'#ff8c00'}
+function bandarColor(label){if(label==='Akumulasi')return'var(--bull)';if(label==='Distribusi')return'var(--bear)';return'#ff8c00'}
+function _quickBadges(d){
+  const b=[`<span class="chip" style="color:${vColor(d.recommendation)};border-color:${vColor(d.recommendation)}66" title="Sinyal utama dari AI Score">${d.recommendation}</span>`];
+  if(d.likuiditas)b.push(`<span class="chip" style="color:${likColor(d.likuiditas)}" title="Rata-rata nilai transaksi 20 hari: Rp${fmt(d.avg_value_20)}">${d.likuiditas}</span>`);
+  if(d.gaya_trading)b.push(`<span class="chip" title="Berdasarkan volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)">${d.gaya_trading}</span>`);
+  if(d.bandar)b.push(`<span class="chip" style="color:${bandarColor(d.bandar.label)}" title="${d.bandar.sinyal} — proxy dari Chaikin A/D Line, bukan data transaksi bandar sungguhan">${d.bandar.label}</span>`);
+  return `<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">${b.join('')}</div>`;
+}
 function countUp(node,to){let t0=null;const dur=700;function f(ts){if(!t0)t0=ts;const p=Math.min((ts-t0)/dur,1);node.textContent=Math.round(p*to);if(p<1)requestAnimationFrame(f)}requestAnimationFrame(f)}
 
 /* ---------- MOBILE NAV ---------- */
@@ -1437,6 +1447,7 @@ async function analyze(kode){
         <div class="pricerow">Rp<span id="anzPrice">${fmt(d.price)}</span> ·
           <span id="anzChg1d" class="${d.change_1d>=0?'up':'down'}">${d.change_1d>=0?'+':''}${fmt(d.change_1d,2)}% (1h)</span> ·
           <span class="${d.change_5d>=0?'up':'down'}">${d.change_5d>=0?'+':''}${fmt(d.change_5d,2)}% (5h)</span> ${liveBadge('analisis')}</div>
+        ${_quickBadges(d)}
         <div class="confluence">
           <div class="cbar"><i id="cb-b" style="background:var(--bull)"></i><i id="cb-n" style="background:var(--neutral)"></i><i id="cb-r" style="background:var(--bear)"></i></div>
           <div class="clabels"><span>▲ ${d.bullish_count} bullish</span><span>● ${d.netral_count} netral</span><span>${d.bearish_count} bearish ▼</span></div>

@@ -29,6 +29,68 @@ def test_analyze_normalizes_kode(client):
     assert r.json()["kode"] == "BBCA"
 
 
+def test_analyze_includes_ringkasan_cepat_fields(client):
+    """Regresi: /api/analyze harus menyertakan field badge Ringkasan Cepat
+    (likuiditas, gaya_trading, bandar) yang dipakai frontend untuk kartu
+    ringkasan di atas halaman Analisis."""
+    r = client.get("/api/analyze/BBCA")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["likuiditas"] in ("Sangat Likuid", "Likuid", "Kurang Likuid", "Tidak Likuid")
+    assert data["gaya_trading"] in ("Intraday/Scalping", "Swing Trading", "Investasi Jangka Menengah-Panjang")
+    assert isinstance(data["avg_value_20"], (int, float))
+    # bandar bisa None kalau data historis terlalu pendek untuk A/D line,
+    # tapi dengan fake_df default (300 baris) seharusnya selalu terisi.
+    assert data["bandar"] is not None
+    assert data["bandar"]["label"] in ("Akumulasi", "Distribusi", "Akumulasi Tersembunyi", "Distribusi Tersembunyi")
+
+
+def test_liquidity_label_thresholds():
+    import web.app as app_module
+
+    assert app_module._liquidity_label(60_000_000_000) == "Sangat Likuid"
+    assert app_module._liquidity_label(10_000_000_000) == "Likuid"
+    assert app_module._liquidity_label(1_000_000_000) == "Kurang Likuid"
+    assert app_module._liquidity_label(1_000_000) == "Tidak Likuid"
+
+
+def test_trading_style_label_thresholds():
+    import web.app as app_module
+
+    assert app_module._trading_style_label(5.0) == "Intraday/Scalping"
+    assert app_module._trading_style_label(2.5) == "Swing Trading"
+    assert app_module._trading_style_label(0.8) == "Investasi Jangka Menengah-Panjang"
+
+
+def test_ad_line_label_matches_sinyal_direction():
+    """Regresi: label singkat calculate_ad_line() (dipakai badge) harus
+    konsisten arahnya dengan teks 'sinyal' lengkap -- Akumulasi/Distribusi
+    untuk konfirmasi, versi 'Tersembunyi' untuk divergensi."""
+    import numpy as np
+    import pandas as pd
+
+    from core.volume_patterns import calculate_ad_line
+
+    n = 60
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    # Harga naik konsisten DAN close selalu dekat HIGH (CLV tinggi positif)
+    # -> A/D naik juga -> konfirmasi bullish -> label "Akumulasi". (Close
+    # persis di TENGAH range low-high akan menghasilkan CLV=0 setiap hari,
+    # bukan sinyal ini -- makanya close sengaja didekatkan ke high, bukan
+    # cuma diturunkan dari trend yang sama seperti high/low.)
+    trend = np.linspace(1000, 1200, n)
+    low = trend * 0.99
+    high = trend * 1.01
+    close = high * 0.999
+    open_ = low
+    df = pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close,
+                        "Volume": np.full(n, 1_000_000.0)}, index=dates)
+    result = calculate_ad_line(df)
+    assert result is not None
+    assert result["label"] == "Akumulasi"
+    assert "BULLISH" in result["sinyal"].upper()
+
+
 def test_analyze_insufficient_history_404(client, monkeypatch, fake_df):
     import core.async_yf as async_yf
 

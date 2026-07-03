@@ -85,6 +85,7 @@ from core.risk_management import (
 )
 from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
+from core.volume_patterns import calculate_ad_line
 from core.config import SAHAM_XLSX_PATH
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
@@ -456,6 +457,36 @@ def _vwap_fair_value(df, lookback: int = 44) -> dict:
             "lookback": lookback}
 
 
+def _liquidity_label(avg_value_20: float) -> str:
+    """Klasifikasi likuiditas heuristik dari rata-rata NILAI transaksi
+    (Rp harga x volume) 20 hari terakhir. Ambang batas KASAR berdasarkan
+    pengamatan umum karakteristik saham IDX (blue chip vs saham tidur),
+    BUKAN standar resmi/formal BEI -- dicatat jujur, konsisten dengan
+    disiplin project ini soal tidak mengklaim lebih presisi dari yang
+    sebenarnya bisa dipertanggungjawabkan."""
+    if avg_value_20 >= 50_000_000_000:
+        return "Sangat Likuid"
+    if avg_value_20 >= 5_000_000_000:
+        return "Likuid"
+    if avg_value_20 >= 500_000_000:
+        return "Kurang Likuid"
+    return "Tidak Likuid"
+
+
+def _trading_style_label(atr_pct: float) -> str:
+    """Klasifikasi gaya trading heuristik dari volatilitas harian (ATR%
+    terhadap harga). Saham dengan ayunan harian besar secara alami lebih
+    cocok untuk horizon pendek (peluang profit cepat tapi risiko harian
+    juga besar); saham dengan ayunan kecil lebih cocok dipegang lebih
+    lama karena butuh waktu lebih panjang untuk pergerakan berarti.
+    Heuristik sederhana, BUKAN rekomendasi horizon investasi personal."""
+    if atr_pct >= 4:
+        return "Intraday/Scalping"
+    if atr_pct >= 2:
+        return "Swing Trading"
+    return "Investasi Jangka Menengah-Panjang"
+
+
 async def _analyze_payload(kode: str):
     """Bangun payload analisis untuk satu kode (dipakai /api/analyze &
     /api/compare). Mengembalikan dict atau melempar HTTPException."""
@@ -474,6 +505,8 @@ async def _analyze_payload(kode: str):
         if ai is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
         smc = build_smc_summary(df)
+        avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
+        ad = calculate_ad_line(df)
         payload = {
             "kode": kode,
             "score": ai.get("score"), "rating": ai.get("rating"),
@@ -486,6 +519,19 @@ async def _analyze_payload(kode: str):
             "netral_count": ai.get("netral_count"),
             "insight": _narrate_technical(ai),
             "vwap_fv": _vwap_fair_value(df),
+            # ===== RINGKASAN CEPAT (badge di atas halaman Analisis) =====
+            # Semua reuse dari data yang SUDAH dihitung di atas -- likuiditas
+            # & gaya trading pakai heuristik baru (lihat catatan jujur di
+            # masing-masing fungsi), bandar/psikologi pakai Chaikin A/D Line
+            # yang SUDAH ADA & teruji (core/volume_patterns.py) sebagai proxy
+            # teknikal, BUKAN data insider transaksi sungguhan -- insider
+            # transaction asli (fitur Pemegang Saham) sifatnya event harian
+            # yang jarang muncul per saham, tidak cocok untuk badge yang
+            # harus selalu tampil di setiap analisis.
+            "likuiditas": _liquidity_label(avg_value_20),
+            "avg_value_20": round(avg_value_20, 0),
+            "gaya_trading": _trading_style_label(ai.get("atr_pct") or 0),
+            "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
             "smc": None if not smc else {
                 "narasi": smc.get("narasi"),
                 "n_bos": smc.get("n_bos"), "n_choch": smc.get("n_choch"),

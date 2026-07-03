@@ -128,12 +128,16 @@ def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
 
     if price_naik and ad_naik:
         sinyal = "✅ KONFIRMASI BULLISH (harga naik + A/D naik, sejalan)"
+        label = "Akumulasi"
     elif not price_naik and not ad_naik:
         sinyal = "✅ KONFIRMASI BEARISH (harga turun + A/D turun, sejalan)"
+        label = "Distribusi"
     elif price_naik and not ad_naik:
         sinyal = "⚠️ DIVERGENSI BEARISH (harga naik tapi A/D turun -- waspada distribusi tersembunyi)"
+        label = "Distribusi Tersembunyi"
     else:
         sinyal = "⚠️ DIVERGENSI BULLISH (harga turun tapi A/D naik -- mungkin ada akumulasi tersembunyi)"
+        label = "Akumulasi Tersembunyi"
 
     last_clv = float(clv.iloc[-1])
     if last_clv > 0.5:
@@ -154,5 +158,6 @@ def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
         "last_clv": round(last_clv, 2),
         "clv_label": clv_label,
         "sinyal": sinyal,
+        "label": label,
         "lookback_days": lookback_days,
     }
