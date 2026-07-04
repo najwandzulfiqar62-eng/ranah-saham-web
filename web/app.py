@@ -1307,11 +1307,24 @@ async def confidence():
     # Catat Top Pick hari ini ke signal_history untuk Audit Sinyal (/api/
     # signals) -- SEBELUM user tahu hasilnya, supaya track record kredibel
     # (lihat catatan lengkap di core/signal_history.py). Dibungkus try/except
-    # & jalan di thread terpisah supaya kegagalan/lambatnya SQLite TIDAK
+    # supaya kegagalan/lambatnya SQLite atau lookup harga real-time TIDAK
     # PERNAH menggagalkan respons Top Pick itu sendiri.
+    #
+    # entry_price pakai harga REAL-TIME (_realtime_price, sudah ada & dipakai
+    # /api/analyze), BUKAN closing harian (it['harga']) -- closing harian
+    # bisa basi sampai 1 hari bursa, dan itu JUGA harga yang dipakai
+    # menghitung sinyalnya sendiri, jadi mencatatnya sebagai "entry yang
+    # bisa dieksekusi" adalah lookahead bias kecil yang tidak jujur.
+    async def _signal_entry_price_lookup(kode: str) -> float | None:
+        try:
+            rt = await _realtime_price(kode + ".JK")
+            return rt["price"] if rt else None
+        except Exception:
+            return None
+
     try:
         from core.signal_history import record_top_picks
-        await asyncio.to_thread(record_top_picks, items)
+        await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
     except Exception as e:
         print(f"⚠️ Gagal mencatat signal history: {type(e).__name__}: {e}")
 

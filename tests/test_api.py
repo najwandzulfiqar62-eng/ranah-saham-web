@@ -773,6 +773,8 @@ def test_record_top_picks_respects_threshold_and_dedup(clean_signal_db):
     harga floor), dan TIDAK BOLEH mencatat kode yang sama dua kali di hari
     yang sama (dedup) -- /api/confidence bisa dipanggil berkali-kali sehari
     kalau cache 300 detik expire & di-hit ulang."""
+    import asyncio
+
     from core.signal_history import record_top_picks, get_signal_report, MIN_SCORE_TO_RECORD
 
     items = [
@@ -780,10 +782,10 @@ def test_record_top_picks_respects_threshold_and_dedup(clean_signal_db):
         _fake_confidence_item("ZZLOW", MIN_SCORE_TO_RECORD - 10),  # di bawah ambang -- skip
         {**_fake_confidence_item("ZZNODATA", MIN_SCORE_TO_RECORD + 5), "potensi_naik_pct": None},  # skip
     ]
-    saved = record_top_picks(items)
+    saved = asyncio.run(record_top_picks(items))
     assert saved == 1  # cuma ZZHIGH yang lolos
 
-    saved_again = record_top_picks(items)  # panggil lagi, hari yang sama
+    saved_again = asyncio.run(record_top_picks(items))  # panggil lagi, hari yang sama
     assert saved_again == 0  # ZZHIGH sudah tercatat hari ini -- dedup
 
     report = get_signal_report()
@@ -794,11 +796,43 @@ def test_record_top_picks_respects_threshold_and_dedup(clean_signal_db):
 
 
 def test_record_top_picks_caps_per_day(clean_signal_db):
+    import asyncio
+
     from core.signal_history import record_top_picks, MAX_RECORDED_PER_DAY, MIN_SCORE_TO_RECORD
 
     items = [_fake_confidence_item(f"ZZCAP{i}", MIN_SCORE_TO_RECORD + 1) for i in range(MAX_RECORDED_PER_DAY + 5)]
-    saved = record_top_picks(items)
+    saved = asyncio.run(record_top_picks(items))
     assert saved == MAX_RECORDED_PER_DAY
+
+
+def test_record_top_picks_uses_realtime_price_with_fallback(clean_signal_db):
+    """Regresi: entry_price seharusnya pakai harga REAL-TIME (price_lookup),
+    BUKAN closing harian (it['harga']) -- closing harian JUGA dipakai
+    menghitung sinyalnya sendiri, jadi mencatatnya sebagai entry yang bisa
+    dieksekusi itu lookahead bias kecil. Kalau price_lookup gagal/kembalikan
+    None utk suatu kode, HARUS fallback jujur ke closing harian, bukan gagal
+    total mencatat sinyalnya."""
+    import asyncio
+
+    from core.signal_history import record_top_picks, get_signal_report, MIN_SCORE_TO_RECORD
+
+    items = [
+        _fake_confidence_item("ZZLIVE", MIN_SCORE_TO_RECORD + 5, harga=1000.0),
+        _fake_confidence_item("ZZFAIL", MIN_SCORE_TO_RECORD + 5, harga=2000.0),
+    ]
+
+    async def fake_lookup(kode):
+        if kode == "ZZLIVE":
+            return 1015.0  # harga real-time beda dari closing harian (1000)
+        return None  # simulasikan lookup gagal utk ZZFAIL
+
+    saved = asyncio.run(record_top_picks(items, price_lookup=fake_lookup))
+    assert saved == 2
+
+    report = get_signal_report()
+    by_kode = {s["kode"]: s for s in report["signals"]}
+    assert by_kode["ZZLIVE"]["entry_price"] == 1015.0  # pakai harga real-time
+    assert by_kode["ZZFAIL"]["entry_price"] == 2000.0  # fallback ke closing harian
 
 
 def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):

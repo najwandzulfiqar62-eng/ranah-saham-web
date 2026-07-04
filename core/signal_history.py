@@ -77,7 +77,7 @@ def _ensure_table():
     _ensured = True
 
 
-def record_top_picks(items: list[dict]) -> int:
+async def record_top_picks(items: list[dict], price_lookup=None) -> int:
     """Catat sinyal baru dari hasil /api/confidence (items sudah diurut
     confidence_score menurun). Hanya MAX_RECORDED_PER_DAY teratas yang skornya
     >= MIN_SCORE_TO_RECORD, dan SATU kode SAHAM cuma dicatat SEKALI per hari
@@ -88,6 +88,16 @@ def record_top_picks(items: list[dict]) -> int:
     Melewati saham tanpa potensi_naik_pct/risiko_turun_pct valid (mis. GOTO
     yang sedang flat di harga floor -- lihat catatan di core/charts/
     snr_chart.py) karena TP/SL tidak bisa didefinisikan dengan wajar.
+
+    price_lookup (BARU, opsional): async callable(kode) -> float | None utk
+    ambil harga REAL-TIME (reuse _realtime_price yang sudah ada di web/
+    app.py) sebagai entry_price, BUKAN it['harga'] (closing harian yang bisa
+    basi sampai 1 hari bursa -- entry yang dicatat dari harga penutupan yang
+    SAMA dipakai buat menghitung sinyalnya sendiri secara teknis tidak
+    pernah benar-benar bisa dieksekusi user, ini bentuk lookahead bias
+    kecil). Kalau price_lookup None atau gagal/return None utk suatu kode,
+    fallback jujur ke it['harga'] (closing harian) -- tetap lebih baik
+    daripada tidak mencatat entry sama sekali.
 
     Returns jumlah sinyal baru yang benar-benar disimpan."""
     _ensure_table()
@@ -104,24 +114,35 @@ def record_top_picks(items: list[dict]) -> int:
         return 0
 
     saved = 0
-    with get_db() as conn:
-        for it in candidates:
+    for it in candidates:
+        with get_db() as conn:
             already = conn.execute('''
                 SELECT 1 FROM signal_history
                 WHERE kode = ? AND date(recorded_at) = date('now')
                 LIMIT 1
             ''', (it["kode"],)).fetchone()
-            if already:
-                continue
+        if already:
+            continue
+
+        entry_price = it["harga"]
+        if price_lookup is not None:
+            try:
+                live_price = await price_lookup(it["kode"])
+                if live_price:
+                    entry_price = live_price
+            except Exception:
+                pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
+
+        with get_db() as conn:
             conn.execute('''
                 INSERT INTO signal_history
                     (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
-                it["kode"], it["harga"], it["potensi_naik_pct"], it["risiko_turun_pct"],
+                it["kode"], entry_price, it["potensi_naik_pct"], it["risiko_turun_pct"],
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
             ))
-            saved += 1
+        saved += 1
     return saved
 
 
