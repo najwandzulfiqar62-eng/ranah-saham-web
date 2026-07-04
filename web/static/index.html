@@ -858,6 +858,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     <button class="tab" data-v="ihsg">IHSG</button>
     <button class="tab" data-v="screener">Screener</button>
     <button class="tab" data-v="toppick">Top Pick</button>
+    <button class="tab" data-v="audit">Audit Sinyal</button>
     <button class="tab" data-v="heatmap">Heatmap</button>
     <button class="tab" data-v="pasar">Pasar</button>
     <button class="tab" data-v="sektor">Sektor</button>
@@ -886,6 +887,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     <button class="tab" data-v="ihsg">IHSG</button>
     <button class="tab" data-v="screener">Screener</button>
     <button class="tab" data-v="toppick">Top Pick</button>
+    <button class="tab" data-v="audit">Audit Sinyal</button>
     <button class="tab" data-v="heatmap">Heatmap</button>
     <button class="tab" data-v="pasar">Pasar</button>
     <button class="tab" data-v="sektor">Sektor</button>
@@ -1110,6 +1112,15 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <button class="btn ghost" id="tpBtn" style="padding:7px 14px">⟳ Refresh</button>
     </section>
     <div id="tpBody"><div class="hint muted">Memuat Skor Keyakinan saat tab dibuka…</div></div>
+  </div>
+  <!-- AUDIT SINYAL -->
+  <div class="view" id="v-audit">
+    <section class="panel">
+      <p class="eyebrow">Audit Sinyal</p>
+      <p class="insight muted" style="margin-bottom:6px">Setiap saham yang pernah masuk Top Pick (skor cukup tinggi) dicatat otomatis SEBELUM hasilnya diketahui, lalu dicek ulang di sini apakah target (TP) atau stop loss (SL) tercapai. Ini rekaman objektif, bukan klaim performa yang dipilih setelah tahu hasilnya.</p>
+      <button class="btn ghost" id="auditBtn" style="padding:7px 14px">⟳ Refresh</button>
+    </section>
+    <div id="auditBody"><div class="hint muted">Memuat riwayat sinyal saat tab dibuka…</div></div>
   </div>
   <!-- HEATMAP -->
   <div class="view" id="v-heatmap">
@@ -1575,6 +1586,7 @@ function route(v){
   if(v==='berita'&&!loaded.berita){loaded.berita=1;loadNews()}
   if(v==='screener'&&!loaded.screener){loaded.screener=1;loadUniverse()}
   if(v==='toppick'&&!loaded.toppick){loaded.toppick=1;loadTopPick()}
+  if(v==='audit'&&!loaded.audit){loaded.audit=1;loadSignalAudit()}
   if(v==='heatmap'&&!loaded.heatmap){loaded.heatmap=1;loadHeatmap()}
   if(v==='pasar'&&!loaded.pasar){loaded.pasar=1;loadPasar('gainer')}
   if(v==='sektor'&&!loaded.sektor){loaded.sektor=1;loadSektor('rank')}
@@ -2619,6 +2631,58 @@ async function loadTopPick(){
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }
 $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});
+
+/* ---------- AUDIT SINYAL ---------- */
+function _auditStatusColor(s){return s==='TP_HIT'?'var(--bull)':s==='SL_HIT'?'var(--bear)':s==='EXPIRED'?'var(--muted)':'var(--gold)'}
+function _auditStatusLabel(s){return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan'}[s]||s}
+async function loadSignalAudit(){
+  const body=$('#auditBody');
+  body.innerHTML='<section class="panel skel loadbar"></section>';
+  let d; try{d=await api('/api/signals')}catch(e){body.innerHTML=errBox(e.message);return}
+  const signals=d.signals||[];
+  let statsHtml;
+  if(!d.stats){
+    statsHtml=`<section class="panel">
+      <p class="audit-note"><b>Belum cukup data untuk statistik win rate.</b> Ada ${d.n_open} sinyal yang masih berjalan
+      (belum tercapai target atau stop loss) dari total ${d.n_total} yang pernah dicatat. Statistik baru muncul setelah
+      minimal 1 sinyal selesai (tercapai TP/SL atau kadaluarsa setelah 20 hari bursa) -- angka win rate TIDAK akan
+      ditampilkan sebagai 0% atau dikarang sebelum itu.</p>
+    </section>`;
+  }else{
+    const s=d.stats;
+    const wrColor=s.win_rate==null?'var(--muted)':s.win_rate>=55?'var(--bull)':s.win_rate>=45?'var(--gold)':'var(--bear)';
+    statsHtml=`<section class="panel">
+      <div class="decision-grid">
+        <div class="decision-card"><div class="label">Win Rate</div><div class="value" style="color:${wrColor}">${s.win_rate!=null?fmt(s.win_rate,1)+'%':'–'}</div><div class="sub">${s.n_tp_hit} TP vs ${s.n_sl_hit} SL (tidak termasuk kadaluarsa)</div></div>
+        <div class="decision-card"><div class="label">Rata-rata Return</div><div class="value" style="color:${s.avg_return_pct>=0?'var(--bull)':'var(--bear)'}">${s.avg_return_pct>=0?'+':''}${fmt(s.avg_return_pct,2)}%</div><div class="sub">Dari ${s.n_closed} sinyal selesai</div></div>
+        <div class="decision-card"><div class="label">Rata-rata Durasi</div><div class="value">${fmt(s.avg_days_to_resolve,1)} hari</div><div class="sub">Sampai TP/SL/kadaluarsa</div></div>
+        <div class="decision-card"><div class="label">Sedang Berjalan</div><div class="value">${d.n_open}</div><div class="sub">Dari ${d.n_total} total dicatat</div></div>
+      </div>
+      <p class="audit-note" style="margin-top:12px">Kadaluarsa (${s.n_expired}) dihitung ke rata-rata return tapi TIDAK dihitung menang/kalah di win rate -- hasilnya belum tegas ke arah manapun.</p>
+    </section>`;
+  }
+  if(!signals.length){
+    body.innerHTML=statsHtml+'<section class="panel"><p class="insight muted">Belum ada sinyal yang tercatat. Sinyal otomatis tercatat saat Top Pick dibuka dan ada saham dengan skor cukup tinggi.</p></section>';
+    return;
+  }
+  const rows=signals.map(s=>{
+    const tanggal=(s.recorded_at||'').slice(0,10);
+    const retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
+    const retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
+    return `<tr data-k="${s.kode}" style="cursor:pointer">
+      <td class="tk">${s.kode}</td>
+      <td class="hide-xs">${tanggal}</td>
+      <td class="hide-xs">Rp${fmt(s.entry_price)}</td>
+      <td class="hide-xs">+${fmt(s.tp_pct,1)}% / -${fmt(s.sl_pct,1)}%</td>
+      <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
+      <td style="color:${retColor}">${retTxt}</td></tr>`;
+  }).join('');
+  body.innerHTML=statsHtml+`<section class="panel">
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th class="hide-xs">Dicatat</th><th class="hide-xs">Harga Awal</th><th class="hide-xs">Target TP/SL</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
+  </section>`;
+  body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+}
+$('#auditBtn').addEventListener('click',()=>{loaded.audit=0;loadSignalAudit()});
 
 async function loadSignal(){
   const body=$('#uniBody');

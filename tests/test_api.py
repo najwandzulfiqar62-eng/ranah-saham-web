@@ -6,6 +6,8 @@
 # endpoint di web/app.py, tapi cukup untuk mendeteksi regresi pada alur
 # data inti (download -> _clean -> hitung -> serialize JSON/PNG).
 
+import pytest
+
 
 def test_health(client):
     r = client.get("/api/health")
@@ -755,3 +757,144 @@ def test_confidence_endpoint_includes_composite_fields(client):
     # Urutan harus menurun berdasarkan confidence_score
     scores = [x["confidence_score"] for x in data["items"]]
     assert scores == sorted(scores, reverse=True)
+
+
+def _fake_confidence_item(kode, score, naik=3.0, turun=2.0, harga=1000.0):
+    return {
+        "kode": kode, "harga": harga, "confidence_score": score, "ai_score": score,
+        "ai_rating": "BAGUS", "potensi_naik_pct": naik, "risiko_turun_pct": turun,
+    }
+
+
+def test_record_top_picks_respects_threshold_and_dedup(clean_signal_db):
+    """Regresi: record_top_picks() cuma boleh mencatat saham dengan
+    confidence_score >= MIN_SCORE_TO_RECORD, harus melewati saham tanpa
+    potensi_naik_pct/risiko_turun_pct valid (mis. GOTO yang lagi flat di
+    harga floor), dan TIDAK BOLEH mencatat kode yang sama dua kali di hari
+    yang sama (dedup) -- /api/confidence bisa dipanggil berkali-kali sehari
+    kalau cache 300 detik expire & di-hit ulang."""
+    from core.signal_history import record_top_picks, get_signal_report, MIN_SCORE_TO_RECORD
+
+    items = [
+        _fake_confidence_item("ZZHIGH", MIN_SCORE_TO_RECORD + 10),
+        _fake_confidence_item("ZZLOW", MIN_SCORE_TO_RECORD - 10),  # di bawah ambang -- skip
+        {**_fake_confidence_item("ZZNODATA", MIN_SCORE_TO_RECORD + 5), "potensi_naik_pct": None},  # skip
+    ]
+    saved = record_top_picks(items)
+    assert saved == 1  # cuma ZZHIGH yang lolos
+
+    saved_again = record_top_picks(items)  # panggil lagi, hari yang sama
+    assert saved_again == 0  # ZZHIGH sudah tercatat hari ini -- dedup
+
+    report = get_signal_report()
+    kodes = [s["kode"] for s in report["signals"]]
+    assert kodes.count("ZZHIGH") == 1
+    assert "ZZLOW" not in kodes
+    assert "ZZNODATA" not in kodes
+
+
+def test_record_top_picks_caps_per_day(clean_signal_db):
+    from core.signal_history import record_top_picks, MAX_RECORDED_PER_DAY, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item(f"ZZCAP{i}", MIN_SCORE_TO_RECORD + 1) for i in range(MAX_RECORDED_PER_DAY + 5)]
+    saved = record_top_picks(items)
+    assert saved == MAX_RECORDED_PER_DAY
+
+
+def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):
+    """Regresi inti fitur audit: TP_HIT kalau harga >= entry*(1+tp_pct%),
+    SL_HIT kalau harga <= entry*(1-sl_pct%), EXPIRED kalau sudah lewat
+    MAX_HOLD_DAYS tanpa kena keduanya, dan tetap OPEN kalau belum ada
+    kondisi yang terpenuhi -- keempatnya WAJIB dibedakan dengan benar
+    supaya statistik win rate tidak menghitung sinyal yang belum selesai."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        # TP: entry 1000, tp 5% -> tercapai kalau harga >= 1050
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct) VALUES ('ZZTP', 1000, 5, 3)")
+        # SL: entry 1000, sl 3% -> tercapai kalau harga <= 970
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct) VALUES ('ZZSL', 1000, 5, 3)")
+        # EXPIRED: direkam MAX_HOLD_DAYS+1 hari lalu, harga di tengah (belum TP/SL)
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, recorded_at) "
+            "VALUES ('ZZOLD', 1000, 5, 3, datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 1} days',),
+        )
+        # OPEN: baru direkam, harga masih di tengah -- harus tetap OPEN
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct) VALUES ('ZZOPEN', 1000, 5, 3)")
+
+    prices = {"ZZTP": 1060.0, "ZZSL": 960.0, "ZZOLD": 1010.0, "ZZOPEN": 1010.0}
+
+    async def fake_lookup(kode):
+        return prices.get(kode)
+
+    asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        rows = {r["kode"]: dict(r) for r in conn.execute("SELECT * FROM signal_history").fetchall()}
+
+    assert rows["ZZTP"]["status"] == "TP_HIT"
+    assert rows["ZZTP"]["return_pct"] == 5
+    assert rows["ZZSL"]["status"] == "SL_HIT"
+    assert rows["ZZSL"]["return_pct"] == -3
+    assert rows["ZZOLD"]["status"] == "EXPIRED"
+    assert rows["ZZOLD"]["return_pct"] == 1.0  # (1010/1000 - 1) * 100
+    assert rows["ZZOPEN"]["status"] == "OPEN"
+    assert rows["ZZOPEN"]["resolved_at"] is None
+
+
+def test_signal_report_stats_none_without_closed_signals(clean_signal_db):
+    """Regresi KRUSIAL untuk kejujuran fitur: kalau belum ada satupun
+    sinyal yang selesai diaudit, 'stats' HARUS None -- bukan 0% atau angka
+    lain yang kelihatan valid padahal cuma kebetulan tidak ada data."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct) VALUES ('ZZONLYOPEN', 1000, 5, 3)")
+
+    report = get_signal_report()
+    assert report["stats"] is None
+    assert report["n_open"] == 1
+
+
+def test_signal_report_computes_win_rate_excluding_expired(clean_signal_db):
+    """EXPIRED tidak dihitung sebagai menang ATAU kalah di win_rate (hasilnya
+    ambigu, bukan keputusan tegas TP/SL), tapi return_pct-nya tetap masuk
+    rata-rata return keseluruhan."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve)
+            VALUES ('ZZW1', 1000, 5, 3, 'TP_HIT', datetime('now'), 5.0, 4)''')
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve)
+            VALUES ('ZZW2', 1000, 5, 3, 'TP_HIT', datetime('now'), 5.0, 6)''')
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve)
+            VALUES ('ZZL1', 1000, 5, 3, 'SL_HIT', datetime('now'), -3.0, 2)''')
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve)
+            VALUES ('ZZE1', 1000, 5, 3, 'EXPIRED', datetime('now'), 1.0, 20)''')
+
+    stats = get_signal_report()["stats"]
+    assert stats["n_closed"] == 4
+    assert stats["n_tp_hit"] == 2 and stats["n_sl_hit"] == 1 and stats["n_expired"] == 1
+    assert stats["win_rate"] == pytest.approx(2 / 3 * 100, abs=0.1)  # 2 menang dari 3 (TP+SL), EXPIRED di luar
+    assert stats["avg_return_pct"] == pytest.approx((5.0 + 5.0 - 3.0 + 1.0) / 4, abs=0.01)
+    assert stats["avg_days_to_resolve"] == pytest.approx((4 + 6 + 2 + 20) / 4, abs=0.1)
+
+
+def test_signals_endpoint_returns_report_structure(client, clean_signal_db):
+    r = client.get("/api/signals")
+    assert r.status_code == 200
+    data = r.json()
+    assert "signals" in data and "stats" in data and "n_open" in data and "n_total" in data

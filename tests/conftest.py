@@ -10,8 +10,14 @@
 #   rate limit) sudah fail-open (try/except) saat Redis tidak terjangkau --
 #   jadi tes tetap jalan benar, hanya tanpa cache hit.
 import os
+import tempfile
 
 os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6399/0")
+# DATABASE_URL diarahkan ke file SQLite terpisah di temp dir SEBELUM
+# core.config diimpor di mana pun -- supaya tes signal_history/fundamental
+# cache tidak menulis ke ranah_saham.db pemakaian sungguhan (lihat pola
+# yang sama untuk REDIS_URL di atas).
+os.environ.setdefault("DATABASE_URL", os.path.join(tempfile.gettempdir(), "ranah_saham_test.db"))
 
 import numpy as np
 import pandas as pd
@@ -117,3 +123,19 @@ def client():
     from web.app import app
 
     return TestClient(app)
+
+
+@pytest.fixture
+def clean_signal_db():
+    """Kosongkan tabel signal_history sebelum & sesudah tes -- supaya
+    assertion statistik (win rate, avg return, dst) tidak terpengaruh sisa
+    baris dari tes lain yang jalan lebih dulu di sesi pytest yang sama."""
+    from core.signal_history import _ensure_table
+    from core.database import get_db
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute("DELETE FROM signal_history")
+    yield
+    with get_db() as conn:
+        conn.execute("DELETE FROM signal_history")

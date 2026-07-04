@@ -1,9 +1,14 @@
 # =========================
-# DATABASE LAYER (SQLite) -- cache fundamental
+# DATABASE LAYER (SQLite) -- koneksi bersama
 # =========================
-# Versi web-only. Modul ini sekarang HANYA menyimpan cache data fundamental
-# (PE, PBV, ROE, dst). Tabel akun/watchlist/alert pada versi bot Telegram lama
-# sudah dihapus karena fitur tersebut tidak dipakai pada aplikasi web ini.
+# Versi web-only. Modul ini menyediakan LAPISAN KONEKSI (get_db/_get_connection)
+# yang dipakai bersama oleh 2 fitur: cache fundamental (tabel fundamental_cache,
+# di bawah) dan riwayat sinyal Top Pick (tabel signal_history, lihat
+# core/signal_history.py -- schema-nya sengaja dipisah ke modul sendiri, cuma
+# numpang koneksi di sini). Tabel akun/watchlist/alert pada versi bot Telegram
+# lama sudah dihapus karena fitur tersebut tidak dipakai pada aplikasi web ini
+# (beda dari signal_history yang BARU ditambahkan untuk kredibilitas Top Pick,
+# bukan fitur personal).
 #
 # Catatan desain yang dipertahankan dari versi lama:
 # - Satu koneksi per-thread (bukan buka/tutup file tiap panggilan) supaya

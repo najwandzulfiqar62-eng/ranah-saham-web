@@ -1304,6 +1304,17 @@ async def confidence():
 
     items.sort(key=lambda x: x["confidence_score"], reverse=True)
 
+    # Catat Top Pick hari ini ke signal_history untuk Audit Sinyal (/api/
+    # signals) -- SEBELUM user tahu hasilnya, supaya track record kredibel
+    # (lihat catatan lengkap di core/signal_history.py). Dibungkus try/except
+    # & jalan di thread terpisah supaya kegagalan/lambatnya SQLite TIDAK
+    # PERNAH menggagalkan respons Top Pick itu sendiri.
+    try:
+        from core.signal_history import record_top_picks
+        await asyncio.to_thread(record_top_picks, items)
+    except Exception as e:
+        print(f"⚠️ Gagal mencatat signal history: {type(e).__name__}: {e}")
+
     # Konteks regime pasar (IHSG) -- satu kali untuk semua, BUKAN per saham,
     # supaya user tahu skor individual di atas dibaca dalam kondisi pasar
     # apa (skor bagus di tengah IHSG bearish beda maknanya dari saat bullish).
@@ -1327,6 +1338,33 @@ async def confidence():
         "market_regime_score": market_regime_score,
         "computed_at": int(time.time()),
     })
+
+
+@app.get("/api/signals")
+async def signals():
+    """Audit Sinyal: daftar sinyal Top Pick yang pernah dicatat otomatis
+    (lihat core/signal_history.py) + statistik win rate/return, HANYA dari
+    sinyal yang sudah selesai (TP/SL tercapai atau kadaluarsa). Kalau belum
+    ada satupun sinyal yang selesai, 'stats' bernilai None -- frontend WAJIB
+    menampilkan ini sebagai "belum cukup data", BUKAN mengarang angka."""
+    from core.signal_history import audit_open_signals, get_signal_report
+
+    async def _price_lookup(kode: str) -> float | None:
+        try:
+            df = await _clean(kode + ".JK")
+            if df is None or len(df) == 0:
+                return None
+            return float(df["Close"].iloc[-1])
+        except Exception:
+            return None
+
+    try:
+        await audit_open_signals(_price_lookup)
+    except Exception as e:
+        print(f"⚠️ Gagal audit signal history: {type(e).__name__}: {e}")
+
+    report = await asyncio.to_thread(get_signal_report)
+    return _py(report)
 
 
 @app.post("/api/backtest")

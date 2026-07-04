@@ -6,8 +6,13 @@
 
 import os
 
-# ---- Database (cache fundamental) ----
-DATABASE_PATH = os.environ.get("DATABASE_URL", "fundamental_cache.db")
+# ---- Database (cache fundamental + riwayat sinyal Top Pick) ----
+# Satu file SQLite untuk semua kebutuhan penyimpanan lokal aplikasi ini --
+# nama digeneralisasi dari "fundamental_cache.db" karena sekarang juga
+# menyimpan tabel signal_history (lihat core/signal_history.py). Kalau
+# DATABASE_URL sudah diset eksplisit di deployment lama, itu tetap dipakai
+# apa adanya (tidak dipaksa migrasi nama file).
+DATABASE_PATH = os.environ.get("DATABASE_URL", "ranah_saham.db")
 
 # ---- Data Saham ----
 # File Excel daftar emiten yang tercatat di BEI (kolom: Kode, Nama Perusahaan,
