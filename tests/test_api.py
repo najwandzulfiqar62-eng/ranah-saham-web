@@ -863,6 +863,26 @@ def test_signal_report_stats_none_without_closed_signals(clean_signal_db):
     assert report["n_open"] == 1
 
 
+def test_signal_report_includes_explicit_entry_tp_sl_prices(clean_signal_db):
+    """Regresi: user secara eksplisit minta harga entry/TP/SL yang konkret
+    (Rupiah), bukan cuma persentase -- get_signal_report() harus menghitung
+    tp_price/sl_price dari entry_price x tp_pct/sl_pct, angka yang SAMA
+    dipakai audit_open_signals() supaya tidak ada dua sumber kebenaran."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct) VALUES ('ZZPRICE', 1000, 5, 3)"
+        )
+
+    report = get_signal_report()
+    sig = next(s for s in report["signals"] if s["kode"] == "ZZPRICE")
+    assert sig["tp_price"] == pytest.approx(1050.0)
+    assert sig["sl_price"] == pytest.approx(970.0)
+
+
 def test_signal_report_computes_win_rate_excluding_expired(clean_signal_db):
     """EXPIRED tidak dihitung sebagai menang ATAU kalah di win_rate (hasilnya
     ambigu, bukan keputusan tegas TP/SL), tapi return_pct-nya tetap masuk

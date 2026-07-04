@@ -193,6 +193,14 @@ def get_signal_report() -> dict:
         ).fetchall()
 
     signals = [dict(r) for r in rows]
+    # Harga TP/SL eksplisit (Rupiah) -- dihitung dari entry_price x tp_pct/
+    # sl_pct yang SAMA PERSIS dipakai audit_open_signals(), bukan angka
+    # baru. Ditambahkan di sini (bukan disimpan di kolom terpisah) supaya
+    # SATU sumber kebenaran: kalau formulanya berubah, tidak ada risiko
+    # nilai tersimpan jadi basi/tidak sinkron dengan logic audit.
+    for s in signals:
+        s["tp_price"] = round(s["entry_price"] * (1 + s["tp_pct"] / 100), 2)
+        s["sl_price"] = round(s["entry_price"] * (1 - s["sl_pct"] / 100), 2)
 
     closed = [s for s in signals if s["status"] in ("TP_HIT", "SL_HIT", "EXPIRED")]
     if not closed:

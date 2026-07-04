@@ -2670,15 +2670,15 @@ async function loadSignalAudit(){
     const retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
     const retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
     return `<tr data-k="${s.kode}" style="cursor:pointer">
-      <td class="tk">${s.kode}</td>
-      <td class="hide-xs">${tanggal}</td>
-      <td class="hide-xs">Rp${fmt(s.entry_price)}</td>
-      <td class="hide-xs">+${fmt(s.tp_pct,1)}% / -${fmt(s.sl_pct,1)}%</td>
+      <td class="tk">${s.kode}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
+      <td>Rp${fmt(s.entry_price)}</td>
+      <td style="color:var(--bull)">Rp${fmt(s.tp_price)}<div class="muted" style="font-size:10.5px">+${fmt(s.tp_pct,1)}%</div></td>
+      <td style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">-${fmt(s.sl_pct,1)}%</div></td>
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
       <td style="color:${retColor}">${retTxt}</td></tr>`;
   }).join('');
   body.innerHTML=statsHtml+`<section class="panel">
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th class="hide-xs">Dicatat</th><th class="hide-xs">Harga Awal</th><th class="hide-xs">Target TP/SL</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
   </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }
