@@ -1431,3 +1431,48 @@ def test_valuation_keeps_legitimate_methods_unaffected():
     assert "per_x15" in val["methods"]
     assert "pbv_x2" in val["methods"]
     assert "roe_implied" in val["methods"]
+
+
+def test_averagedown_endpoint_uses_target_price_not_live_price(client):
+    """Regresi permintaan user: kalkulasi & verdict fundamental HARUS bisa
+    dievaluasi di harga yang BENAR-BENAR mau dipakai user buat beli
+    (target_price, mis. limit order di bawah harga sekarang), BUKAN
+    dipaksa selalu pakai harga live -- 'current_price' (live) dan
+    'buy_price' (dipakai utk kalkulasi) harus dikembalikan TERPISAH dan
+    keduanya benar, tidak saling menimpa."""
+    from core.risk_management import calculate_average_down
+
+    live_price = client.get("/api/averagedown/BBCA?avg_price=1000&lots=10").json()["current_price"]
+    target = live_price * 0.9  # simulasikan limit order 10% di bawah harga live
+
+    r = client.get(f"/api/averagedown/BBCA?avg_price=1000&lots=10&add_lots=5&target_price={target}")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["current_price"] == pytest.approx(live_price)  # harga live tetap dilaporkan apa adanya
+    assert d["buy_price"] == pytest.approx(target, abs=0.01)  # tapi kalkulasi pakai target, bukan live
+    assert d["is_custom_target"] is True
+
+    expected = calculate_average_down(1000, 10, target, 5)
+    assert d["new_avg_price"] == pytest.approx(expected["new_avg_price"])
+    assert d["pl_after_pct"] == pytest.approx(expected["pl_after_pct"])
+
+
+def test_averagedown_endpoint_without_target_price_falls_back_to_live(client):
+    """Perilaku lama TIDAK BOLEH berubah kalau target_price tidak diisi --
+    buy_price harus sama persis dengan current_price (fallback)."""
+    r = client.get("/api/averagedown/BBCA?avg_price=1000&lots=10&add_lots=5")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["buy_price"] == pytest.approx(d["current_price"])
+    assert d["is_custom_target"] is False
+
+
+def test_averagedown_suggestions_include_verdict(client):
+    """Setiap kartu referensi (suggestions) harus punya verdict fundamental
+    sendiri (dievaluasi di harga level itu, BUKAN ikut-ikutan verdict harga
+    sekarang) -- None kalau data fundamental gagal diambil, bukan error."""
+    r = client.get("/api/averagedown/BBCA?avg_price=1000&lots=10&add_lots=5")
+    assert r.status_code == 200
+    d = r.json()
+    for s in d["suggestions"]:
+        assert "verdict" in s

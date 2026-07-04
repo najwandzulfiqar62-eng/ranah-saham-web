@@ -1247,12 +1247,13 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     </section>
     <section class="panel">
       <p class="eyebrow">Kalkulator Average Down</p>
-      <p class="insight muted" style="font-size:13px;margin-bottom:12px">Hitung harga rata-rata baru kalau menambah lot di harga sekarang, plus cek apakah harga sekarang didukung fundamental (bukan cuma menurunkan modal tanpa dasar).</p>
+      <p class="insight muted" style="font-size:13px;margin-bottom:12px">Hitung harga rata-rata baru kalau menambah lot, plus cek apakah harga yang dipakai didukung fundamental (bukan cuma menurunkan modal tanpa dasar).</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
         <label class="fld">Kode saham<input id="adK" placeholder="BBCA" style="text-transform:uppercase"></label>
         <label class="fld">Harga beli rata-rata<input id="adAvg" type="number" value="1000"></label>
         <label class="fld">Lot dipegang<input id="adLots" type="number" value="10"></label>
         <label class="fld">Tambah lot<input id="adAddLots" type="number" value="5"></label>
+        <label class="fld">Harga rencana beli (opsional)<input id="adTarget" type="number" placeholder="= harga sekarang"></label>
         <button class="btn" id="adBtn">Hitung</button>
       </div>
       <div id="adOut"></div>
@@ -4352,32 +4353,38 @@ async function calcTC(){
       <div class="cell"><div class="k">Cut Loss Agresif</div><div class="v down">Rp${fmt(cl.cutloss_aggressive)} (${fmt(cl.aggressive_distance_pct,2)}%)</div></div>
     </div></div>`;
 }
+function _vcolFor(v){return v==='Undervalued'?'var(--bull)':v==='Overvalued'?'var(--bear)':'var(--gold)'}
 async function calcAD(){
-  const k=$('#adK').value.trim().toUpperCase(),avg=$('#adAvg').value,lots=$('#adLots').value,add=$('#adAddLots').value,out=$('#adOut');
+  const k=$('#adK').value.trim().toUpperCase(),avg=$('#adAvg').value,lots=$('#adLots').value,add=$('#adAddLots').value,target=$('#adTarget').value.trim(),out=$('#adOut');
   if(!k){out.innerHTML='<p class="muted" style="margin-top:12px;font-size:13px">Isi kode saham dulu.</p>';return}
   out.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
-  let d; try{d=await api(`/api/averagedown/${k}?avg_price=${avg}&lots=${lots}&add_lots=${add}`)}catch(err){out.innerHTML=errBox(err.message);return}
+  let url=`/api/averagedown/${k}?avg_price=${avg}&lots=${lots}&add_lots=${add}`;
+  if(target)url+=`&target_price=${target}`;
+  let d; try{d=await api(url)}catch(err){out.innerHTML=errBox(err.message);return}
   const plColor=p=>p>=0?'var(--bull)':'var(--bear)';
+  const buyLabel=d.is_custom_target?'Harga rencana beli':'Harga sekarang';
   let fvHtml='';
   if(d.fair_value_verdict){
-    const vcol=d.fair_value_verdict==='Undervalued'?'var(--bull)':d.fair_value_verdict==='Overvalued'?'var(--bear)':'var(--gold)';
+    const vcol=_vcolFor(d.fair_value_verdict);
+    const subjek=d.is_custom_target?'Harga rencana beli':'Harga sekarang';
     const note=d.fair_value_verdict==='Undervalued'
-      ?'Harga sekarang di bawah estimasi wajar -- average down di sini punya dasar fundamental.'
+      ?`${subjek} di bawah estimasi wajar -- average down di sini punya dasar fundamental.`
       :d.fair_value_verdict==='Overvalued'
-      ?'Harga sekarang JUSTRU di atas estimasi wajar -- average down di sini menambah risiko dari sisi fundamental, bukan menguranginya.'
-      :'Harga sekarang dalam rentang wajar -- tidak murah, tidak juga mahal secara relative valuation.';
+      ?`${subjek} JUSTRU di atas estimasi wajar -- average down di sini menambah risiko dari sisi fundamental, bukan menguranginya.`
+      :`${subjek} dalam rentang wajar -- tidak murah, tidak juga mahal secara relative valuation.`;
     fvHtml=`<p class="insight" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:${vcol}15;border:1px solid ${vcol}44;font-size:12.5px;color:${vcol}">${d.fair_value_verdict} vs estimasi wajar Rp${fmt(d.fair_value_mid)} -- ${note}</p>`;
   }
   let sugHtml='';
   if(d.suggestions&&d.suggestions.length){
     sugHtml=`<div style="margin-top:16px">
       <p class="eyebrow" style="margin-bottom:8px">Area Referensi Average Down</p>
-      <p class="muted" style="font-size:11.5px;margin-bottom:10px">Level harga yang biasa dipakai sebagai acuan (support teknikal & batas bawah estimasi wajar) -- BUKAN sinyal "harus beli di sini", cuma referensi + hasil hitungan akurat kalau harga sampai ke level itu.</p>
+      <p class="muted" style="font-size:11.5px;margin-bottom:10px">Level harga yang biasa dipakai sebagai acuan (support teknikal & batas bawah estimasi wajar) -- BUKAN sinyal "harus beli di sini", cuma referensi + hasil hitungan akurat kalau harga sampai ke level itu. Tip: isi "Harga rencana beli" di atas dengan salah satu angka ini buat lihat detail lengkapnya.</p>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
         ${d.suggestions.map(s=>`<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
           <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${s.label}</div>
           <div style="font-size:17px;font-weight:700;font-family:'Space Grotesk',sans-serif">Rp${fmt(s.price)}</div>
           <div style="font-size:12px;color:var(--muted);margin-top:5px">rata-rata jadi Rp${fmt(s.new_avg_price)} · P/L <span style="color:${plColor(s.pl_after_pct)};font-weight:600">${s.pl_after_pct>=0?'+':''}${fmt(s.pl_after_pct,2)}%</span></div>
+          ${s.verdict?`<div style="margin-top:6px;font-size:11px;color:${_vcolFor(s.verdict)};font-weight:600">${s.verdict} vs estimasi wajar</div>`:''}
         </div>`).join('')}
       </div>
     </div>`;
@@ -4385,7 +4392,8 @@ async function calcAD(){
   out.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;margin-top:16px">
     <div><div class="bigval" style="color:var(--gold)">Rp${fmt(d.new_avg_price)}</div><div class="muted" style="font-size:12px">rata-rata baru (${fmt(d.total_lots)} lot) · ${d.avg_price_change_pct>=0?'+':''}${fmt(d.avg_price_change_pct,2)}% vs rata-rata lama</div></div>
     <div class="grid" style="flex:1;min-width:260px">
-      <div class="cell"><div class="k">Harga sekarang</div><div class="v">Rp${fmt(d.current_price)}</div></div>
+      <div class="cell"><div class="k">${buyLabel}</div><div class="v">Rp${fmt(d.buy_price)}</div></div>
+      ${d.is_custom_target?`<div class="cell"><div class="k">Harga sekarang (live)</div><div class="v muted" style="font-size:13px">Rp${fmt(d.current_price)}</div></div>`:''}
       <div class="cell"><div class="k">Tambahan modal</div><div class="v">Rp${fmt(d.additional_capital)}</div></div>
       <div class="cell"><div class="k">P/L sebelum</div><div class="v" style="color:${plColor(d.pl_before_pct)}">${d.pl_before_pct>=0?'+':''}${fmt(d.pl_before_pct,2)}%</div></div>
       <div class="cell"><div class="k">P/L sesudah</div><div class="v" style="color:${plColor(d.pl_after_pct)}">${d.pl_after_pct>=0?'+':''}${fmt(d.pl_after_pct,2)}%</div></div>
@@ -4398,6 +4406,7 @@ $('#tcBtn').addEventListener('click',calcTC);
 $('#tcK').addEventListener('keydown',e=>{if(e.key==='Enter')calcTC()});
 $('#adBtn').addEventListener('click',calcAD);
 $('#adK').addEventListener('keydown',e=>{if(e.key==='Enter')calcAD()});
+$('#adTarget').addEventListener('keydown',e=>{if(e.key==='Enter')calcAD()});
 
 /* ---------- TUR SINGKAT (onboarding) ---------- */
 const TOUR=[

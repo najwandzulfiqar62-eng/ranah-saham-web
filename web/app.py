@@ -1834,12 +1834,20 @@ async def cutloss(kode: str):
 
 
 @app.get("/api/averagedown/{kode}")
-async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0):
+async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0, target_price: float | None = None):
     """Kalkulator Average Down: harga rata-rata baru + P/L kalau nambah
-    lot di harga sekarang. Konteks fundamental (undervalued/overvalued,
-    reuse _valuation() yang sama dipakai /api/fundamental) ditambahkan
-    best-effort -- kalau fetch fundamental gagal/data tidak cukup,
-    kalkulasi murninya tetap dikembalikan tanpa konteks itu.
+    lot. Konteks fundamental (undervalued/overvalued, reuse _valuation()
+    yang sama dipakai /api/fundamental) ditambahkan best-effort -- kalau
+    fetch fundamental gagal/data tidak cukup, kalkulasi murninya tetap
+    dikembalikan tanpa konteks itu.
+
+    target_price (opsional): permintaan eksplisit user -- kalkulasi
+    utama (dan verdict fundamental) HARUS bisa dihitung di harga yang
+    BENAR-BENAR mau dia pakai untuk beli (mis. limit order di bawah
+    harga sekarang), BUKAN dipaksa selalu pakai harga live sekarang.
+    Kalau tidak diisi, fallback ke harga sekarang (perilaku lama).
+    current_price (harga live, dipakai buat filter suggestions) TETAP
+    dikembalikan terpisah supaya user bisa lihat keduanya.
 
     'suggestions': permintaan eksplisit user -- BUKAN rekomendasi "harus
     beli di sini" (tetap bukan financial advisor), tapi referensi DESKRIPTIF
@@ -1854,12 +1862,23 @@ async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0)
     if df is None or len(df) < 5:
         raise HTTPException(404, "Data tidak cukup.")
     current_price = float(df["Close"].iloc[-1])
+    buy_price = target_price if target_price and target_price > 0 else current_price
 
-    res = calculate_average_down(avg_price, lots, current_price, add_lots)
+    res = calculate_average_down(avg_price, lots, buy_price, add_lots)
     if not res:
         raise HTTPException(422, "Input tidak valid (cek harga rata-rata, lot dipegang, dan tambahan lot).")
+    # calculate_average_down() sendiri menamai parameter harganya
+    # 'current_price' (dipakai di banyak tempat lain sebagai "harga saat
+    # beli") -- di sini itu SEBENARNYA buy_price (bisa target_price
+    # custom), jadi disimpan eksplisit sebagai 'buy_price' dulu SEBELUM
+    # 'current_price' ditimpa dengan harga live sungguhan, supaya kedua
+    # angka tetap kebaca jelas & tidak ada yang hilang.
+    res["buy_price"] = res["current_price"]
+    res["current_price"] = round(current_price, 2)
+    res["is_custom_target"] = bool(target_price and target_price > 0)
 
     suggestions = []
+    fv_lo = fv_hi = None  # rentang wajar, None kalau fetch fundamental gagal/tidak cukup data
 
     try:
         from core.indicators import calculate_support_resistance_deep
@@ -1878,16 +1897,21 @@ async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0)
         fund = await fetch_fundamental(ticker)
         if fund:
             val = _valuation(fund)
+            fv_lo, fv_hi = val.get("range_low"), val.get("range_high")
             if val.get("mid"):
                 res["fair_value_mid"] = val["mid"]
-                res["fair_value_verdict"] = val.get("verdict")
-            floor = val.get("range_low")
-            if floor and 0 < floor < current_price:
-                calc = calculate_average_down(avg_price, lots, floor, add_lots)
+                res["fair_value_verdict"] = _verdict_for_price(buy_price, fv_lo, fv_hi)
+            if fv_lo and 0 < fv_lo < current_price:
+                calc = calculate_average_down(avg_price, lots, fv_lo, add_lots)
                 if calc:
-                    suggestions.append({"label": "Estimasi Wajar Terendah (Floor)", "price": floor, **calc})
+                    suggestions.append({"label": "Estimasi Wajar Terendah (Floor)", "price": fv_lo, **calc})
     except Exception:
         pass
+
+    # Verdict per level referensi -- None kalau valuasi fundamental gagal
+    # diambil (fv_lo/fv_hi tetap None), bukan dipaksa nebak.
+    for s in suggestions:
+        s["verdict"] = _verdict_for_price(s["price"], fv_lo, fv_hi)
 
     suggestions.sort(key=lambda s: s["price"], reverse=True)
     res["suggestions"] = suggestions
@@ -2093,6 +2117,21 @@ async def snr(kode: str):
     return _py(sr)
 
 
+def _verdict_for_price(price: float | None, lo: float | None, hi: float | None) -> str | None:
+    """Verdict Undervalued/Overvalued/Wajar di HARGA MANAPUN yang diberikan
+    (bukan cuma harga sekarang) -- dipisah dari _valuation() supaya bisa
+    dipakai ulang utk mengevaluasi harga rencana beli user sendiri (mis. di
+    Kalkulator Average Down) terhadap rentang wajar yang SAMA, tanpa
+    menghitung ulang seluruh metode valuasi."""
+    if not (price and lo and hi):
+        return None
+    if price < lo * 0.9:
+        return "Undervalued"
+    if price > hi * 1.1:
+        return "Overvalued"
+    return "Wajar (dalam rentang)"
+
+
 def _valuation(fund: dict) -> dict:
     """Estimasi harga wajar dari beberapa metode valuasi. Setiap metode punya
     asumsi berbeda — TIDAK ada yang definitif. Gunakan sebagai rentang referensi."""
@@ -2189,9 +2228,7 @@ def _valuation(fund: dict) -> dict:
         out.update({
             "range_low": round(lo, 2), "range_high": round(hi, 2), "mid": round(mid, 2),
             "upside_pct": round((mid / price - 1) * 100, 1),
-            "verdict": "Undervalued" if price < lo * 0.9
-                       else "Overvalued" if price > hi * 1.1
-                       else "Wajar (dalam rentang)",
+            "verdict": _verdict_for_price(price, lo, hi),
         })
     return out
 
