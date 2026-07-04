@@ -2384,6 +2384,63 @@ async def fundamental(kode: str):
     return payload
 
 
+@app.get("/api/screenerfundamental")
+async def screener_fundamental():
+    """Screening berbasis valuasi FUNDAMENTAL murni (PER, PBV, ROE,
+    Dividend Yield, estimasi harga wajar) atas SCREENER_UNIVERSE --
+    SENGAJA TERPISAH dari Top Pick/Skor Keyakinan (yang tetap 100%
+    teknikal, permintaan eksplisit user: saham IDX kadang naik/turun
+    tidak terlalu dipengaruhi fundamental, jadi jangan dicampur jadi satu
+    skor). Ini utk yang MEMANG mau screening dari sisi fundamental saja.
+
+    Cakupan dibatasi ke SCREENER_UNIVERSE (~45, BUKAN opsi ~200/793 SEMUA
+    IDX seperti Screener teknikal) -- fetch fundamental per saham lewat
+    yfinance .info jauh lebih lambat/kurang reliable drpd data harga OHLCV,
+    memperluas cakupan akan bikin waktu tunggu & risiko gagal parsial naik
+    signifikan tanpa manfaat sepadan utk versi pertama fitur ini."""
+    cached = _cache_get("screenerfundamental")
+    if cached is not None:
+        return cached
+
+    from core.fundamental import fetch_fundamental
+    fund_results = await asyncio.gather(
+        *[fetch_fundamental(kode + ".JK") for kode in SCREENER_UNIVERSE],
+        return_exceptions=True,
+    )
+
+    items = []
+    for kode, fund in zip(SCREENER_UNIVERSE, fund_results):
+        if isinstance(fund, Exception) or not fund:
+            continue
+        val = _valuation(fund)
+        if not val.get("methods"):
+            continue  # tidak cukup data (EPS/BVPS dsb) utk estimasi harga wajar sama sekali
+        upside = _fundamental_median_upside_pct(val)
+        items.append({
+            "kode": kode,
+            "sektor": SECTOR_MAP_UNIVERSE.get(kode, "Lainnya"),
+            "harga": val.get("price"),
+            "pe_trailing": fund.get("pe_trailing"),
+            "pbv": fund.get("pbv"),
+            "roe_pct": fund.get("roe_pct"),
+            "dividend_yield_pct": fund.get("dividend_yield_pct"),
+            "verdict": val.get("verdict"),
+            "upside_pct": upside,
+            "upside_display": _display_pct_capped(upside) if upside is not None else None,
+            "fair_value_mid": val.get("mid"),
+            "n_methods": len(val.get("methods") or {}),
+        })
+
+    # Undervalued dulu, lalu diurutkan dari upside (median) tertinggi --
+    # BUKAN skor gabungan (sengaja terpisah dari Top Pick, lihat docstring).
+    _verdict_rank = {"Undervalued": 0, "Wajar (dalam rentang)": 1, "Overvalued": 2}
+    items.sort(key=lambda x: (_verdict_rank.get(x["verdict"], 3), -(x["upside_pct"] if x["upside_pct"] is not None else -999)))
+
+    payload = _py({"items": items, "universe": len(SCREENER_UNIVERSE)})
+    _cache_set("screenerfundamental", payload)
+    return payload
+
+
 _MACRO_TICKERS = {
     # Kurs
     "USDIDR=X": {"label": "USD / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": "🇺🇸"},

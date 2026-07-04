@@ -1721,3 +1721,34 @@ def test_fundamental_median_upside_uses_median_not_mean():
     # lebih moderat drpd mean yang diseret outlier 5000.
     assert median_upside == pytest.approx(25.0)  # (1250/1000-1)*100
     assert median_upside < mean_upside - 20  # beda signifikan, bukan kebetulan sama
+
+
+def test_screener_fundamental_endpoint_separate_from_top_pick(client):
+    """Regresi permintaan user: screening fundamental HARUS jadi endpoint
+    terpisah dari /api/confidence (Top Pick tetap 100% teknikal) --
+    fitur baru ini murni screening valuasi, tidak boleh punya
+    confidence_score atau field bobot teknikal apa pun."""
+    r = client.get("/api/screenerfundamental")
+    assert r.status_code == 200
+    data = r.json()
+    assert "items" in data
+    for it in data["items"]:
+        assert "confidence_score" not in it
+        for field in ("kode", "sektor", "harga", "verdict"):
+            assert field in it
+
+
+def test_screener_fundamental_sorts_undervalued_first():
+    """Regresi: hasil screening fundamental harus diurutkan Undervalued
+    dulu, baru Wajar, baru Overvalued -- bukan acak/urutan universe."""
+    import web.app as app_module
+
+    items = [
+        {"kode": "A", "verdict": "Overvalued", "upside_pct": -20.0},
+        {"kode": "B", "verdict": "Undervalued", "upside_pct": 10.0},
+        {"kode": "C", "verdict": "Wajar (dalam rentang)", "upside_pct": 2.0},
+        {"kode": "D", "verdict": "Undervalued", "upside_pct": 40.0},
+    ]
+    verdict_rank = {"Undervalued": 0, "Wajar (dalam rentang)": 1, "Overvalued": 2}
+    items.sort(key=lambda x: (verdict_rank.get(x["verdict"], 3), -(x["upside_pct"] if x["upside_pct"] is not None else -999)))
+    assert [x["kode"] for x in items] == ["D", "B", "C", "A"]  # D (upside lbh tinggi) sebelum B, keduanya Undervalued

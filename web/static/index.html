@@ -993,6 +993,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
         <button class="tab" data-mode="signal" id="m-signal">Signal · Breakout</button>
         <button class="tab" data-mode="bsjp" id="m-bsjp">BSJP</button>
         <button class="tab" data-mode="filter" id="m-filter">Filter</button>
+        <button class="tab" data-mode="fundamental" id="m-fundamental">Fundamental</button>
         <button class="tab" data-mode="custom" id="m-custom">⚙ Custom</button>
       </div>
       <div id="filterSub" style="display:none;gap:6px;flex-wrap:wrap;margin-bottom:14px">
@@ -2463,6 +2464,7 @@ function setMode(m){
   else if(m==='signal')loadSignal();
   else if(m==='bsjp')loadBsjp();
   else if(m==='filter')loadFilter(filterMode);
+  else if(m==='fundamental')loadFundamentalScreen();
   else if(m==='custom'){
     $('#uniBody').innerHTML='<div class="hint muted">Atur kondisi di atas lalu klik <b>▶ Jalankan Screener</b>.</div>';
     populateCustomSectors();
@@ -2719,6 +2721,32 @@ async function loadScreenerPro(){
   body.innerHTML=`<section class="panel">
     <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Hanya skor ≥65. Tap baris untuk analisis.</p>
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th>RSI</th><th>vs 52W High</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
+  body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+}
+
+function _fundVerdictColor(v){return v==='Undervalued'?'var(--bull)':v==='Overvalued'?'var(--bear)':'var(--gold)'}
+async function loadFundamentalScreen(){
+  const body=$('#uniBody');
+  body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Mengambil data fundamental… 10–20 detik</p>';
+  let d; try{d=await api('/api/screenerfundamental')}catch(e){body.innerHTML=errBox(e.message);return}
+  const items=d.items||[];
+  if(!items.length){body.innerHTML='<section class="panel"><p class="insight muted">Data fundamental tidak tersedia saat ini (data Yahoo Finance untuk saham IDX kadang tidak lengkap).</p></section>';return}
+  const tr=items.map(r=>`<tr data-k="${r.kode}" style="cursor:pointer">
+    <td class="tk">${tickerTag(r.kode)}</td>
+    <td class="hide-xs">${secTag(r.sektor)}</td>
+    <td>Rp${fmt(r.harga)}</td>
+    <td>${r.pe_trailing!=null?fmt(r.pe_trailing,1)+'×':'–'}</td>
+    <td class="hide-xs">${r.pbv!=null?fmt(r.pbv,2)+'×':'–'}</td>
+    <td class="hide-xs">${r.roe_pct!=null?fmt(r.roe_pct,1)+'%':'–'}</td>
+    <td class="hide-xs">${r.dividend_yield_pct!=null?fmt(r.dividend_yield_pct,1)+'%':'–'}</td>
+    <td>Rp${fmt(r.fair_value_mid)}</td>
+    <td style="color:${_fundVerdictColor(r.verdict)}">${r.verdict||'–'}${r.upside_display?` (${r.upside_display})`:''}</td>
+  </tr>`).join('');
+  body.innerHTML=`<section class="panel">
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Screening berbasis valuasi FUNDAMENTAL murni (PER, PBV, ROE, Dividend Yield, estimasi harga wajar) -- TERPISAH dari Top Pick (yang tetap 100% teknikal). Saham IDX kadang naik/turun tidak terlalu dipengaruhi fundamental, jadi dua sudut pandang ini sengaja tidak dicampur jadi satu skor. Diurutkan Undervalued dulu. Tap baris untuk analisis.</p>
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th class="hide-xs">Sektor</th><th>Harga</th><th>PER</th><th class="hide-xs">PBV</th><th class="hide-xs">ROE</th><th class="hide-xs">Div Yield</th><th>Estimasi Wajar</th><th>Verdict</th></tr></thead><tbody>${tr}</tbody></table></div>
+    <p class="muted" style="font-size:11px;margin-top:10px">Estimasi harga wajar = median beberapa metode valuasi (Graham, PER×15, PBV×2, DCF, PEG, DDM, ROE-implied) -- referensi, bukan patokan pasti. Data dari Yahoo Finance, bisa tidak lengkap untuk sebagian saham. Bukan nasihat keuangan.</p>
+  </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }
 
