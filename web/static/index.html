@@ -4368,6 +4368,20 @@ async function calcAD(){
       :'Harga sekarang dalam rentang wajar -- tidak murah, tidak juga mahal secara relative valuation.';
     fvHtml=`<p class="insight" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:${vcol}15;border:1px solid ${vcol}44;font-size:12.5px;color:${vcol}">${d.fair_value_verdict} vs estimasi wajar Rp${fmt(d.fair_value_mid)} -- ${note}</p>`;
   }
+  let sugHtml='';
+  if(d.suggestions&&d.suggestions.length){
+    sugHtml=`<div style="margin-top:16px">
+      <p class="eyebrow" style="margin-bottom:8px">Area Referensi Average Down</p>
+      <p class="muted" style="font-size:11.5px;margin-bottom:10px">Level harga yang biasa dipakai sebagai acuan (support teknikal & batas bawah estimasi wajar) -- BUKAN sinyal "harus beli di sini", cuma referensi + hasil hitungan akurat kalau harga sampai ke level itu.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+        ${d.suggestions.map(s=>`<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${s.label}</div>
+          <div style="font-size:17px;font-weight:700;font-family:'Space Grotesk',sans-serif">Rp${fmt(s.price)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:5px">rata-rata jadi Rp${fmt(s.new_avg_price)} · P/L <span style="color:${plColor(s.pl_after_pct)};font-weight:600">${s.pl_after_pct>=0?'+':''}${fmt(s.pl_after_pct,2)}%</span></div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
   out.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;margin-top:16px">
     <div><div class="bigval" style="color:var(--gold)">Rp${fmt(d.new_avg_price)}</div><div class="muted" style="font-size:12px">rata-rata baru (${fmt(d.total_lots)} lot) · ${d.avg_price_change_pct>=0?'+':''}${fmt(d.avg_price_change_pct,2)}% vs rata-rata lama</div></div>
     <div class="grid" style="flex:1;min-width:260px">
@@ -4375,7 +4389,7 @@ async function calcAD(){
       <div class="cell"><div class="k">Tambahan modal</div><div class="v">Rp${fmt(d.additional_capital)}</div></div>
       <div class="cell"><div class="k">P/L sebelum</div><div class="v" style="color:${plColor(d.pl_before_pct)}">${d.pl_before_pct>=0?'+':''}${fmt(d.pl_before_pct,2)}%</div></div>
       <div class="cell"><div class="k">P/L sesudah</div><div class="v" style="color:${plColor(d.pl_after_pct)}">${d.pl_after_pct>=0?'+':''}${fmt(d.pl_after_pct,2)}%</div></div>
-    </div></div>${fvHtml}
+    </div></div>${fvHtml}${sugHtml}
     <p class="muted" style="font-size:11px;margin-top:10px">Murni kalkulasi -- bukan rekomendasi harus average down atau tidak. Keputusan tetap di kamu.</p>`;
 }
 $('#rrBtn').addEventListener('click',calcRR);

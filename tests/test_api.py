@@ -1352,3 +1352,27 @@ def test_averagedown_endpoint_matches_current_price_and_math(client):
 def test_averagedown_endpoint_rejects_invalid_input(client):
     r = client.get("/api/averagedown/BBCA?avg_price=0&lots=10&add_lots=5")
     assert r.status_code == 422
+
+
+def test_averagedown_endpoint_suggestions_are_below_current_price(client):
+    """Regresi fitur 'saran area average down': setiap level yang
+    disarankan (support S1/S2, batas bawah estimasi wajar) HARUS di
+    bawah harga sekarang -- menyarankan level di ATAS harga sekarang
+    sebagai 'area average down' tidak masuk akal (belum tentu bakal
+    tersentuh, dan bukan average down kalau harga malah naik ke sana).
+    Tiap saran juga harus konsisten dengan calculate_average_down()
+    murni di level harga itu."""
+    from core.risk_management import calculate_average_down
+
+    r = client.get("/api/averagedown/BBCA?avg_price=1000&lots=10&add_lots=5")
+    assert r.status_code == 200
+    d = r.json()
+    assert "suggestions" in d
+    for s in d["suggestions"]:
+        assert s["price"] < d["current_price"]
+        expected = calculate_average_down(1000, 10, s["price"], 5)
+        assert s["new_avg_price"] == pytest.approx(expected["new_avg_price"])
+        assert s["pl_after_pct"] == pytest.approx(expected["pl_after_pct"])
+    # Terurut dari harga tertinggi ke terendah (paling dekat ke paling jauh)
+    prices = [s["price"] for s in d["suggestions"]]
+    assert prices == sorted(prices, reverse=True)

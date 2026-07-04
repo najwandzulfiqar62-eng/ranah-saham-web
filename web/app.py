@@ -1839,7 +1839,13 @@ async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0)
     lot di harga sekarang. Konteks fundamental (undervalued/overvalued,
     reuse _valuation() yang sama dipakai /api/fundamental) ditambahkan
     best-effort -- kalau fetch fundamental gagal/data tidak cukup,
-    kalkulasi murninya tetap dikembalikan tanpa konteks itu."""
+    kalkulasi murninya tetap dikembalikan tanpa konteks itu.
+
+    'suggestions': permintaan eksplisit user -- BUKAN rekomendasi "harus
+    beli di sini" (tetap bukan financial advisor), tapi referensi DESKRIPTIF
+    berupa level harga yang SUDAH biasa dipakai analisis teknikal/fundamental
+    (support pivot terdekat, batas bawah estimasi wajar) plus hasil kalkulasi
+    akurat di level itu -- keputusan & angka lot tetap sepenuhnya di user."""
     ticker = _resolve_ticker(kode)
     try:
         df = await _clean(ticker)
@@ -1853,6 +1859,20 @@ async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0)
     if not res:
         raise HTTPException(422, "Input tidak valid (cek harga rata-rata, lot dipegang, dan tambahan lot).")
 
+    suggestions = []
+
+    try:
+        from core.indicators import calculate_support_resistance_deep
+        sr = calculate_support_resistance_deep(df)
+        for key, label in (("S1", "Support Terdekat (S1)"), ("S2", "Support Lebih Dalam (S2)")):
+            level = sr.get(key)
+            if level and 0 < level < current_price:
+                calc = calculate_average_down(avg_price, lots, level, add_lots)
+                if calc:
+                    suggestions.append({"label": label, "price": level, **calc})
+    except Exception:
+        pass
+
     try:
         from core.fundamental import fetch_fundamental
         fund = await fetch_fundamental(ticker)
@@ -1861,8 +1881,16 @@ async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0)
             if val.get("mid"):
                 res["fair_value_mid"] = val["mid"]
                 res["fair_value_verdict"] = val.get("verdict")
+            floor = val.get("range_low")
+            if floor and 0 < floor < current_price:
+                calc = calculate_average_down(avg_price, lots, floor, add_lots)
+                if calc:
+                    suggestions.append({"label": "Estimasi Wajar Terendah (Floor)", "price": floor, **calc})
     except Exception:
         pass
+
+    suggestions.sort(key=lambda s: s["price"], reverse=True)
+    res["suggestions"] = suggestions
 
     return _py(res)
 
