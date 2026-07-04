@@ -786,10 +786,12 @@ def test_confidence_targets_are_never_too_tight(client):
     assert checked > 0, "tidak ada item dengan potensi_naik_pct/risiko_turun_pct valid untuk dicek"
 
 
-def _fake_confidence_item(kode, score, naik=3.0, turun=2.0, harga=1000.0):
+def _fake_confidence_item(kode, score, naik=3.0, turun=2.0, harga=1000.0,
+                           likuiditas="Sangat Likuid", macd_bullish_cross=False):
     return {
         "kode": kode, "harga": harga, "confidence_score": score, "ai_score": score,
         "ai_rating": "BAGUS", "potensi_naik_pct": naik, "risiko_turun_pct": turun,
+        "likuiditas": likuiditas, "macd_bullish_cross": macd_bullish_cross,
     }
 
 
@@ -1162,3 +1164,129 @@ def test_telegram_format_signal_resolved_labels_each_status():
 
     exp_msg = format_signal_resolved({**base, "status": "EXPIRED"})
     assert "Kadaluarsa" in exp_msg
+
+
+def test_telegram_messages_include_source_label():
+    """Regresi: signal_history sekarang punya 2 sumber entry independen
+    (TOP_PICK vs MACD_CROSS) -- pesan Telegram HARUS selalu menyebut
+    sumbernya supaya user tidak salah kira kedua teori itu sama."""
+    from core.telegram_notify import format_signal_new, format_signal_resolved
+
+    new_sig = {
+        "kode": "BBCA", "entry_price": 9500.0, "tp_pct": 6.0, "sl_pct": 3.0,
+        "tp_price": 10070.0, "sl_price": 9215.0, "source": "MACD_CROSS",
+    }
+    assert "MACD Histogram Cross" in format_signal_new(new_sig)
+
+    resolved_sig = {
+        "kode": "BBCA", "entry_price": 9500.0, "resolved_price": 10000.0,
+        "return_pct": 5.0, "days_to_resolve": 7, "recorded_at": "2026-06-01 10:00:00",
+        "status": "TP_HIT", "source": "TOP_PICK",
+    }
+    assert "Top Pick" in format_signal_resolved(resolved_sig)
+
+
+def test_record_macd_cross_signals_ignores_confidence_score(clean_signal_db):
+    """Regresi inti fitur: entry point MACD Cross HARUS diuji independen
+    dari skor gabungan -- saham dengan confidence_score RENDAH (di bawah
+    MIN_SCORE_TO_RECORD milik Top Pick) tetap harus tercatat selama
+    histogram MACD-nya baru cross bullish dan likuid, supaya validitas
+    teori MACD-nya sendiri yang diaudit, bukan campuran skor lain."""
+    import asyncio
+
+    from core.signal_history import record_macd_cross_signals, MIN_SCORE_TO_RECORD
+
+    items = [
+        _fake_confidence_item("ZZMLOW", MIN_SCORE_TO_RECORD - 30, macd_bullish_cross=True),
+        _fake_confidence_item("ZZMNOCROSS", MIN_SCORE_TO_RECORD + 30, macd_bullish_cross=False),
+    ]
+    saved = asyncio.run(record_macd_cross_signals(items))
+    assert len(saved) == 1
+    assert saved[0]["kode"] == "ZZMLOW"
+    assert saved[0]["source"] == "MACD_CROSS"
+    assert saved[0]["pattern"] == "MACD HISTOGRAM BULLISH CROSS"
+
+
+def test_record_macd_cross_signals_requires_liquidity(clean_signal_db):
+    """Regresi: MACD Cross tetap harus disaring likuiditas (kriteria bisa-
+    dieksekusi, BUKAN kriteria 'seberapa bagus') -- saham tidak likuid
+    dengan histogram cross bullish TIDAK boleh ikut dicatat."""
+    import asyncio
+
+    from core.signal_history import record_macd_cross_signals
+
+    items = [_fake_confidence_item("ZZILLIQUID", 90, macd_bullish_cross=True, likuiditas="Tidak Likuid")]
+    saved = asyncio.run(record_macd_cross_signals(items))
+    assert saved == []
+
+
+def test_record_macd_cross_signals_dedup_independent_of_top_pick(clean_signal_db):
+    """Regresi: dedup MACD Cross per hari HARUS scoped ke source='MACD_CROSS'
+    sendiri -- kode saham yang SAMA boleh tercatat DUA KALI di hari yang
+    sama (satu dari Top Pick, satu dari MACD Cross) karena keduanya teori
+    entry berbeda yang sengaja diaudit terpisah, bukan saling menggantikan."""
+    import asyncio
+
+    from core.signal_history import record_top_picks, record_macd_cross_signals, get_signal_report, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZBOTH", MIN_SCORE_TO_RECORD + 10, macd_bullish_cross=True)]
+    saved_tp = asyncio.run(record_top_picks(items))
+    saved_macd = asyncio.run(record_macd_cross_signals(items))
+    assert len(saved_tp) == 1 and len(saved_macd) == 1
+
+    report = get_signal_report()
+    rows = [s for s in report["signals"] if s["kode"] == "ZZBOTH"]
+    assert len(rows) == 2
+    assert {r["source"] for r in rows} == {"TOP_PICK", "MACD_CROSS"}
+
+    # Panggil lagi di hari yang sama -- masing-masing source dedup sendiri,
+    # tidak menambah baris baru sama sekali.
+    saved_tp_again = asyncio.run(record_top_picks(items))
+    saved_macd_again = asyncio.run(record_macd_cross_signals(items))
+    assert saved_tp_again == [] and saved_macd_again == []
+
+
+def test_get_signal_report_computes_stats_by_source(clean_signal_db):
+    """Regresi fitur baru: stats_by_source harus menghitung win rate/return
+    TERPISAH per source, supaya user bisa bandingkan validitas Top Pick
+    vs MACD Cross sebagai teori entry, bukan tercampur ke satu angka."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve, source)
+            VALUES ('ZZTP1', 1000, 5, 3, 'TP_HIT', datetime('now'), 5.0, 4, 'TOP_PICK')''')
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve, source)
+            VALUES ('ZZTP2', 1000, 5, 3, 'SL_HIT', datetime('now'), -3.0, 2, 'TOP_PICK')''')
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, resolved_at, return_pct, days_to_resolve, source)
+            VALUES ('ZZMC1', 1000, 5, 3, 'TP_HIT', datetime('now'), 5.0, 3, 'MACD_CROSS')''')
+
+    report = get_signal_report()
+    by_source = report["stats_by_source"]
+    assert set(by_source.keys()) == {"TOP_PICK", "MACD_CROSS"}
+    assert by_source["TOP_PICK"]["n_closed"] == 2
+    assert by_source["TOP_PICK"]["win_rate"] == pytest.approx(50.0)
+    assert by_source["MACD_CROSS"]["n_closed"] == 1
+    assert by_source["MACD_CROSS"]["win_rate"] == pytest.approx(100.0)
+    # Statistik gabungan tetap menghitung SEMUA source jadi satu.
+    assert report["stats"]["n_closed"] == 3
+
+
+def test_get_signal_report_stats_by_source_empty_when_nothing_closed(clean_signal_db):
+    """Regresi kejujuran: kalau belum ada satupun sinyal MACD_CROSS yang
+    selesai, source itu TIDAK BOLEH muncul di stats_by_source sama sekali
+    (bukan muncul dengan angka 0%/dikarang)."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, source) VALUES ('ZZOPENMC', 1000, 5, 3, 'MACD_CROSS')''')
+
+    report = get_signal_report()
+    assert report["stats_by_source"] == {}

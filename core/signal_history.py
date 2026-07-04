@@ -31,6 +31,18 @@
 # detail sinyalnya -- fungsi ini SENDIRI tetap tidak melakukan I/O
 # jaringan (kirim notifikasi jadi tanggung jawab caller di web/app.py),
 # supaya tetap mudah ditest tanpa mock network/Telegram.
+#
+# REVISI KEDUA (Juli 2026): ditambah kolom 'source' -- signal_history
+# sekarang punya DUA sumber entry point independen: 'TOP_PICK' (skor
+# gabungan harian, seperti sebelumnya) dan 'MACD_CROSS' (permintaan
+# eksplisit user: histogram MACD yang baru saja berbalik positif dipakai
+# SENDIRI sebagai teori entry point, TANPA disaring skor gabungan lain --
+# supaya validitas teori itu bisa diuji apa adanya lewat data real, bukan
+# tercampur/ketutupan Top Pick). Kedua sumber diaudit dengan cara yang
+# SAMA PERSIS (audit_open_signals tidak peduli source), dan get_signal_
+# report() menghitung win rate/return TERPISAH per source (stats_by_source)
+# selain angka gabungan -- supaya user bisa benar-benar bandingkan mana
+# yang lebih valid, bukan cuma klaim.
 
 from datetime import datetime, timedelta
 
@@ -48,6 +60,11 @@ MIN_SCORE_TO_RECORD = 55.0
 # Maksimum berapa saham teratas per hari yang dicatat -- konsisten dengan
 # semangat "Top Pick" (peringkat TERATAS), bukan seluruh universe.
 MAX_RECORDED_PER_DAY = 10
+
+# Maksimum berapa entry point MACD Histogram Cross per hari yang dicatat --
+# alasan sama dengan MAX_RECORDED_PER_DAY (jangan bising), TAPI angka ini
+# TIDAK terkait skor gabungan sama sekali (lihat record_macd_cross_signals).
+MACD_CROSS_MAX_PER_DAY = 10
 
 _ensured = False
 
@@ -84,6 +101,12 @@ def _ensure_table():
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(signal_history)").fetchall()}
         if "pattern" not in cols:
             conn.execute("ALTER TABLE signal_history ADD COLUMN pattern TEXT")
+        # Migrasi ringan kedua: kolom 'source' membedakan entry point dari
+        # Top Pick (skor gabungan) vs MACD Cross (momentum, teori berdiri
+        # sendiri) -- default 'TOP_PICK' utk baris lama (semuanya memang
+        # dari Top Pick sebelum fitur MACD Cross ada), aman tanpa migrasi data manual.
+        if "source" not in cols:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN source TEXT NOT NULL DEFAULT 'TOP_PICK'")
     _ensured = True
 
 
@@ -134,7 +157,7 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         with get_db() as conn:
             already = conn.execute('''
                 SELECT 1 FROM signal_history
-                WHERE kode = ? AND date(recorded_at) = date('now')
+                WHERE kode = ? AND date(recorded_at) = date('now') AND source = 'TOP_PICK'
                 LIMIT 1
             ''', (it["kode"],)).fetchone()
         if already:
@@ -154,8 +177,8 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK')
             ''', (
                 it["kode"], entry_price, tp_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
@@ -167,6 +190,84 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
             "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
             "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
+            "source": "TOP_PICK",
+        })
+    return saved
+
+
+async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> list[dict]:
+    """Catat entry point dari TEORI MACD HISTOGRAM CROSS secara independen
+    dari Top Pick (lihat record_top_picks) -- permintaan eksplisit user:
+    histogram MACD (MACD line - Signal line) yang baru saja berbalik
+    positif dipakai SENDIRI sebagai sinyal entry, TANPA disaring skor
+    gabungan (confidence_score) sama sekali. Ini supaya validitas teori
+    itu (dikutip riset QuantifiedStrategies di core/screening_pro.py) bisa
+    diuji apa adanya lewat data real -- kalau disaring skor gabungan juga,
+    yang teruji bukan lagi teori MACD-nya sendiri, tapi campuran.
+
+    Kriteria PENAPISAN (bukan "seberapa bagus", tapi "apakah bisa
+    dieksekusi secara wajar"): saham likuid (Sangat Likuid/Likuid) dan
+    target TP/SL valid -- di luar itu, SEMUA saham dgn histogram baru
+    cross bullish ikut dicatat, berapa pun confidence_score-nya.
+
+    Boleh mencatat kode saham yang SAMA di hari yang sama dengan Top Pick
+    (dedup di sini HANYA per source='MACD_CROSS') -- keduanya teori entry
+    yang berbeda, sengaja diaudit terpisah, bukan saling menggantikan.
+
+    price_lookup/pattern/return: lihat docstring record_top_picks(), pola
+    yang sama persis dipakai di sini."""
+    _ensure_table()
+    candidates = [
+        it for it in items
+        if it.get("macd_bullish_cross")
+        and it.get("likuiditas") in ("Sangat Likuid", "Likuid")
+        and it.get("potensi_naik_pct") is not None
+        and it.get("risiko_turun_pct") is not None
+        and it.get("risiko_turun_pct") > 0
+        and it.get("harga")
+    ][:MACD_CROSS_MAX_PER_DAY]
+
+    if not candidates:
+        return []
+
+    saved = []
+    for it in candidates:
+        with get_db() as conn:
+            already = conn.execute('''
+                SELECT 1 FROM signal_history
+                WHERE kode = ? AND date(recorded_at) = date('now') AND source = 'MACD_CROSS'
+                LIMIT 1
+            ''', (it["kode"],)).fetchone()
+        if already:
+            continue
+
+        entry_price = it["harga"]
+        if price_lookup is not None:
+            try:
+                live_price = await price_lookup(it["kode"])
+                if live_price:
+                    entry_price = live_price
+            except Exception:
+                pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
+
+        tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        with get_db() as conn:
+            cur = conn.execute('''
+                INSERT INTO signal_history
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'MACD HISTOGRAM BULLISH CROSS', 'MACD_CROSS')
+            ''', (
+                it["kode"], entry_price, tp_pct, sl_pct,
+                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
+            ))
+            new_id = cur.lastrowid
+        saved.append({
+            "id": new_id, "kode": it["kode"], "entry_price": entry_price,
+            "tp_pct": tp_pct, "sl_pct": sl_pct,
+            "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
+            "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
+            "confidence_score": it.get("confidence_score"), "pattern": "MACD HISTOGRAM BULLISH CROSS",
+            "source": "MACD_CROSS",
         })
     return saved
 
@@ -192,7 +293,8 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     _ensure_table()
     with get_db() as conn:
         open_rows = conn.execute(
-            "SELECT id, kode, recorded_at, entry_price, tp_pct, sl_pct FROM signal_history WHERE status = 'OPEN'"
+            "SELECT id, kode, recorded_at, entry_price, tp_pct, sl_pct, source, pattern "
+            "FROM signal_history WHERE status = 'OPEN'"
         ).fetchall()
 
     just_resolved = []
@@ -230,9 +332,34 @@ async def audit_open_signals(price_lookup) -> list[dict]:
             "id": row["id"], "kode": row["kode"], "entry_price": entry,
             "status": status, "resolved_price": price, "return_pct": return_pct,
             "days_to_resolve": age_days, "recorded_at": row["recorded_at"],
+            "source": row["source"], "pattern": row["pattern"],
         })
 
     return just_resolved
+
+
+def _compute_stats(closed: list[dict]) -> dict | None:
+    """Statistik agregat dari sinyal yang SUDAH SELESAI (TP_HIT/SL_HIT/
+    EXPIRED). Returns None kalau daftar kosong -- caller/frontend WAJIB
+    menampilkan ini sebagai "belum cukup data", BUKAN 0% (dipakai baik
+    untuk statistik gabungan maupun per-source di get_signal_report)."""
+    if not closed:
+        return None
+    wins = [s for s in closed if s["status"] == "TP_HIT"]
+    losses = [s for s in closed if s["status"] == "SL_HIT"]
+    decided = wins + losses  # EXPIRED sengaja di luar win-rate (bukan menang atau kalah jelas)
+    win_rate = round(len(wins) / len(decided) * 100, 1) if decided else None
+    avg_return = round(sum(s["return_pct"] for s in closed) / len(closed), 2)
+    avg_days = round(sum(s["days_to_resolve"] for s in closed) / len(closed), 1)
+    return {
+        "n_closed": len(closed),
+        "n_tp_hit": len(wins),
+        "n_sl_hit": len(losses),
+        "n_expired": len(closed) - len(wins) - len(losses),
+        "win_rate": win_rate,
+        "avg_return_pct": avg_return,
+        "avg_days_to_resolve": avg_days,
+    }
 
 
 def get_signal_report() -> dict:
@@ -242,9 +369,12 @@ def get_signal_report() -> dict:
     belum ada hasil sungguhan (menganggapnya menang/kalah sekarang = angka
     bohong).
 
-    Returns dict dengan 'signals' (list) dan 'stats' (bisa None kalau
-    belum ada satupun sinyal yang selesai -- caller/frontend WAJIB
-    menampilkan ini sebagai "belum cukup data", BUKAN 0%)."""
+    Returns dict dengan 'signals' (list), 'stats' (gabungan semua source,
+    bisa None kalau belum ada satupun sinyal yang selesai), dan
+    'stats_by_source' (dict {source: stats-shape yang sama}, HANYA berisi
+    source yang sudah punya minimal 1 sinyal selesai) -- supaya user bisa
+    bandingkan validitas Top Pick vs MACD Cross sebagai teori entry
+    terpisah, bukan tercampur jadi satu angka."""
     _ensure_table()
     with get_db() as conn:
         rows = conn.execute(
@@ -262,24 +392,15 @@ def get_signal_report() -> dict:
         s["sl_price"] = round(s["entry_price"] * (1 - s["sl_pct"] / 100), 2)
 
     closed = [s for s in signals if s["status"] in ("TP_HIT", "SL_HIT", "EXPIRED")]
-    if not closed:
-        stats = None
-    else:
-        wins = [s for s in closed if s["status"] == "TP_HIT"]
-        losses = [s for s in closed if s["status"] == "SL_HIT"]
-        decided = wins + losses  # EXPIRED sengaja di luar win-rate (bukan menang atau kalah jelas)
-        win_rate = round(len(wins) / len(decided) * 100, 1) if decided else None
-        avg_return = round(sum(s["return_pct"] for s in closed) / len(closed), 2)
-        avg_days = round(sum(s["days_to_resolve"] for s in closed) / len(closed), 1)
-        stats = {
-            "n_closed": len(closed),
-            "n_tp_hit": len(wins),
-            "n_sl_hit": len(losses),
-            "n_expired": len(closed) - len(wins) - len(losses),
-            "win_rate": win_rate,
-            "avg_return_pct": avg_return,
-            "avg_days_to_resolve": avg_days,
-        }
+    stats = _compute_stats(closed)
+    stats_by_source = {}
+    for source in sorted({s["source"] for s in closed}):
+        source_stats = _compute_stats([s for s in closed if s["source"] == source])
+        if source_stats is not None:
+            stats_by_source[source] = source_stats
 
     n_open = sum(1 for s in signals if s["status"] == "OPEN")
-    return {"signals": signals, "stats": stats, "n_open": n_open, "n_total": len(signals)}
+    return {
+        "signals": signals, "stats": stats, "stats_by_source": stats_by_source,
+        "n_open": n_open, "n_total": len(signals),
+    }

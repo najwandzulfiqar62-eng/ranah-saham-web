@@ -2635,6 +2635,7 @@ $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});
 /* ---------- AUDIT SINYAL ---------- */
 function _auditStatusColor(s){return s==='TP_HIT'?'var(--bull)':s==='SL_HIT'?'var(--bear)':s==='EXPIRED'?'var(--muted)':'var(--gold)'}
 function _auditStatusLabel(s){return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan'}[s]||s}
+function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross'}[s]||s||'Top Pick'}
 async function loadSignalAudit(){
   const body=$('#auditBody');
   body.innerHTML='<section class="panel skel loadbar"></section>';
@@ -2644,7 +2645,7 @@ async function loadSignalAudit(){
   const confirmedHtml=confirmed.length?`<section class="panel" style="border:1px solid var(--bull);background:linear-gradient(180deg,rgba(46,125,82,.10),transparent)">
     <p class="eyebrow" style="color:var(--bull)">✅ Signal Confirmed</p>
     <div class="decision-grid">${confirmed.map(s=>`<div class="decision-card">
-      <div class="label">${s.kode}</div>
+      <div class="label">${s.kode} · ${_sourceLabel(s.source)}</div>
       <div class="value" style="color:var(--bull)">+${fmt(s.return_pct,2)}%</div>
       <div class="sub">Rp${fmt(s.entry_price)} → Rp${fmt(s.resolved_price)} · ${s.days_to_resolve} hari${s.pattern?' · '+s.pattern:''}</div>
     </div>`).join('')}</div>
@@ -2671,6 +2672,21 @@ async function loadSignalAudit(){
       <p class="audit-note" style="margin-top:12px">Kadaluarsa (${s.n_expired}) dihitung ke rata-rata return tapi TIDAK dihitung menang/kalah di win rate -- hasilnya belum tegas ke arah manapun.</p>
     </section>`;
   }
+  const bySource=d.stats_by_source||{};
+  const sourceKeys=Object.keys(bySource);
+  const bySourceHtml=sourceKeys.length?`<section class="panel">
+    <p class="eyebrow">Top Pick vs MACD Cross</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Dua teori entry point diaudit TERPISAH -- supaya kelihatan mana yang benar-benar lebih valid di data real, bukan tercampur jadi satu angka.</p>
+    <div class="decision-grid">${sourceKeys.map(src=>{
+      const s=bySource[src];
+      const wrColor=s.win_rate==null?'var(--muted)':s.win_rate>=55?'var(--bull)':s.win_rate>=45?'var(--gold)':'var(--bear)';
+      return `<div class="decision-card">
+        <div class="label">${_sourceLabel(src)}</div>
+        <div class="value" style="color:${wrColor}">${s.win_rate!=null?fmt(s.win_rate,1)+'%':'–'}</div>
+        <div class="sub">${s.n_tp_hit} TP vs ${s.n_sl_hit} SL · avg ${s.avg_return_pct>=0?'+':''}${fmt(s.avg_return_pct,2)}% (${s.n_closed} selesai)</div>
+      </div>`;
+    }).join('')}</div>
+  </section>`:'';
   if(!signals.length){
     body.innerHTML=statsHtml+'<section class="panel"><p class="insight muted">Belum ada sinyal yang tercatat. Sinyal otomatis tercatat saat Top Pick dibuka dan ada saham dengan skor cukup tinggi.</p></section>';
     return;
@@ -2681,14 +2697,15 @@ async function loadSignalAudit(){
     const retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
     return `<tr data-k="${s.kode}" style="cursor:pointer">
       <td class="tk">${s.kode}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
+      <td>${_sourceLabel(s.source)}</td>
       <td>Rp${fmt(s.entry_price)}</td>
       <td style="color:var(--bull)">Rp${fmt(s.tp_price)}<div class="muted" style="font-size:10.5px">+${fmt(s.tp_pct,1)}%</div></td>
       <td style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">-${fmt(s.sl_pct,1)}%</div></td>
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
       <td style="color:${retColor}">${retTxt}</td></tr>`;
   }).join('');
-  body.innerHTML=confirmedHtml+statsHtml+`<section class="panel">
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
+  body.innerHTML=confirmedHtml+statsHtml+bySourceHtml+`<section class="panel">
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
   </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }

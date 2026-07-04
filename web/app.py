@@ -1374,6 +1374,16 @@ async def _confidence_raw_signals() -> list[dict]:
             first_pattern = pattern_result["patterns"][0] if pattern_result.get("patterns") else None
             pattern_name = first_pattern["nama"] if first_pattern else None
             pattern_bias = first_pattern["bias"] if first_pattern else None
+            # Dicek TERPISAH dari pattern_name/pattern_bias di atas (yang
+            # cuma menyimpan pola PERTAMA sebagai badge ringkas) -- kalau
+            # saham kebetulan punya pola struktur (mis. Double Top) DAN
+            # histogram MACD baru cross bullish di saat bersamaan,
+            # pattern_name hanya akan berisi yang pertama, tapi entry point
+            # MACD Cross (record_macd_cross_signals di core/signal_history.py)
+            # tetap harus terdeteksi apa adanya, tidak boleh "tertutup" pola lain.
+            macd_bullish_cross = any(
+                p["nama"] == "MACD HISTOGRAM BULLISH CROSS" for p in pattern_result.get("patterns", [])
+            )
 
             items.append({
                 "kode": kode,
@@ -1394,6 +1404,7 @@ async def _confidence_raw_signals() -> list[dict]:
                 "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
                 "pattern": pattern_name,
                 "pattern_bias": pattern_bias,
+                "macd_bullish_cross": macd_bullish_cross,
             })
         except Exception:
             continue
@@ -1460,7 +1471,25 @@ async def confidence():
             except Exception as e:
                 print(f"⚠️ Gagal kirim notifikasi sinyal baru: {type(e).__name__}: {e}")
     except Exception as e:
-        print(f"⚠️ Gagal mencatat signal history: {type(e).__name__}: {e}")
+        print(f"⚠️ Gagal mencatat signal history (Top Pick): {type(e).__name__}: {e}")
+
+    # Entry point kedua yang independen: MACD Histogram Cross (permintaan
+    # eksplisit user -- lihat core/signal_history.py::record_macd_cross_
+    # signals). Dibungkus try/except TERPISAH dari Top Pick di atas supaya
+    # kegagalan salah satu tidak pernah menggagalkan yang lain maupun
+    # respons Top Pick itu sendiri.
+    try:
+        from core.signal_history import record_macd_cross_signals
+        from core.telegram_notify import send_message, format_signal_new
+
+        newly_macd = await record_macd_cross_signals(items, price_lookup=_signal_entry_price_lookup)
+        for sig in newly_macd:
+            try:
+                await send_message(format_signal_new(sig))
+            except Exception as e:
+                print(f"⚠️ Gagal kirim notifikasi sinyal MACD Cross: {type(e).__name__}: {e}")
+    except Exception as e:
+        print(f"⚠️ Gagal mencatat signal history (MACD Cross): {type(e).__name__}: {e}")
 
     # Konteks regime pasar (IHSG) -- satu kali untuk semua, BUKAN per saham,
     # supaya user tahu skor individual di atas dibaca dalam kondisi pasar

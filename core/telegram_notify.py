@@ -26,6 +26,14 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 _ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 _TIMEOUT = 10.0
 
+# signal_history punya 2 sumber entry point independen (lihat core/
+# signal_history.py) -- label ini dipakai di pesan notifikasi supaya user
+# selalu tahu teori entry mana yang dimaksud, tidak tercampur.
+_SOURCE_LABEL = {
+    "TOP_PICK": "Top Pick (skor gabungan)",
+    "MACD_CROSS": "MACD Histogram Cross (momentum)",
+}
+
 
 async def send_message(text: str) -> bool:
     """Kirim satu pesan teks ke chat/grup yang dikonfigurasi. Returns True
@@ -57,6 +65,7 @@ def format_signal_new(sig: dict) -> str:
     asing yang datanya tidak kita punya secara legal/gratis."""
     lines = [
         f"🆕 <b>{sig['kode']}</b> — sinyal baru dicatat",
+        f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
         f"Entry: Rp{sig['entry_price']:,.0f}",
         f"Target TP: Rp{sig['tp_price']:,.0f} (+{sig['tp_pct']:.1f}%)",
         f"Stop Loss: Rp{sig['sl_price']:,.0f} (-{sig['sl_pct']:.1f}%)",
@@ -85,6 +94,7 @@ def format_signal_resolved(sig: dict) -> str:
     tanggal = str(sig.get("recorded_at", ""))[:10]
     lines = [
         f"{emoji} <b>{sig['kode']}</b> — {status_label}",
+        f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
         f"Entry Rp{sig['entry_price']:,.0f} → Rp{sig['resolved_price']:,.0f} ({ret_txt})",
         f"Dicatat {tanggal} · selesai dalam {sig.get('days_to_resolve', '-')} hari",
         "Analisis teknikal otomatis (rule-based) untuk edukasi — bukan rekomendasi investasi. DYOR.",
