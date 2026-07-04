@@ -2110,10 +2110,22 @@ def _valuation(fund: dict) -> dict:
     methods, ests, methods_meta = {}, [], {}
 
     def _add(key, val, label, note):
-        if val and val > 0:
-            methods[key] = round(val, 2)
-            methods_meta[key] = {"label": label, "note": note}
-            ests.append(val)
+        if not (val and val > 0):
+            return
+        # Sanity guard: metode yang hasilnya <5% atau >2000% dari harga
+        # sekarang HAMPIR PASTI karena field fundamental yang korup/salah
+        # skala di sumber data (ditemukan nyata: BVPS Yahoo Finance utk
+        # TPIA = Rp0.045, bikin PBV×2 & ROE-implied menghasilkan "harga
+        # wajar" Rp0.09/Rp0.16 utk saham dengan EPS positif Rp378 -- laba
+        # positif tidak mungkin genuinely wajar dihargai mendekati nol).
+        # Ini BUKAN menyembunyikan valuasi ekstrem yang sah (deep value/
+        # growth tetap lolos di rentang 0.05x-20x), cuma menolak angka
+        # yang jelas-jelas artefak data, bukan sinyal.
+        if price and price > 0 and not (price * 0.05 <= val <= price * 20):
+            return
+        methods[key] = round(val, 2)
+        methods_meta[key] = {"label": label, "note": note}
+        ests.append(val)
 
     # --- ABSOLUTE METHODS ---
     # 1. Graham Number (value/defensif — sering conservative untuk growth)

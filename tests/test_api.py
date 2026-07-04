@@ -1376,3 +1376,58 @@ def test_averagedown_endpoint_suggestions_are_below_current_price(client):
     # Terurut dari harga tertinggi ke terendah (paling dekat ke paling jauh)
     prices = [s["price"] for s in d["suggestions"]]
     assert prices == sorted(prices, reverse=True)
+
+
+def test_valuation_rejects_methods_with_corrupted_bvps():
+    """Regresi bug nyata (ditemukan user via kartu 'Estimasi Wajar
+    Terendah' menampilkan Rp0): TPIA di Yahoo Finance punya
+    book_value_per_share = Rp0.045 (jelas korup/salah skala -- PBV
+    implied jadi 39.666x), yang bikin metode PBV×2 & ROE-implied
+    menghasilkan 'harga wajar' mendekati nol untuk saham dengan EPS
+    POSITIF Rp378 -- laba positif tidak mungkin genuinely wajar
+    dihargai mendekati nol. _valuation() harus MENOLAK metode yang
+    hasilnya <5% atau >2000% dari harga sekarang (artefak data, bukan
+    sinyal), TAPI tetap meloloskan metode lain yang masih masuk akal."""
+    from web.app import _valuation
+
+    fund = {
+        "eps_trailing": 378.24, "eps_forward": 16.22,
+        "book_value_per_share": 0.045,  # data korup dari Yahoo Finance
+        "harga_sekarang": 1785.0, "pe_trailing": 4.72,
+        "roe_pct": 42.37, "earnings_growth_pct": None,
+        "revenue_growth_pct": 2.86, "dividend_yield_pct": 34.0,
+        "payout_ratio_pct": 2.77, "net_margin_pct": 14.34,
+    }
+    val = _valuation(fund)
+
+    # Metode yang bergantung BVPS korup HARUS ditolak
+    assert "pbv_x2" not in val["methods"]
+    assert "roe_implied" not in val["methods"]
+    assert "graham" not in val["methods"]  # juga pakai bvps
+
+    # Metode yang TIDAK bergantung bvps tetap harus lolos (bukan overkill filter)
+    assert "per_x15" in val["methods"]
+
+    # Floor TIDAK BOLEH lagi berupa angka absurd mendekati nol
+    assert val["range_low"] > fund["harga_sekarang"] * 0.05
+
+
+def test_valuation_keeps_legitimate_methods_unaffected():
+    """Regresi anti-overkill: saham dengan data fundamental NORMAL
+    (tidak korup) tidak boleh kehilangan metode valuasinya gara-gara
+    guard baru -- guard cuma menyaring outlier ekstrem, bukan mempersempit
+    rentang wajar untuk kasus normal."""
+    from web.app import _valuation
+
+    fund = {
+        "eps_trailing": 400.0, "eps_forward": 440.0,
+        "book_value_per_share": 3000.0, "harga_sekarang": 6000.0,
+        "pe_trailing": 15.0, "roe_pct": 18.0, "earnings_growth_pct": 10.0,
+        "revenue_growth_pct": 8.0, "dividend_yield_pct": 3.0,
+        "payout_ratio_pct": 40.0, "net_margin_pct": 20.0,
+    }
+    val = _valuation(fund)
+    assert "graham" in val["methods"]
+    assert "per_x15" in val["methods"]
+    assert "pbv_x2" in val["methods"]
+    assert "roe_implied" in val["methods"]
