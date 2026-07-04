@@ -759,6 +759,33 @@ def test_confidence_endpoint_includes_composite_fields(client):
     assert scores == sorted(scores, reverse=True)
 
 
+def test_confidence_targets_are_never_too_tight(client):
+    """Regresi: potensi_naik_pct/risiko_turun_pct dulu pakai jarak mentah
+    ke R1/S1 (calculate_snr_levels) -- kalau candle terakhir kebetulan
+    range-nya kecil, target bisa SANGAT ketat (dikonfirmasi nyata: SL
+    -0.4% pada JPFA/UNTR, gampang kena cuma dari noise harian, bukan
+    risiko sungguhan). Sekarang pakai logic yang sama dengan fitur
+    Rencana Trading (calculate_fixed_entry_levels_from_df, skenario
+    'normal'): TP1 = MAKSIMUM(3%, risk%), jadi TP tidak pernah lebih
+    ketat dari SL-nya sendiri (RR >= 1:1 selalu), dan SL selalu punya
+    buffer 0.2xATR di luar support asli."""
+    r = client.get("/api/confidence")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    checked = 0
+    for it in items:
+        naik, turun = it.get("potensi_naik_pct"), it.get("risiko_turun_pct")
+        if naik is None or turun is None:
+            continue
+        checked += 1
+        assert naik >= 3.0 - 1e-6 or naik >= turun - 1e-6, (
+            f"{it['kode']}: potensi_naik_pct ({naik}) di bawah floor 3% DAN di bawah risiko_turun_pct ({turun})"
+        )
+        if it.get("rr_ratio") is not None:
+            assert it["rr_ratio"] >= 1.0 - 1e-6, f"{it['kode']}: rr_ratio ({it['rr_ratio']}) di bawah 1:1"
+    assert checked > 0, "tidak ada item dengan potensi_naik_pct/risiko_turun_pct valid untuk dicek"
+
+
 def _fake_confidence_item(kode, score, naik=3.0, turun=2.0, harga=1000.0):
     return {
         "kode": kode, "harga": harga, "confidence_score": score, "ai_score": score,

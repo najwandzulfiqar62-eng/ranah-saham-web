@@ -1231,10 +1231,28 @@ async def _confidence_raw_signals() -> list[dict]:
             price = mv["harga"] or 0
             avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
             likuiditas = _liquidity_label(avg_value_20)
-            snr = calculate_snr_levels(df)
-            r1, s1 = snr["r1"], snr["s1"]
-            potensi_naik_pct = ((r1 / price) - 1) * 100 if price else None
-            risiko_turun_pct = (1 - (s1 / price)) * 100 if price else None
+            # BUG NYATA yang diperbaiki (temuan user langsung dari Audit
+            # Sinyal): potensi_naik_pct/risiko_turun_pct SEBELUMNYA pakai
+            # calculate_snr_levels() (jarak ke R1/S1 pivot+swing terdekat) --
+            # itu cocok utk badge Ringkasan Cepat ("seberapa dekat level
+            # berikutnya", murni informasional), TAPI SALAH dipakai sebagai
+            # target trading plan Top Pick/Audit Sinyal: kalau hari terakhir
+            # kebetulan range-nya kecil, R1/S1 bisa cuma berjarak <1% dari
+            # harga -- target SEKETAT itu (mis. SL -0.4%, dilihat nyata pada
+            # JPFA/UNTR) hampir pasti kena cuma dari noise harian biasa,
+            # bukan risiko sungguhan yang terealisasi. Diganti pakai logic
+            # yang SAMA dipakai fitur "Rencana Trading" (calculate_fixed_
+            # entry_levels_from_df, skenario 'normal') -- SL = support
+            # terdekat DIKURANGI buffer 0.2xATR (bukan support mentah), TP1
+            # = MAKSIMUM(3%, risk%) sehingga RR selalu >= 1:1 dan TP tidak
+            # pernah lebih ketat dari SL-nya sendiri. Ini logic yang SUDAH
+            # ada & teruji (dipakai "Rencana Trading" di halaman Analisis),
+            # bukan heuristik baru.
+            from core.trading_plan import calculate_fixed_entry_levels_from_df
+            plan = calculate_fixed_entry_levels_from_df(df, "")
+            normal = (plan or {}).get("scenarios", {}).get("normal")
+            potensi_naik_pct = normal["tp1_pct"] if normal else None
+            risiko_turun_pct = normal["risk_pct"] if normal else None
             rr_ratio = (potensi_naik_pct / risiko_turun_pct
                         if potensi_naik_pct and risiko_turun_pct and risiko_turun_pct > 0 else None)
             ad = calculate_ad_line(df)
