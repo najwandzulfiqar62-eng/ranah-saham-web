@@ -51,7 +51,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
-from core.news_emiten import tag_items
+from core.news_emiten import tag_items, deteksi_emiten, _load_emiten
 from core.news_idx import fetch_idx_disclosures, ENABLE_IDX_DISCLOSURES
 
 # Ambang kemiripan judul untuk dianggap berita DUPLIKAT lintas sumber.
@@ -159,8 +159,24 @@ async def _fetch_single_source(source: dict, keyword: str | None, limit: int) ->
                 continue
 
             if keyword:
-                haystack = (title + " " + summary).upper()
-                if keyword.upper() not in haystack:
+                # BUG NYATA yang diperbaiki: dulu cuma substring mentah
+                # (`keyword.upper() in haystack`), jadi cari berita kode
+                # RAJA ikut menyangkut "KERAJAAN"/"RAJABASA" (RAJA
+                # kebetulan substring di tengah kata lain). Kalau keyword
+                # persis salah satu kode emiten dikenal, pakai
+                # deteksi_emiten() yang SAMA dipakai tagging /news umum --
+                # batas kata + guard kata umum (lihat
+                # _KODE_RAWAN_FALSE_POSITIVE) -- supaya presisinya
+                # konsisten di semua tempat, bukan cuma di tag "Saham
+                # terkait". Keyword bebas (bukan kode emiten, mis. "IHSG
+                # bursa saham") tetap substring biasa -- itu bukan lookup
+                # ticker, tidak ada daftar kandidat buat dicocokkan.
+                kw = keyword.strip().upper()
+                haystack_text = title + " " + summary
+                if kw in _load_emiten():
+                    if not deteksi_emiten(haystack_text, kandidat_kode=[kw]):
+                        continue
+                elif kw not in haystack_text.upper():
                     continue
 
             results.append({
