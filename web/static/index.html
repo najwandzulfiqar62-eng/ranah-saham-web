@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Ranah Saham — Terminal Analisis</title>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0A1322">
+<meta name="theme-color" content="#06110F">
+<link rel="icon" type="image/png" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -740,11 +741,10 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .brand{gap:10px;letter-spacing:.12em}
 .brand i{display:none}
 .brand-mark{
-  width:32px;height:32px;border:1px solid var(--gold-dim);border-radius:8px;
-  display:inline-flex;align-items:center;justify-content:center;
-  color:var(--gold);background:rgba(199,154,42,.08);
-  font-family:"Space Grotesk";font-weight:700;letter-spacing:-.04em;
+  width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;
+  flex:none;
 }
+.brand-mark img{width:100%;height:100%;object-fit:contain;display:block}
 .panel,.pulse-card,.news-headline-card,.news-card,.news-list-wrap,.port-sum-card,.alert-row{
   border-radius:8px;
 }
@@ -766,7 +766,8 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   padding:34px 0 24px;
 }
 .home-brandline{display:flex;align-items:center;gap:12px;margin-bottom:18px;color:var(--text);font-family:"Space Grotesk";font-weight:700;letter-spacing:.16em}
-.home-brandline .rs-mark{width:46px;height:46px;border-radius:10px;border:1px solid var(--gold-dim);display:inline-flex;align-items:center;justify-content:center;color:var(--gold);background:rgba(199,154,42,.08);letter-spacing:-.05em;font-size:20px}
+.home-brandline .rs-mark{width:46px;height:46px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.home-brandline .rs-mark img{width:100%;height:100%;object-fit:contain;display:block}
 .home-kicker{font-size:12px;color:var(--gold);letter-spacing:.22em;text-transform:uppercase;margin:0 0 8px;font-family:"JetBrains Mono"}
 .rs-research-hero .home-title{margin:0 0 12px;max-width:760px;font-size:clamp(30px,5vw,56px);line-height:1.02;letter-spacing:0}
 .rs-research-hero .home-sub{margin:0;max-width:690px;font-size:15px;color:#B9C3BD}
@@ -850,7 +851,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 </head>
 <body>
 <header><div class="wrap nav">
-  <div class="brand" onclick="route('beranda')" style="cursor:pointer"><span class="brand-mark">RS</span><span>RANAH SAHAM</span><sup>IDX</sup></div>
+  <div class="brand" onclick="route('beranda')" style="cursor:pointer"><span class="brand-mark"><img src="logo-mark.png" alt="Ranah Saham"></span><span>RANAH SAHAM</span><sup>IDX</sup></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-v="beranda">Beranda</button>
     <button class="tab" data-v="analisis">Analisis</button>
@@ -909,7 +910,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="view on" id="v-beranda">
     <section class="home-hero rs-research-hero">
       <div>
-        <div class="home-brandline"><span class="rs-mark">RS</span><span>RANAH SAHAM</span></div>
+        <div class="home-brandline"><span class="rs-mark"><img src="logo-mark.png" alt="Ranah Saham"></span><span>RANAH SAHAM</span></div>
         <p class="home-kicker">Discipline. Strategy. Growth.</p>
         <h1 class="home-title">Research cockpit saham IDX.</h1>
         <p class="home-sub">Baca kondisi pasar, cari peluang, lalu cek alasan dan risikonya dalam satu alur yang rapi. Transparan, edukatif, dan tanpa klaim profit instan.</p>
@@ -4208,21 +4209,24 @@ async function shareCard(){
   const btn=$('#shareBtn'); const orig=btn?btn.innerHTML:'';
   if(btn){btn.disabled=true;btn.innerHTML='Menyiapkan…';}
   try{ if(document.fonts&&document.fonts.ready) await document.fonts.ready; }catch{}
+  const logoImg=await new Promise(res=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>res(null);im.src='logo-mark.png'});
   const W=1080,H=1080, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
   const x=cv.getContext('2d');
-  const C={gold:'#C8A24B',ink:'#E8EEF7',mut:'#8593AC',bull:'#2FB57E',bear:'#E0566B',line:'rgba(255,255,255,.09)'};
+  const C={gold:'#C79A2A',ink:'#F2EFE7',mut:'#9AA69F',bull:'#2FB57E',bear:'#D65A4A',line:'rgba(255,255,255,.09)'};
   const sgn=v=>(v>=0?'+':'')+(v==null?'–':Number(v).toFixed(2))+'%';
   const upcol=v=>(v||0)>=0?C.bull:C.bear;
   const ratcol=v=>/(KUAT|BULL|BELI|AKUMULASI)/i.test(v||'')?C.bull:/(LEMAH|BEAR|JUAL|HINDARI)/i.test(v||'')?C.bear:C.gold;
   // latar
-  const g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0C1626'); g.addColorStop(1,'#070E18');
+  const g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0B1714'); g.addColorStop(1,'#06110F');
   x.fillStyle=g; x.fillRect(0,0,W,H);
-  x.strokeStyle='rgba(200,162,75,.45)'; x.lineWidth=2; x.strokeRect(36,36,W-72,H-72);
+  x.strokeStyle='rgba(199,154,42,.45)'; x.lineWidth=2; x.strokeRect(36,36,W-72,H-72);
   x.textBaseline='alphabetic';
   // merek + tanggal
-  x.font='700 36px "Space Grotesk",sans-serif'; x.fillStyle=C.gold; x.fillText('RANAH',80,128);
-  const rw=x.measureText('RANAH ').width; x.fillStyle=C.ink; x.fillText('SAHAM',80+rw,128);
-  x.font='400 22px Inter,sans-serif'; x.fillStyle=C.mut; x.fillText('Analisis Saham IDX',80,160);
+  let brandX=80;
+  if(logoImg){const lh=56,lw=lh*(logoImg.width/logoImg.height);x.drawImage(logoImg,80,74,lw,lh);brandX=80+lw+16;}
+  x.font='700 36px "Space Grotesk",sans-serif'; x.fillStyle=C.gold; x.fillText('RANAH',brandX,128);
+  const rw=x.measureText('RANAH ').width; x.fillStyle=C.ink; x.fillText('SAHAM',brandX+rw,128);
+  x.font='400 22px Inter,sans-serif'; x.fillStyle=C.mut; x.fillText('Analisis Saham IDX',brandX,160);
   const today=new Date().toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
   x.textAlign='right'; x.fillText(today,W-80,128); x.textAlign='left';
   // ticker + rating
