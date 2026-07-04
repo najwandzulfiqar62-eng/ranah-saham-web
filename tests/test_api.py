@@ -1290,3 +1290,65 @@ def test_get_signal_report_stats_by_source_empty_when_nothing_closed(clean_signa
 
     report = get_signal_report()
     assert report["stats_by_source"] == {}
+
+
+def test_calculate_average_down_basic_math():
+    """Regresi kalkulator Average Down: rata-rata baru harus tertimbang
+    LOT (100 lembar/lot, bukan sekadar rata-rata dua harga)."""
+    from core.risk_management import calculate_average_down
+
+    # 10 lot @ 1000, tambah 10 lot @ 800 -> rata-rata baru = (1000+800)/2 = 900
+    # (kebetulan sama besar jumlah lotnya, jadi rata-rata sederhana valid di sini)
+    res = calculate_average_down(avg_price=1000, lots_held=10, current_price=800, add_lots=10)
+    assert res["new_avg_price"] == pytest.approx(900.0)
+    assert res["total_lots"] == 20
+    assert res["additional_capital"] == pytest.approx(800 * 10 * 100)
+    assert res["pl_before_pct"] == pytest.approx(-20.0)
+    assert res["pl_after_pct"] == pytest.approx((800 / 900 - 1) * 100, abs=0.01)
+
+    # Timbangan lot TIDAK sama -> bukan rata-rata sederhana
+    res2 = calculate_average_down(avg_price=1000, lots_held=10, current_price=800, add_lots=30)
+    expected_avg = (1000 * 1000 + 800 * 3000) / 4000  # (avg*shares_held + price*shares_add) / total_shares
+    assert res2["new_avg_price"] == pytest.approx(expected_avg)
+
+
+def test_calculate_average_down_zero_add_lots_is_noop():
+    """add_lots=0 (sekadar cek P/L posisi sekarang) harus mengembalikan
+    rata-rata yang SAMA PERSIS dengan avg_price -- bukan error atau
+    pembagian oleh nol."""
+    from core.risk_management import calculate_average_down
+
+    res = calculate_average_down(avg_price=1500, lots_held=5, current_price=1400, add_lots=0)
+    assert res["new_avg_price"] == pytest.approx(1500.0)
+    assert res["pl_before_pct"] == res["pl_after_pct"]
+    assert res["additional_capital"] == 0
+
+
+def test_calculate_average_down_rejects_invalid_input():
+    from core.risk_management import calculate_average_down
+
+    assert calculate_average_down(avg_price=0, lots_held=10, current_price=800, add_lots=5) is None
+    assert calculate_average_down(avg_price=1000, lots_held=0, current_price=800, add_lots=5) is None
+    assert calculate_average_down(avg_price=1000, lots_held=10, current_price=0, add_lots=5) is None
+    assert calculate_average_down(avg_price=1000, lots_held=10, current_price=800, add_lots=-1) is None
+
+
+def test_averagedown_endpoint_matches_current_price_and_math(client):
+    """Regresi endpoint: /api/averagedown harus pakai harga TERKINI dari
+    data harga sungguhan (sama seperti /api/analyze), bukan nilai lain,
+    dan hasil hitungannya harus konsisten dengan calculate_average_down()."""
+    from core.risk_management import calculate_average_down
+
+    price = client.get("/api/analyze/BBCA").json()["price"]
+    r = client.get("/api/averagedown/BBCA?avg_price=1000&lots=10&add_lots=5")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["current_price"] == pytest.approx(price, abs=0.5)
+    expected = calculate_average_down(1000, 10, d["current_price"], 5)
+    assert d["new_avg_price"] == pytest.approx(expected["new_avg_price"])
+    assert d["pl_after_pct"] == pytest.approx(expected["pl_after_pct"])
+
+
+def test_averagedown_endpoint_rejects_invalid_input(client):
+    r = client.get("/api/averagedown/BBCA?avg_price=0&lots=10&add_lots=5")
+    assert r.status_code == 422

@@ -1245,6 +1245,18 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       </div>
       <div id="tcOut"></div>
     </section>
+    <section class="panel">
+      <p class="eyebrow">Kalkulator Average Down</p>
+      <p class="insight muted" style="font-size:13px;margin-bottom:12px">Hitung harga rata-rata baru kalau menambah lot di harga sekarang, plus cek apakah harga sekarang didukung fundamental (bukan cuma menurunkan modal tanpa dasar).</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <label class="fld">Kode saham<input id="adK" placeholder="BBCA" style="text-transform:uppercase"></label>
+        <label class="fld">Harga beli rata-rata<input id="adAvg" type="number" value="1000"></label>
+        <label class="fld">Lot dipegang<input id="adLots" type="number" value="10"></label>
+        <label class="fld">Tambah lot<input id="adAddLots" type="number" value="5"></label>
+        <button class="btn" id="adBtn">Hitung</button>
+      </div>
+      <div id="adOut"></div>
+    </section>
   </div>
   <!-- MAKRO -->
   <div class="view" id="v-makro"><div id="makroBody"><div class="hint"><span class="big">Kurs &amp; Makro</span>Memuat saat tab dibuka…</div></div></div>
@@ -4340,10 +4352,38 @@ async function calcTC(){
       <div class="cell"><div class="k">Cut Loss Agresif</div><div class="v down">Rp${fmt(cl.cutloss_aggressive)} (${fmt(cl.aggressive_distance_pct,2)}%)</div></div>
     </div></div>`;
 }
+async function calcAD(){
+  const k=$('#adK').value.trim().toUpperCase(),avg=$('#adAvg').value,lots=$('#adLots').value,add=$('#adAddLots').value,out=$('#adOut');
+  if(!k){out.innerHTML='<p class="muted" style="margin-top:12px;font-size:13px">Isi kode saham dulu.</p>';return}
+  out.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
+  let d; try{d=await api(`/api/averagedown/${k}?avg_price=${avg}&lots=${lots}&add_lots=${add}`)}catch(err){out.innerHTML=errBox(err.message);return}
+  const plColor=p=>p>=0?'var(--bull)':'var(--bear)';
+  let fvHtml='';
+  if(d.fair_value_verdict){
+    const vcol=d.fair_value_verdict==='Undervalued'?'var(--bull)':d.fair_value_verdict==='Overvalued'?'var(--bear)':'var(--gold)';
+    const note=d.fair_value_verdict==='Undervalued'
+      ?'Harga sekarang di bawah estimasi wajar -- average down di sini punya dasar fundamental.'
+      :d.fair_value_verdict==='Overvalued'
+      ?'Harga sekarang JUSTRU di atas estimasi wajar -- average down di sini menambah risiko dari sisi fundamental, bukan menguranginya.'
+      :'Harga sekarang dalam rentang wajar -- tidak murah, tidak juga mahal secara relative valuation.';
+    fvHtml=`<p class="insight" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:${vcol}15;border:1px solid ${vcol}44;font-size:12.5px;color:${vcol}">${d.fair_value_verdict} vs estimasi wajar Rp${fmt(d.fair_value_mid)} -- ${note}</p>`;
+  }
+  out.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;margin-top:16px">
+    <div><div class="bigval" style="color:var(--gold)">Rp${fmt(d.new_avg_price)}</div><div class="muted" style="font-size:12px">rata-rata baru (${fmt(d.total_lots)} lot) · ${d.avg_price_change_pct>=0?'+':''}${fmt(d.avg_price_change_pct,2)}% vs rata-rata lama</div></div>
+    <div class="grid" style="flex:1;min-width:260px">
+      <div class="cell"><div class="k">Harga sekarang</div><div class="v">Rp${fmt(d.current_price)}</div></div>
+      <div class="cell"><div class="k">Tambahan modal</div><div class="v">Rp${fmt(d.additional_capital)}</div></div>
+      <div class="cell"><div class="k">P/L sebelum</div><div class="v" style="color:${plColor(d.pl_before_pct)}">${d.pl_before_pct>=0?'+':''}${fmt(d.pl_before_pct,2)}%</div></div>
+      <div class="cell"><div class="k">P/L sesudah</div><div class="v" style="color:${plColor(d.pl_after_pct)}">${d.pl_after_pct>=0?'+':''}${fmt(d.pl_after_pct,2)}%</div></div>
+    </div></div>${fvHtml}
+    <p class="muted" style="font-size:11px;margin-top:10px">Murni kalkulasi -- bukan rekomendasi harus average down atau tidak. Keputusan tetap di kamu.</p>`;
+}
 $('#rrBtn').addEventListener('click',calcRR);
 $('#psBtn').addEventListener('click',calcPS);
 $('#tcBtn').addEventListener('click',calcTC);
 $('#tcK').addEventListener('keydown',e=>{if(e.key==='Enter')calcTC()});
+$('#adBtn').addEventListener('click',calcAD);
+$('#adK').addEventListener('keydown',e=>{if(e.key==='Enter')calcAD()});
 
 /* ---------- TUR SINGKAT (onboarding) ---------- */
 const TOUR=[

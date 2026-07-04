@@ -144,3 +144,43 @@ def calculate_position_size(modal: float, risk_pct: float, entry: float, stop_lo
         "actual_risk_pct": round((actual_risk_amount / modal) * 100, 3),
         "warning": None,
     }
+
+
+def calculate_average_down(avg_price: float, lots_held: int, current_price: float, add_lots: int = 0) -> dict | None:
+    """Hitung harga rata-rata baru & P/L kalau menambah average down di
+    harga sekarang -- murni aritmatika tertimbang lot (bukan lembar,
+    lihat catatan LOT_SIZE di atas). SAMA seperti kalkulator lain di
+    modul ini: TIDAK ada rekomendasi "harus average down atau tidak",
+    cuma angka hasilnya -- verdict fundamental (undervalued/overvalued)
+    ditambahkan TERPISAH oleh caller (endpoint) sebagai KONTEKS, bukan
+    bagian dari fungsi murni ini, supaya fungsi ini tetap testable tanpa
+    perlu mock fetch fundamental.
+
+    add_lots=0 valid (dipakai buat sekadar cek P/L posisi sekarang tanpa
+    menambah apa-apa) -- new_avg_price akan sama dengan avg_price.
+
+    Returns None kalau input tidak valid (harga <= 0 atau lot yang
+    dipegang <= 0 atau add_lots negatif)."""
+    if avg_price <= 0 or current_price <= 0 or lots_held <= 0 or add_lots < 0:
+        return None
+
+    shares_held = lots_held * LOT_SIZE
+    shares_add = add_lots * LOT_SIZE
+    total_shares = shares_held + shares_add
+
+    cost_held = avg_price * shares_held
+    cost_add = current_price * shares_add
+    new_avg_price = (cost_held + cost_add) / total_shares
+
+    return {
+        "current_price": round(current_price, 2),
+        "old_avg_price": round(avg_price, 2),
+        "new_avg_price": round(new_avg_price, 2),
+        "avg_price_change_pct": round((new_avg_price / avg_price - 1) * 100, 2),
+        "old_lots": lots_held,
+        "add_lots": add_lots,
+        "total_lots": lots_held + add_lots,
+        "additional_capital": round(cost_add, 0),
+        "pl_before_pct": round((current_price / avg_price - 1) * 100, 2),
+        "pl_after_pct": round((current_price / new_avg_price - 1) * 100, 2),
+    }

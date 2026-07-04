@@ -83,6 +83,7 @@ from core.wyckoff import detect_phases
 from core.risk_management import (
     calculate_risk_reward, calculate_target_levels,
     calculate_cutloss_levels, calculate_position_size,
+    calculate_average_down,
 )
 from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
@@ -1830,6 +1831,40 @@ async def cutloss(kode: str):
     if df is None or len(df) < 50:
         raise HTTPException(404, "Data tidak cukup.")
     return _py(calculate_cutloss_levels(df))
+
+
+@app.get("/api/averagedown/{kode}")
+async def averagedown(kode: str, avg_price: float, lots: int, add_lots: int = 0):
+    """Kalkulator Average Down: harga rata-rata baru + P/L kalau nambah
+    lot di harga sekarang. Konteks fundamental (undervalued/overvalued,
+    reuse _valuation() yang sama dipakai /api/fundamental) ditambahkan
+    best-effort -- kalau fetch fundamental gagal/data tidak cukup,
+    kalkulasi murninya tetap dikembalikan tanpa konteks itu."""
+    ticker = _resolve_ticker(kode)
+    try:
+        df = await _clean(ticker)
+    except Exception:
+        raise HTTPException(502, "Gagal mengambil data harga.")
+    if df is None or len(df) < 5:
+        raise HTTPException(404, "Data tidak cukup.")
+    current_price = float(df["Close"].iloc[-1])
+
+    res = calculate_average_down(avg_price, lots, current_price, add_lots)
+    if not res:
+        raise HTTPException(422, "Input tidak valid (cek harga rata-rata, lot dipegang, dan tambahan lot).")
+
+    try:
+        from core.fundamental import fetch_fundamental
+        fund = await fetch_fundamental(ticker)
+        if fund:
+            val = _valuation(fund)
+            if val.get("mid"):
+                res["fair_value_mid"] = val["mid"]
+                res["fair_value_verdict"] = val.get("verdict")
+    except Exception:
+        pass
+
+    return _py(res)
 
 
 # ---------- sektor & relative strength ----------
