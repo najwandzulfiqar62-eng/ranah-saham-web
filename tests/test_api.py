@@ -1752,3 +1752,73 @@ def test_screener_fundamental_sorts_undervalued_first():
     verdict_rank = {"Undervalued": 0, "Wajar (dalam rentang)": 1, "Overvalued": 2}
     items.sort(key=lambda x: (verdict_rank.get(x["verdict"], 3), -(x["upside_pct"] if x["upside_pct"] is not None else -999)))
     assert [x["kode"] for x in items] == ["D", "B", "C", "A"]  # D (upside lbh tinggi) sebelum B, keduanya Undervalued
+
+
+def test_whymove_endpoint_returns_factors_and_never_hits_real_network(client, monkeypatch):
+    """'Kenapa saham ini naik/turun hari ini' harus jalan tanpa jaringan
+    berita asli (fetch_news di-mock) dan mengembalikan struktur dasar:
+    price, change_pct, factors (list), news (list)."""
+    import core.news as news_module
+
+    async def _fake_fetch_news(keyword=None, limit=8):
+        return [
+            {"title": "Berita dummy", "source": "Tes", "link": "https://x.test",
+             "pub_date": "Fri, 29 May 2026 15:49:03 +0700"},
+        ]
+
+    monkeypatch.setattr(news_module, "fetch_news", _fake_fetch_news)
+
+    r = client.get("/api/whymove/BBCA")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["kode"] == "BBCA"
+    assert "price" in d and "change_pct" in d
+    assert isinstance(d["factors"], list)
+    assert isinstance(d["news"], list)
+    assert d["news"][0]["title"] == "Berita dummy"
+    assert "is_recent" in d["news"][0]
+
+
+def test_whymove_never_claims_causation_in_factor_text(client, monkeypatch):
+    """Prinsip jujur (sama seperti core/news_signal.py): teks faktor tidak
+    boleh mengklaim sebab-akibat ('menyebabkan', 'karena berita') --
+    hanya melaporkan kondisi teknikal secara terpisah."""
+    import core.news as news_module
+
+    async def _fake_fetch_news(keyword=None, limit=8):
+        return []
+
+    monkeypatch.setattr(news_module, "fetch_news", _fake_fetch_news)
+
+    r = client.get("/api/whymove/BBCA")
+    assert r.status_code == 200
+    d = r.json()
+    for f in d["factors"]:
+        assert "menyebabkan" not in f["teks"].lower()
+        assert "karena berita" not in f["teks"].lower()
+
+
+def test_whymove_handles_news_fetch_failure_gracefully(client, monkeypatch):
+    """Kalau fetch_news gagal total (exception), endpoint tetap 200 dengan
+    news kosong -- bukan 500, karena berita cuma pelengkap, bukan inti."""
+    import core.news as news_module
+
+    async def _boom(keyword=None, limit=8):
+        raise RuntimeError("simulated network failure")
+
+    monkeypatch.setattr(news_module, "fetch_news", _boom)
+
+    r = client.get("/api/whymove/BBCA")
+    assert r.status_code == 200
+    assert r.json()["news"] == []
+
+
+def test_whymove_404_when_data_insufficient(client, monkeypatch):
+    import web.app as app_module
+
+    async def _too_short(ticker, period="1y", interval="1d"):
+        return None
+
+    monkeypatch.setattr(app_module, "_clean", _too_short)
+    r = client.get("/api/whymove/BBCA")
+    assert r.status_code == 404

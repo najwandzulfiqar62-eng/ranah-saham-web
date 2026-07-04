@@ -1818,6 +1818,10 @@ async function analyze(kode){
           <div class="case-card case-bear"><h3>Bear case</h3><ul>${_li(cases.bear)}</ul></div>
         </div>
       </section>
+      <section class="panel"><p class="eyebrow">Kenapa Saham Ini Bergerak Hari Ini</p>
+        <button class="btn ghost" id="whyMoveBtn" style="width:100%">Jelaskan pergerakan hari ini</button>
+        <div id="whyMoveBox"></div>
+      </section>
       <section class="panel"><p class="eyebrow">Analisis Teknikal</p>
         <div class="grid">
           <div class="cell"><div class="k">RSI (14)</div><div class="v">${fmt(d.rsi,1)}</div></div>
@@ -1893,6 +1897,7 @@ async function analyze(kode){
     setTimeout(()=>document.getElementById('investorProfileSection')?.scrollIntoView({behavior:'smooth',block:'start'}),250);
   });
   const insb=$('#insightBtn'); if(insb)insb.addEventListener('click',()=>loadInsight(kode,'insightBox','insightBtn',false));
+  const wmb=$('#whyMoveBtn'); if(wmb)wmb.addEventListener('click',()=>loadWhyMove(kode));
   markLive('analisis');
   _analisisKode=kode;
 }
@@ -3537,6 +3542,39 @@ async function loadFundamental(kode,containerId,btnId){
 
 /* ---------- INSIGHT NARATIF ---------- */
 const INSIGHT_METHOD='Metodologi: insight ini <b>merangkai</b> keadaan terkini (teknikal, breadth/sektor, berita) menjadi narasi — ia <b>mendeskripsikan kondisi, bukan meramal arah</b>. Bukti akademik: breadth & sentimen berita punya nilai prediktif <b>nyata tapi kecil dan bergantung rezim</b> (mis. R² sentimen sekitar 2%), dan sentimen lebih andal menebak volatilitas daripada arah. Tidak ada penilaian sentimen otomatis di sini — keberadaan berita ditampilkan, interpretasinya diserahkan ke kamu. Bukan nasihat keuangan.';
+async function loadWhyMove(kode){
+  const box=$('#whyMoveBox'); if(!box)return;
+  const btn=$('#whyMoveBtn'); if(btn)btn.remove();
+  box.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
+  let d; try{d=await api('/api/whymove/'+encodeURIComponent(kode))}catch(e){box.innerHTML=`<p class="muted" style="margin-top:12px;font-size:13px">${e.message}</p>`;return}
+  const chgColor=d.change_pct>=0?'var(--bull)':'var(--bear)';
+  const chgSign=d.change_pct>=0?'+':'';
+  const factorsHtml=d.factors&&d.factors.length?d.factors.map(f=>`
+    <div class="insight-block" style="margin-bottom:10px">
+      <div style="font-family:Space Grotesk;font-weight:700;color:var(--gold);font-size:12px;margin-bottom:4px">${f.kategori}</div>
+      <p class="insight" style="margin:0;font-size:13px;line-height:1.5">${f.teks}</p>
+    </div>`).join(''):'<p class="muted" style="font-size:13px">Tidak ada faktor teknikal signifikan yang terdeteksi hari ini.</p>';
+  let newsHtml='';
+  if(d.news&&d.news.length){
+    newsHtml=`<div style="margin-top:14px">
+      <div style="font-family:Space Grotesk;font-weight:700;color:var(--gold);font-size:12px;margin-bottom:8px">Berita yang menyebut ${kode} (korelasi waktu saja, bukan klaim penyebab)</div>
+      ${d.news.map(n=>`<a href="${n.link}" target="_blank" rel="noopener" style="display:block;padding:8px 0;border-bottom:1px solid var(--border);color:var(--text);text-decoration:none">
+        <div style="font-size:13px;line-height:1.4">${n.title}${n.is_recent?' <span style="color:var(--gold);font-size:11px">● baru</span>':''}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${n.source||''} · ${n.pub_date||''}</div>
+      </a>`).join('')}
+    </div>`;
+  }
+  box.innerHTML=`<div style="margin-top:4px">
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:14px">
+      <div style="font-size:22px;font-weight:900;color:${chgColor};font-family:Space Grotesk">${chgSign}${fmt(d.change_pct,2)}%</div>
+      <div style="font-size:12px;color:var(--muted)">vs penutupan sebelumnya</div>
+    </div>
+    ${factorsHtml}
+    ${newsHtml}
+    <p class="audit-note" style="margin-top:14px">Semua faktor di atas adalah korelasi waktu (kebetulan terjadi bersamaan hari ini), BUKAN bukti sebab-akibat. Kalau ada berita terkait, itu ditampilkan terpisah dari kondisi teknikal -- bukan klaim "berita ini yang menyebabkan harga bergerak".</p>
+  </div>`;
+}
+
 async function loadInsight(kode,containerId,btnId,isMarket){
   const box=$('#'+containerId); if(!box)return;
   const btn=$('#'+btnId); if(btn)btn.remove();

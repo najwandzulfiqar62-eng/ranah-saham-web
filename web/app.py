@@ -2160,6 +2160,130 @@ async def patternscan(kode: str):
     return _py(detect_patterns(df, kode))
 
 
+@app.get("/api/whymove/{kode}")
+async def whymove(kode: str):
+    """'Kenapa saham ini naik/turun hari ini' -- merangkai beberapa
+    sinyal yang SUDAH ada & teruji (volume hari ini, proxy tekanan
+    beli/jual, momentum yang baru terpicu, level harga yang baru
+    ditembus, berita terbaru yang menyebut saham ini) jadi satu ringkasan
+    tentang HARI INI spesifik -- BUKAN modul baru dari nol.
+
+    PRINSIP JUJUR (sama seperti core/news_signal.py): SEMUA faktor di
+    sini adalah KORELASI WAKTU (kebetulan terjadi di hari yang sama),
+    BUKAN klaim sebab-akibat. Kalau ada berita DAN harga bergerak di hari
+    yang sama, itu ditampilkan BERSAMPINGAN sebagai dua fakta terpisah --
+    TIDAK PERNAH diklaim "berita X menyebabkan harga naik", karena itu
+    tidak pernah bisa dibuktikan hanya dari data harga+berita."""
+    ticker = _resolve_ticker(kode)
+    try:
+        df = await _clean(ticker)
+    except Exception:
+        raise HTTPException(502, "Gagal mengambil data harga.")
+    if df is None or len(df) < 51:
+        raise HTTPException(404, "Data tidak cukup.")
+
+    price_now = float(df["Close"].iloc[-1])
+    price_prev = float(df["Close"].iloc[-2])
+    change_pct = round((price_now / price_prev - 1) * 100, 2)
+
+    from core.volume_patterns import detect_volume_spikes, calculate_ad_line
+    from core.screening_pro import detect_patterns
+    from core.indicators import calculate_support_resistance_deep
+
+    factors = []
+
+    # 1. Volume HARI INI (lookback_days=1 -> baris terakhir df persis)
+    try:
+        vs = detect_volume_spikes(df, lookback_days=1)
+        spike = vs["spikes"][0] if vs["spikes"] else None
+        if spike:
+            factors.append({
+                "kategori": "Volume",
+                "teks": f"Volume hari ini {spike['vol_ratio']:.1f}x rata-rata 20 hari -- {spike['arah']}",
+            })
+        else:
+            factors.append({
+                "kategori": "Volume",
+                "teks": "Volume hari ini tidak jauh berbeda dari rata-rata 20 hari (tidak ada lonjakan).",
+            })
+    except Exception:
+        pass
+
+    # 2. Proxy tekanan beli/jual HARI INI (CLV -- posisi close dalam
+    # rentang high-low candle terakhir, bagian dari Chaikin A/D Line)
+    try:
+        ad = calculate_ad_line(df)
+        if ad:
+            factors.append({
+                "kategori": "Tekanan Beli/Jual",
+                "teks": f"Penutupan hari ini {ad['clv_label']} (posisi close dalam rentang high-low hari ini).",
+            })
+    except Exception:
+        pass
+
+    # 3. Momentum yang BARU terpicu HARI INI -- HANYA MACD Histogram
+    # Cross (pola struktur seperti Double Top/HH-LL SENGAJA tidak
+    # dimasukkan di sini karena itu kondisi yang sudah berlangsung lama,
+    # bukan sesuatu yang "terjadi hari ini" spesifik).
+    try:
+        pattern_result = detect_patterns(df, kode)
+        macd_today = next(
+            (p for p in pattern_result.get("patterns", []) if p["nama"].startswith("MACD HISTOGRAM")), None
+        )
+        if macd_today:
+            factors.append({"kategori": "Momentum", "teks": macd_today["desc"]})
+    except Exception:
+        pass
+
+    # 4. Level harga yang BARU ditembus hari ini -- S/R dihitung dari data
+    # SEBELUM hari ini (df tanpa baris terakhir), supaya perbandingan
+    # "tembus hari ini" tidak bocor pakai harga hari ini sendiri.
+    try:
+        df_before_today = df.iloc[:-1]
+        if len(df_before_today) >= 50:
+            sr = calculate_support_resistance_deep(df_before_today)
+            if price_now > sr["R1"] and price_prev <= sr["R1"]:
+                factors.append({
+                    "kategori": "Level Harga",
+                    "teks": f"Harga menembus ke atas resistance R1 (Rp{sr['R1']:,.0f}) hari ini.",
+                })
+            elif price_now < sr["S1"] and price_prev >= sr["S1"]:
+                factors.append({
+                    "kategori": "Level Harga",
+                    "teks": f"Harga menembus ke bawah support S1 (Rp{sr['S1']:,.0f}) hari ini.",
+                })
+    except Exception:
+        pass
+
+    # 5. Berita TERBARU yang menyebut saham ini -- ditampilkan APA
+    # ADANYA dengan tanggal terbit asli, BUKAN difilter ketat ke "2 hari
+    # terakhir" (saham yang jarang diliput bisa jadi tidak akan pernah
+    # muncul kalau filternya terlalu ketat) -- user sendiri yang menilai
+    # relevansi dari tanggalnya.
+    news_items = []
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from core.news import fetch_news, _parse_pub_date
+        raw_news = await fetch_news(keyword=kode, limit=3)
+        if raw_news:
+            now_utc = _dt.now(_tz.utc)
+            for n in raw_news:
+                parsed = _parse_pub_date(n.get("pub_date", ""))
+                is_recent = bool(parsed and (now_utc - parsed).days <= 2)
+                news_items.append({
+                    "title": n.get("title"), "source": n.get("source"),
+                    "link": n.get("link"), "pub_date": n.get("pub_date"),
+                    "is_recent": is_recent,
+                })
+    except Exception as e:
+        print(f"⚠️ Gagal fetch berita utk whymove {kode}: {type(e).__name__}: {e}")
+
+    return _py({
+        "kode": kode, "price": price_now, "change_pct": change_pct,
+        "factors": factors, "news": news_items,
+    })
+
+
 @app.get("/api/backtestpro/{kode}")
 async def backtestpro(kode: str, mode: str = "momentum"):
     from core.screening_pro import run_backtestpro
