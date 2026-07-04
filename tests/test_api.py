@@ -1608,29 +1608,17 @@ def test_averagedown_suggestions_include_verdict(client):
         assert "verdict" in s
 
 
-def test_fundamental_score_maps_upside_to_0_100_scale():
-    """Regresi #1 (permintaan user): valuasi fundamental HARUS punya skor
-    0-100 yang konsisten dgn skor lain (_liquidity_score, _rr_score) --
-    None (data gagal diambil) netral 50, BUKAN nol/dihukum."""
-    import web.app as app_module
-
-    assert app_module._fundamental_score(None) == 50.0
-    assert app_module._fundamental_score(0) == 50.0
-    assert app_module._fundamental_score(30) == 80.0  # undervalued 30% -> skor tinggi
-    assert app_module._fundamental_score(-30) == 20.0  # overvalued 30% -> skor rendah
-    # Dibatasi 0-100, tidak boleh keluar rentang walau upside ekstrem
-    assert app_module._fundamental_score(1000) == 100.0
-    assert app_module._fundamental_score(-1000) == 0.0
-
-
-def test_confidence_weights_include_fundamental_and_sum_to_one():
-    """Regresi #1: bobot Skor Keyakinan sekarang HARUS menyertakan
-    'fund' (fundamental), dan totalnya tetap 100% -- bukan ditambahkan di
-    atas 100% yang bikin skor gabungan lebih dari 100."""
+def test_confidence_weights_exclude_fundamental_and_sum_to_one():
+    """Regresi koreksi user: fundamental (& kepemilikan) SENGAJA TIDAK
+    ikut bobot Skor Keyakinan (percobaan awal sempat menjadikannya bobot
+    tetap, tapi user koreksi -- saham IDX kadang naik/turun tidak terlalu
+    dipengaruhi fundamental). Bobot 5 komponen teknikal asli harus tetap
+    berjumlah 100%."""
     import web.app as app_module
 
     weights, _ = app_module._confidence_weights()
-    assert "fund" in weights
+    assert "fund" not in weights
+    assert set(weights.keys()) == {"ai", "mv", "cf", "liq", "rr"}
     assert sum(weights.values()) == pytest.approx(1.0)
 
 
@@ -1697,19 +1685,19 @@ def test_confidence_reasons_flags_kepemilikan_change():
     assert not any("kepemilikan" in w for w in warnings_none)
 
 
-def test_confidence_endpoint_includes_fundamental_fields(client):
+def test_confidence_endpoint_includes_fundamental_fields_but_not_in_weights(client):
     """Regresi #1 end-to-end: /api/confidence harus menyertakan field
-    fundamental (fund_score dipakai internal utk skor, fund_verdict utk
-    reasons/warnings) dan field kepemilikan_change_pct di tiap item, serta
-    bobot 'fund' di response.weights."""
+    fund_verdict/fund_upside_pct/kepemilikan_change_pct (dipakai reasons/
+    warnings) di tiap item, TAPI 'fund' TIDAK BOLEH ada di response.weights
+    -- fundamental & kepemilikan kontekstual saja, bukan komponen skor."""
     r = client.get("/api/confidence")
     assert r.status_code == 200
     data = r.json()
     it = data["items"][0]
-    assert "fund_score" in it
     assert "fund_verdict" in it
+    assert "fund_upside_pct" in it
     assert "kepemilikan_change_pct" in it
-    assert "fund" in data["weights"]
+    assert "fund" not in data["weights"]
 
 
 def test_fundamental_median_upside_uses_median_not_mean():

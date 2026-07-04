@@ -1146,7 +1146,7 @@ async def screenerpro():
 # konsisten (lihat catatan jujur di core/fundamental.py), jadi market cap
 # (dari shares x harga, sudah ada lokal tanpa network call) dipakai
 # sebagai KONTEKS tampilan saja, bukan komponen skor.
-_CONFIDENCE_DEFAULT_WEIGHTS = {"ai": 0.20, "mv": 0.20, "cf": 0.15, "liq": 0.15, "rr": 0.15, "fund": 0.15}
+_CONFIDENCE_DEFAULT_WEIGHTS = {"ai": 0.25, "mv": 0.20, "cf": 0.15, "liq": 0.20, "rr": 0.20}
 
 
 def _confluence_norm(bullish: int, bearish: int) -> float:
@@ -1173,23 +1173,6 @@ def _rr_score(rr: float | None) -> float:
     if rr >= 0.5:
         return 35.0
     return 15.0
-
-
-def _fundamental_score(upside_pct: float | None) -> float:
-    """Skor 0-100 dari upside_pct (median beberapa metode valuasi vs harga
-    sekarang, dari _valuation() -- lihat definisi di bawah). None (fetch
-    fundamental gagal/data tidak cukup, umum utk saham yang datanya kurang
-    lengkap di Yahoo Finance) dianggap netral (50), BUKAN nol -- pola yang
-    SAMA dengan _rr_score, supaya saham dengan data fundamental kebetulan
-    tidak lengkap tidak dihukum padahal indikator lain bagus.
-
-    Skala LINEAR sederhana (bukan skala baru yang rumit): upside 0% (harga
-    persis di estimasi wajar) -> skor 50 (netral); tiap 1% upside/downside
-    menggeser skor 1 poin, dibatasi 0-100 -- undervalued 30% jadi skor 80,
-    overvalued 30% jadi skor 20."""
-    if upside_pct is None:
-        return 50.0
-    return round(max(0.0, min(100.0, 50 + upside_pct)), 1)
 
 
 def _fundamental_median_upside_pct(val: dict) -> float | None:
@@ -1485,16 +1468,21 @@ async def _confidence_raw_signals() -> list[dict]:
         except Exception:
             continue
 
-    # ===== FUNDAMENTAL (permintaan user: gabungkan valuasi fundamental
-    # ke Skor Keyakinan, bukan cuma teknikal) =====
+    # ===== FUNDAMENTAL (permintaan user) =====
+    # SENGAJA BUKAN komponen skor berbobot (percobaan awal sempat membuat
+    # ini bobot tetap, tapi user koreksi: saham IDX kadang naik/turun
+    # TIDAK terlalu dipengaruhi fundamental -- menjadikannya bobot tetap
+    # bisa menyeret skor saham yang teknikalnya kuat tapi kebetulan
+    # "Overvalued" secara valuasi, padahal itu belum tentu relevan dgn
+    # pergerakan harga jangka pendek di IDX). Diperlakukan SAMA seperti
+    # proxy bandar & kepemilikan di bawah: kontekstual di reasons/warnings
+    # kalau valuasinya jelas Undervalued/Overvalued, TIDAK memengaruhi
+    # confidence_score sama sekali.
     # Fetch SEMUA saham SEKALIGUS secara concurrent (bukan di dalam loop
     # utama di atas, yang sengaja sinkron murni tanpa I/O per-iterasi) --
     # supaya waktu tunggu total tidak bertambah linear per saham.
     # fetch_fundamental() sendiri sudah cache 7 hari (lihat core/
-    # fundamental.py), jadi setelah run pertama nyaris instan. Kegagalan
-    # PER SAHAM (network/data tidak lengkap) fail-open ke skor netral 50
-    # (_fundamental_score(None)) -- tidak menghukum saham yang datanya
-    # kebetulan tidak lengkap di Yahoo Finance.
+    # fundamental.py), jadi setelah run pertama nyaris instan.
     try:
         from core.fundamental import fetch_fundamental
         fund_results = await asyncio.gather(
@@ -1503,19 +1491,15 @@ async def _confidence_raw_signals() -> list[dict]:
         )
         for it, fund in zip(items, fund_results):
             if isinstance(fund, Exception) or not fund:
-                it["fund_score"] = _fundamental_score(None)
                 it["fund_verdict"] = None
                 it["fund_upside_pct"] = None
                 continue
             val = _valuation(fund)
-            upside = _fundamental_median_upside_pct(val)
-            it["fund_score"] = _fundamental_score(upside)
             it["fund_verdict"] = val.get("verdict")
-            it["fund_upside_pct"] = upside
+            it["fund_upside_pct"] = _fundamental_median_upside_pct(val)
     except Exception as e:
         print(f"⚠️ Gagal fetch fundamental utk Top Pick: {type(e).__name__}: {e}")
         for it in items:
-            it.setdefault("fund_score", _fundamental_score(None))
             it.setdefault("fund_verdict", None)
             it.setdefault("fund_upside_pct", None)
 
@@ -1556,8 +1540,12 @@ async def _confidence_raw_signals() -> list[dict]:
 
 def _confidence_weights() -> tuple[dict, str]:
     """Bobot gabungan untuk Skor Keyakinan (AI Score + Minervini +
-    Confluence + Likuiditas + Risk/Reward + Fundamental). Versi web
-    memakai bobot tetap (tanpa personalisasi per-akun)."""
+    Confluence + Likuiditas + Risk/Reward). Versi web memakai bobot tetap
+    (tanpa personalisasi per-akun). Fundamental & kepemilikan SENGAJA
+    tidak ikut bobot -- lihat catatan lengkap di _confidence_raw_signals
+    (permintaan user: saham IDX kadang naik/turun tidak terlalu
+    dipengaruhi fundamental, jadi diperlakukan kontekstual di reasons/
+    warnings saja, bukan komponen skor)."""
     return dict(_CONFIDENCE_DEFAULT_WEIGHTS), "default"
 
 
@@ -1582,10 +1570,8 @@ async def confidence():
         cf_norm = _confluence_norm(it["confluence_bullish"], it["confluence_bearish"])
         liq_sc = _liquidity_score(it["likuiditas"])
         rr_sc = _rr_score(it.get("rr_ratio"))
-        fund_sc = it.get("fund_score", 50.0)
         score = (it["ai_score"] * weights["ai"] + it["minervini_score"] * weights["mv"]
-                 + cf_norm * weights["cf"] + liq_sc * weights["liq"] + rr_sc * weights["rr"]
-                 + fund_sc * weights["fund"])
+                 + cf_norm * weights["cf"] + liq_sc * weights["liq"] + rr_sc * weights["rr"])
         score, capped = _apply_liquidity_cap(score, it["likuiditas"])
         reasons, warnings = _confidence_reasons(it)
         items.append({

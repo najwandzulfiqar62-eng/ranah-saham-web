@@ -2750,7 +2750,7 @@ async function loadTopPick(){
     <td>Rp${fmt(r.harga)}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
     ${regimeBanner}
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}% · Likuiditas ${fmt(d.weights.liq*100,0)}% · Risk/Reward ${fmt(d.weights.rr*100,0)}% · Fundamental ${fmt((d.weights.fund||0)*100,0)}%. Saham kurang/tidak likuid (⚠) skornya DIBATASI, bukan disembunyikan. Kepemilikan pemegang saham substansial (X-15) muncul di alasan/warning kalau ada filing baru, bukan bagian bobot (event terlalu jarang). Tap baris untuk analisis.</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}% · Likuiditas ${fmt(d.weights.liq*100,0)}% · Risk/Reward ${fmt(d.weights.rr*100,0)}%. Saham kurang/tidak likuid (⚠) skornya DIBATASI, bukan disembunyikan. Fundamental & kepemilikan pemegang saham substansial (X-15) muncul di alasan/warning kalau relevan, TIDAK memengaruhi skor (saham IDX kadang naik/turun tidak terlalu dipengaruhi fundamental). Tap baris untuk analisis.</p>
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor Keyakinan</th><th class="hide-xs">AI Score</th><th class="hide-xs">Sektor</th><th>Likuiditas</th><th>RR</th><th>Harga</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }
