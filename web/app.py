@@ -1146,7 +1146,7 @@ async def screenerpro():
 # konsisten (lihat catatan jujur di core/fundamental.py), jadi market cap
 # (dari shares x harga, sudah ada lokal tanpa network call) dipakai
 # sebagai KONTEKS tampilan saja, bukan komponen skor.
-_CONFIDENCE_DEFAULT_WEIGHTS = {"ai": 0.25, "mv": 0.20, "cf": 0.15, "liq": 0.20, "rr": 0.20}
+_CONFIDENCE_DEFAULT_WEIGHTS = {"ai": 0.20, "mv": 0.20, "cf": 0.15, "liq": 0.15, "rr": 0.15, "fund": 0.15}
 
 
 def _confluence_norm(bullish: int, bearish: int) -> float:
@@ -1175,6 +1175,45 @@ def _rr_score(rr: float | None) -> float:
     return 15.0
 
 
+def _fundamental_score(upside_pct: float | None) -> float:
+    """Skor 0-100 dari upside_pct (median beberapa metode valuasi vs harga
+    sekarang, dari _valuation() -- lihat definisi di bawah). None (fetch
+    fundamental gagal/data tidak cukup, umum utk saham yang datanya kurang
+    lengkap di Yahoo Finance) dianggap netral (50), BUKAN nol -- pola yang
+    SAMA dengan _rr_score, supaya saham dengan data fundamental kebetulan
+    tidak lengkap tidak dihukum padahal indikator lain bagus.
+
+    Skala LINEAR sederhana (bukan skala baru yang rumit): upside 0% (harga
+    persis di estimasi wajar) -> skor 50 (netral); tiap 1% upside/downside
+    menggeser skor 1 poin, dibatasi 0-100 -- undervalued 30% jadi skor 80,
+    overvalued 30% jadi skor 20."""
+    if upside_pct is None:
+        return 50.0
+    return round(max(0.0, min(100.0, 50 + upside_pct)), 1)
+
+
+def _fundamental_median_upside_pct(val: dict) -> float | None:
+    """Upside vs MEDIAN dari semua metode valuasi -- BUKAN val['upside_pct']
+    (yang dari MEAN/'mid'). Median jauh lebih tahan outlier: ditemukan nyata
+    saat live-check GGRM, metode 'PBV x 2' menghasilkan Rp66.635 (4x lebih
+    tinggi dari metode kedua tertinggi) krn BVPS GGRM memang tinggi -- itu
+    BUKAN data korup (lolos guard _add() di _valuation()), tapi tetap
+    menarik MEAN jauh ke atas (upside 70%) dibanding median (upside 42%).
+    Dipakai KHUSUS utk skor Top Pick di sini -- SENGAJA TIDAK mengubah
+    val['mid']/val['upside_pct'] yang sudah dipakai panel Fundamental &
+    Valuasi di halaman Analisis (frontend di sana malah sudah pakai
+    median-nya sendiri utk 'Konsensus Fair Value', konsisten dgn pilihan
+    yang sama di sini)."""
+    methods = val.get("methods") or {}
+    price = val.get("price")
+    vals = sorted(v for v in methods.values() if v and v > 0)
+    if not vals or not price:
+        return None
+    n = len(vals)
+    median = (vals[n // 2 - 1] + vals[n // 2]) / 2 if n % 2 == 0 else vals[n // 2]
+    return round((median / price - 1) * 100, 1)
+
+
 def _apply_liquidity_cap(score: float, likuiditas: str) -> tuple[float, bool]:
     """Batasi (bukan hilangkan) skor gabungan kalau likuiditas buruk --
     lihat catatan di atas _CONFIDENCE_DEFAULT_WEIGHTS. Returns (skor akhir,
@@ -1184,6 +1223,21 @@ def _apply_liquidity_cap(score: float, likuiditas: str) -> tuple[float, bool]:
     if likuiditas == "Kurang Likuid" and score > 55:
         return 55.0, True
     return score, False
+
+
+def _display_pct_capped(pct: float, cap: float = 100.0) -> str:
+    """Format persentase utk teks reason/warning, dibatasi ke +-cap%.
+    Ditemukan nyata (MNCN): metode 'PER x 15' bisa menghasilkan upside
+    600%+ kalau PE riil suatu saham jauh di bawah asumsi 'PE wajar 15x' --
+    angka itu SECARA MATEMATIS benar dari formula yang ada, tapi
+    menampilkannya apa adanya ('+612% upside') kedengaran bombastis,
+    melanggar prinsip project ini sendiri (tidak ada klaim return
+    berlebihan). Dibatasi TAPI TIDAK DISEMBUNYIKAN -- ditandai '>=100%'
+    (bukan dibulatkan jadi angka pasti '100%') supaya tetap jujur bahwa
+    aslinya lebih ekstrem dari yang ditampilkan."""
+    if abs(pct) >= cap:
+        return f"{'+' if pct >= 0 else '-'}>={cap:.0f}%"
+    return f"{pct:+.0f}%"
 
 
 def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
@@ -1209,6 +1263,16 @@ def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
     pattern_label = "Sinyal momentum" if (it.get("pattern") or "").startswith("MACD") else "Pola chart"
     if it.get("pattern") and it.get("pattern_bias") == "BULLISH":
         reasons.append(f"{pattern_label}: {it['pattern']} (bullish)")
+    fund_verdict = it.get("fund_verdict")
+    fund_upside = it.get("fund_upside_pct")
+    if fund_verdict == "Undervalued":
+        reasons.append(
+            f"Fundamental: Undervalued vs estimasi wajar ({_display_pct_capped(fund_upside)} upside)"
+            if fund_upside is not None else "Fundamental: Undervalued vs estimasi wajar"
+        )
+    kepemilikan = it.get("kepemilikan_change_pct")
+    if kepemilikan is not None and kepemilikan > 0:
+        reasons.append(f"Pemegang saham substansial menambah kepemilikan (+{kepemilikan:.2f}% belakangan ini)")
 
     if it["likuiditas"] in ("Tidak Likuid", "Kurang Likuid"):
         warnings.append(f"Likuiditas {it['likuiditas']} -- eksekusi & spread bisa jadi kendala nyata")
@@ -1218,6 +1282,13 @@ def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
         warnings.append(f"Proxy volume: {bandar['label']} -- volume belum mengonfirmasi penguatan")
     if it.get("pattern") and it.get("pattern_bias") == "BEARISH":
         warnings.append(f"{pattern_label}: {it['pattern']} (bearish) -- perlu diwaspadai meski skor gabungan tinggi")
+    if fund_verdict == "Overvalued":
+        warnings.append(
+            f"Fundamental: Overvalued vs estimasi wajar ({_display_pct_capped(fund_upside)}) -- valuasi tergolong mahal"
+            if fund_upside is not None else "Fundamental: Overvalued vs estimasi wajar"
+        )
+    if kepemilikan is not None and kepemilikan < 0:
+        warnings.append(f"Pemegang saham substansial mengurangi kepemilikan ({kepemilikan:.2f}% belakangan ini)")
 
     if not reasons:
         reasons.append("Skor gabungan cukup untuk masuk daftar, tanpa satu faktor yang menonjol.")
@@ -1414,14 +1485,79 @@ async def _confidence_raw_signals() -> list[dict]:
         except Exception:
             continue
 
+    # ===== FUNDAMENTAL (permintaan user: gabungkan valuasi fundamental
+    # ke Skor Keyakinan, bukan cuma teknikal) =====
+    # Fetch SEMUA saham SEKALIGUS secara concurrent (bukan di dalam loop
+    # utama di atas, yang sengaja sinkron murni tanpa I/O per-iterasi) --
+    # supaya waktu tunggu total tidak bertambah linear per saham.
+    # fetch_fundamental() sendiri sudah cache 7 hari (lihat core/
+    # fundamental.py), jadi setelah run pertama nyaris instan. Kegagalan
+    # PER SAHAM (network/data tidak lengkap) fail-open ke skor netral 50
+    # (_fundamental_score(None)) -- tidak menghukum saham yang datanya
+    # kebetulan tidak lengkap di Yahoo Finance.
+    try:
+        from core.fundamental import fetch_fundamental
+        fund_results = await asyncio.gather(
+            *[fetch_fundamental(it["kode"] + ".JK") for it in items],
+            return_exceptions=True,
+        )
+        for it, fund in zip(items, fund_results):
+            if isinstance(fund, Exception) or not fund:
+                it["fund_score"] = _fundamental_score(None)
+                it["fund_verdict"] = None
+                it["fund_upside_pct"] = None
+                continue
+            val = _valuation(fund)
+            upside = _fundamental_median_upside_pct(val)
+            it["fund_score"] = _fundamental_score(upside)
+            it["fund_verdict"] = val.get("verdict")
+            it["fund_upside_pct"] = upside
+    except Exception as e:
+        print(f"⚠️ Gagal fetch fundamental utk Top Pick: {type(e).__name__}: {e}")
+        for it in items:
+            it.setdefault("fund_score", _fundamental_score(None))
+            it.setdefault("fund_verdict", None)
+            it.setdefault("fund_upside_pct", None)
+
+    # ===== KEPEMILIKAN (X-15, permintaan user) =====
+    # SENGAJA BUKAN komponen skor berbobot (beda dengan fundamental di
+    # atas) -- filing kepemilikan substansial adalah EVENT LANGKA, mayoritas
+    # dari 45 saham universe TIDAK akan punya filing baru di hari mana pun
+    # (dikonfirmasi lewat pengecekan manual sebelum implementasi: dari 7
+    # hari filing, cuma segelintir yang kena saham di universe ini).
+    # Memberi bobot tetap ke sinyal sesparse ini akan membuat sebagian
+    # besar saham dapat nilai "netral" secara default yang mengencerkan
+    # komponen lain, tanpa menambah daya beda nyata. Jadi diperlakukan SAMA
+    # seperti proxy bandar: kontekstual di reasons/warnings kalau KEBETULAN
+    # ada filing, bukan bagian rumus. Dibatasi 4 hari terakhir + timeout,
+    # supaya kalau IDX lambat/down, Top Pick tetap selesai dihitung.
+    try:
+        x15_batches = await asyncio.wait_for(
+            asyncio.gather(*[_fetch_x15_today(days_back=d) for d in range(4)], return_exceptions=True),
+            timeout=25.0,
+        )
+        x15_by_kode: dict[str, float] = {}
+        for batch in x15_batches:
+            if isinstance(batch, Exception):
+                continue
+            substansial = [x for x in batch if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+            for x in substansial:
+                x15_by_kode[x["kode"]] = x15_by_kode.get(x["kode"], 0.0) + x["perubahan"]
+        for it in items:
+            it["kepemilikan_change_pct"] = round(x15_by_kode[it["kode"]], 3) if it["kode"] in x15_by_kode else None
+    except Exception as e:
+        print(f"⚠️ Gagal fetch X-15 utk Top Pick: {type(e).__name__}: {e}")
+        for it in items:
+            it.setdefault("kepemilikan_change_pct", None)
+
     _cache_set("confidence:raw", items)
     return items
 
 
 def _confidence_weights() -> tuple[dict, str]:
     """Bobot gabungan untuk Skor Keyakinan (AI Score + Minervini +
-    Confluence + Likuiditas + Risk/Reward). Versi web memakai bobot tetap
-    (tanpa personalisasi per-akun)."""
+    Confluence + Likuiditas + Risk/Reward + Fundamental). Versi web
+    memakai bobot tetap (tanpa personalisasi per-akun)."""
     return dict(_CONFIDENCE_DEFAULT_WEIGHTS), "default"
 
 
@@ -1446,8 +1582,10 @@ async def confidence():
         cf_norm = _confluence_norm(it["confluence_bullish"], it["confluence_bearish"])
         liq_sc = _liquidity_score(it["likuiditas"])
         rr_sc = _rr_score(it.get("rr_ratio"))
+        fund_sc = it.get("fund_score", 50.0)
         score = (it["ai_score"] * weights["ai"] + it["minervini_score"] * weights["mv"]
-                 + cf_norm * weights["cf"] + liq_sc * weights["liq"] + rr_sc * weights["rr"])
+                 + cf_norm * weights["cf"] + liq_sc * weights["liq"] + rr_sc * weights["rr"]
+                 + fund_sc * weights["fund"])
         score, capped = _apply_liquidity_cap(score, it["likuiditas"])
         reasons, warnings = _confidence_reasons(it)
         items.append({

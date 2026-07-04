@@ -1606,3 +1606,130 @@ def test_averagedown_suggestions_include_verdict(client):
     d = r.json()
     for s in d["suggestions"]:
         assert "verdict" in s
+
+
+def test_fundamental_score_maps_upside_to_0_100_scale():
+    """Regresi #1 (permintaan user): valuasi fundamental HARUS punya skor
+    0-100 yang konsisten dgn skor lain (_liquidity_score, _rr_score) --
+    None (data gagal diambil) netral 50, BUKAN nol/dihukum."""
+    import web.app as app_module
+
+    assert app_module._fundamental_score(None) == 50.0
+    assert app_module._fundamental_score(0) == 50.0
+    assert app_module._fundamental_score(30) == 80.0  # undervalued 30% -> skor tinggi
+    assert app_module._fundamental_score(-30) == 20.0  # overvalued 30% -> skor rendah
+    # Dibatasi 0-100, tidak boleh keluar rentang walau upside ekstrem
+    assert app_module._fundamental_score(1000) == 100.0
+    assert app_module._fundamental_score(-1000) == 0.0
+
+
+def test_confidence_weights_include_fundamental_and_sum_to_one():
+    """Regresi #1: bobot Skor Keyakinan sekarang HARUS menyertakan
+    'fund' (fundamental), dan totalnya tetap 100% -- bukan ditambahkan di
+    atas 100% yang bikin skor gabungan lebih dari 100."""
+    import web.app as app_module
+
+    weights, _ = app_module._confidence_weights()
+    assert "fund" in weights
+    assert sum(weights.values()) == pytest.approx(1.0)
+
+
+def test_confidence_reasons_flags_fundamental_undervalued_and_overvalued():
+    """Regresi #1: valuasi fundamental (Undervalued/Overvalued) harus
+    tercermin di reasons/warnings Top Pick, konsisten dengan pola
+    proxy bandar & pola chart yang sudah ada."""
+    import web.app as app_module
+
+    it_under = {
+        "ai_score": 50, "minervini_criteria_met": 4, "confluence_bullish": 2, "confluence_bearish": 2,
+        "bandar": None, "rr_ratio": 1.2, "likuiditas": "Likuid",
+        "fund_verdict": "Undervalued", "fund_upside_pct": 25.0,
+    }
+    reasons, _ = app_module._confidence_reasons(it_under)
+    assert any("Undervalued" in r and "25" in r for r in reasons)
+
+    it_over = {**it_under, "fund_verdict": "Overvalued", "fund_upside_pct": -25.0}
+    _, warnings = app_module._confidence_reasons(it_over)
+    assert any("Overvalued" in w for w in warnings)
+
+
+def test_confidence_reasons_caps_bombastic_fundamental_upside():
+    """Regresi bug NYATA ditemukan saat live-check MNCN: metode 'PER x 15'
+    bisa menghasilkan upside 600%+ kalau PE riil jauh di bawah asumsi 'PE
+    wajar 15x' -- matematis valid dari formula yang ada, tapi menampilkan
+    '+612% upside' apa adanya melanggar prinsip project ini sendiri
+    (dilarang klaim return berlebihan/bombastis). Reason text HARUS
+    dibatasi ke '>=100%', BUKAN angka mentahnya, TAPI juga BUKAN
+    disembunyikan/dibulatkan seolah cuma 100% pas."""
+    import web.app as app_module
+
+    it = {
+        "ai_score": 50, "minervini_criteria_met": 4, "confluence_bullish": 2, "confluence_bearish": 2,
+        "bandar": None, "rr_ratio": 1.2, "likuiditas": "Likuid",
+        "fund_verdict": "Undervalued", "fund_upside_pct": 612.2,
+    }
+    reasons, _ = app_module._confidence_reasons(it)
+    text = next(r for r in reasons if "Undervalued" in r)
+    assert "612" not in text  # angka mentah tidak boleh tampil apa adanya
+    assert ">=100%" in text  # tapi jujur ditandai lebih ekstrem dari 100%
+
+
+def test_confidence_reasons_flags_kepemilikan_change():
+    """Regresi #1 (kepemilikan/X-15): perubahan kepemilikan pemegang saham
+    substansial harus jadi reason (nambah) atau warning (kurangi) -- TIDAK
+    ADA reason/warning kalau kepemilikan_change_pct None (tidak ada filing,
+    kasus MAYORITAS saham di hari mana pun -- tidak boleh dipaksa netral
+    jadi 'menambah 0%', harus benar-benar tidak disebut sama sekali)."""
+    import web.app as app_module
+
+    base = {
+        "ai_score": 50, "minervini_criteria_met": 4, "confluence_bullish": 2, "confluence_bearish": 2,
+        "bandar": None, "rr_ratio": 1.2, "likuiditas": "Likuid",
+    }
+    reasons_add, warnings_add = app_module._confidence_reasons({**base, "kepemilikan_change_pct": 0.5})
+    assert any("menambah kepemilikan" in r for r in reasons_add)
+
+    reasons_sell, warnings_sell = app_module._confidence_reasons({**base, "kepemilikan_change_pct": -0.5})
+    assert any("mengurangi kepemilikan" in w for w in warnings_sell)
+
+    reasons_none, warnings_none = app_module._confidence_reasons({**base, "kepemilikan_change_pct": None})
+    assert not any("kepemilikan" in r for r in reasons_none)
+    assert not any("kepemilikan" in w for w in warnings_none)
+
+
+def test_confidence_endpoint_includes_fundamental_fields(client):
+    """Regresi #1 end-to-end: /api/confidence harus menyertakan field
+    fundamental (fund_score dipakai internal utk skor, fund_verdict utk
+    reasons/warnings) dan field kepemilikan_change_pct di tiap item, serta
+    bobot 'fund' di response.weights."""
+    r = client.get("/api/confidence")
+    assert r.status_code == 200
+    data = r.json()
+    it = data["items"][0]
+    assert "fund_score" in it
+    assert "fund_verdict" in it
+    assert "kepemilikan_change_pct" in it
+    assert "fund" in data["weights"]
+
+
+def test_fundamental_median_upside_uses_median_not_mean():
+    """Regresi bug NYATA ditemukan saat live-check GGRM: metode 'PBV x 2'
+    menghasilkan estimasi jauh lebih tinggi dari metode lain (BVPS GGRM
+    memang tinggi, bukan data korup -- lolos guard _valuation()), yang
+    menarik MEAN ('mid'/'upside_pct' bawaan _valuation()) jauh ke atas
+    dibanding metode lain. Skor Top Pick HARUS pakai median (tahan
+    outlier), bukan mean, supaya 1 metode ekstrem tidak mendominasi skor
+    gabungan padahal metode lain sepakat lebih moderat."""
+    import web.app as app_module
+
+    # 5 metode: 4 sepakat di ~1100-1300, 1 outlier ekstrem di 5000
+    val = {
+        "methods": {"a": 1100.0, "b": 1200.0, "c": 1250.0, "d": 1300.0, "e": 5000.0},
+        "price": 1000.0,
+    }
+    median_upside = app_module._fundamental_median_upside_pct(val)
+    mean_upside = ((1100 + 1200 + 1250 + 1300 + 5000) / 5 / 1000 - 1) * 100
+    # Median (dari 1100,1200,1250,1300,5000 -> median=1250) harus JAUH
+    # lebih moderat drpd mean yang diseret outlier 5000.
+    assert median_upside == pytest.approx(25.0)  # (1250/1000-1)*100
+    assert median_upside < mean_upside - 20  # beda signifikan, bukan kebetulan sama

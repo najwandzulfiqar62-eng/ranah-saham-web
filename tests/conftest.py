@@ -115,6 +115,15 @@ def no_network(monkeypatch, fake_df):
 
     monkeypatch.setattr(app_module.yf, "Ticker", _FakeTicker)
     monkeypatch.setattr(app_module, "_redis", _FakeRedis())
+
+    # _fetch_x15_today() scrapes idx.co.id langsung (cloudscraper, bukan
+    # yfinance) utk data kepemilikan X-15 -- TIDAK ada di allowlist mock
+    # yfinance di atas, jadi di-mock TERPISAH supaya tes /api/confidence
+    # (yang sekarang juga fetch X-15) tidak pernah menyentuh jaringan asli.
+    async def _fake_x15(days_back=0):
+        return []
+
+    monkeypatch.setattr(app_module, "_fetch_x15_today", _fake_x15)
     yield
 
 
