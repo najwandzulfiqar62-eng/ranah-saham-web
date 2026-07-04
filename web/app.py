@@ -540,7 +540,12 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     alih-alih menghitung ulang terpisah -- menghindari risiko dua endpoint
     menampilkan angka Ringkasan Cepat yang berbeda untuk saham yang sama."""
     avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
-    ad = calculate_ad_line(df)
+    likuiditas = _liquidity_label(avg_value_20)
+    # is_illiquid diteruskan ke calculate_ad_line supaya sinyal Akumulasi/
+    # Distribusi (Tersembunyi)-nya menurunkan confidence utk saham
+    # transaksi tipis -- CLV di situ lebih rawan digerakkan 1-2 order
+    # doang, bukan pola akumulasi/distribusi yang luas.
+    ad = calculate_ad_line(df, is_illiquid=likuiditas in ("Kurang Likuid", "Tidak Likuid"))
     current_price = ai.get("price") or 0
     # R1/S1 pakai calculate_snr_levels() (core/charts/snr_chart.py), lihat
     # catatan lengkap soal kenapa BUKAN calculate_target_levels() di commit
@@ -550,12 +555,11 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     s1 = snr["s1"]
     potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
     risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
-    likuiditas = _liquidity_label(avg_value_20)
     return {
         "likuiditas": likuiditas,
         "avg_value_20": round(avg_value_20, 0),
         "gaya_trading": _trading_style_label(ai.get("atr_pct") or 0),
-        "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
+        "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"], "confidence": ad["confidence"]},
         "grade": _compute_grade(ai.get("score") or 0, likuiditas),
         "potensi_naik_pct": round(potensi_naik_pct, 2),
         "risiko_turun_pct": round(risiko_turun_pct, 2),
@@ -1364,7 +1368,7 @@ async def _confidence_raw_signals() -> list[dict]:
             risiko_turun_pct = normal["risk_pct"] if normal else None
             rr_ratio = (potensi_naik_pct / risiko_turun_pct
                         if potensi_naik_pct and risiko_turun_pct and risiko_turun_pct > 0 else None)
-            ad = calculate_ad_line(df)
+            ad = calculate_ad_line(df, is_illiquid=likuiditas in ("Kurang Likuid", "Tidak Likuid"))
             market_cap = (shares.get(kode, 0) * price) or None
             # Pattern Analyst: reuse detect_patterns() (core/screening_pro.py,
             # rule-based, sudah ada & teruji lewat "Pattern Scan") -- BUKAN
@@ -1402,7 +1406,7 @@ async def _confidence_raw_signals() -> list[dict]:
                 "potensi_naik_pct": round(potensi_naik_pct, 2) if potensi_naik_pct is not None else None,
                 "risiko_turun_pct": round(risiko_turun_pct, 2) if risiko_turun_pct is not None else None,
                 "rr_ratio": round(rr_ratio, 2) if rr_ratio is not None else None,
-                "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
+                "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"], "confidence": ad["confidence"]},
                 "pattern": pattern_name,
                 "pattern_bias": pattern_bias,
                 "macd_bullish_cross": macd_bullish_cross,

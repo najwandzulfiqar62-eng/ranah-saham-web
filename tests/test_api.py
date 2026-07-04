@@ -111,6 +111,136 @@ def test_ad_line_label_matches_sinyal_direction():
     assert result is not None
     assert result["label"] == "Akumulasi"
     assert "BULLISH" in result["sinyal"].upper()
+    assert result["confidence"] == "tinggi"
+
+
+def test_ad_line_flat_price_is_neutral_not_forced_direction():
+    """Regresi akurasi #2 (permintaan user): harga yang nyaris flat
+    (<1.5% pergerakan tersirat dalam lookback_days) HARUS dilabel Netral,
+    BUKAN dipaksa jadi Akumulasi/Distribusi (apalagi versi 'Tersembunyi')
+    murni dari tanda plus/minus super kecil yang sebenarnya cuma noise."""
+    import numpy as np
+    import pandas as pd
+
+    from core.volume_patterns import calculate_ad_line
+
+    n = 60
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    rng = np.random.default_rng(0)
+    # Harga nyaris flat (naik cuma 0.3% total dalam 60 hari) plus sedikit
+    # noise acak -- tidak boleh dianggap "naik" atau "turun" yang berarti.
+    close = 1000 + np.cumsum(rng.normal(0, 0.3, n))
+    high = close + 2
+    low = close - 2
+    open_ = close
+    df = pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close,
+                        "Volume": np.full(n, 1_000_000.0)}, index=dates)
+    result = calculate_ad_line(df)
+    assert result is not None
+    assert result["label"] == "Netral"
+    assert result["confidence"] == "rendah"
+
+
+def test_ad_line_downgrades_confidence_for_illiquid_stock():
+    """Regresi akurasi #1 (permintaan user): saham yang ditandai kurang/
+    tidak likuid oleh caller harus dapat confidence lebih rendah untuk
+    sinyal yang sama persis -- CLV di saham tipis lebih rawan noise dari
+    1-2 transaksi doang."""
+    import numpy as np
+    import pandas as pd
+
+    from core.volume_patterns import calculate_ad_line
+
+    n = 60
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    trend = np.linspace(1000, 1200, n)
+    low = trend * 0.99
+    high = trend * 1.01
+    close = high * 0.999
+    open_ = low
+    df = pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close,
+                        "Volume": np.full(n, 1_000_000.0)}, index=dates)
+
+    liquid = calculate_ad_line(df, is_illiquid=False)
+    illiquid = calculate_ad_line(df, is_illiquid=True)
+    assert liquid["label"] == illiquid["label"] == "Akumulasi"  # arah sinyal sama
+    assert liquid["confidence"] == "tinggi"
+    assert illiquid["confidence"] == "sedang"  # tapi keyakinannya diturunkan
+    assert "kurang likuid" in illiquid["sinyal"].lower()
+
+
+def test_ad_line_slope_robust_to_single_day_outlier():
+    """Regresi akurasi #3 (permintaan user, inti keluhan 'kadang fake'):
+    arah tren HARUS dari slope regresi atas seluruh window, bukan cuma
+    selisih 2 titik (hari pertama vs hari terakhir) -- 1 hari crash/spike
+    tunggal di ujung window tidak boleh membalik kesimpulan tren yang
+    sebenarnya konsisten selama 19 hari lainnya."""
+    import numpy as np
+    import pandas as pd
+
+    from core.volume_patterns import calculate_ad_line
+
+    n = 60
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    trend = np.linspace(1000, 1200, n)
+    # Uptrend konsisten dengan CLV tinggi (dekat high) SEPANJANG waktu --
+    # kecuali candle TERAKHIR sengaja dibuat crash tajam (close dekat low,
+    # harga jatuh) sebagai outlier tunggal di endpoint.
+    low = trend * 0.99
+    high = trend * 1.01
+    close = high * 0.999
+    open_ = low
+    close[-1] = trend[-1] * 0.85  # crash 1 hari di harga
+    low[-1] = close[-1] * 0.99
+    high[-1] = trend[-1] * 1.01
+    df = pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close,
+                        "Volume": np.full(n, 1_000_000.0)}, index=dates)
+
+    # Selisih endpoint mentah (metode LAMA) akan bilang harga turun (crash
+    # di hari terakhir > kenaikan 20 hari sebelumnya) -- pastikan itu
+    # benar sebagai premis skenario, baru cek fungsi tidak ikut salah arah.
+    price_now = float(df["Close"].iloc[-1])
+    price_20d_ago = float(df["Close"].iloc[-21])
+    assert price_now < price_20d_ago  # premis: metode 2-titik akan bilang "turun"
+
+    result = calculate_ad_line(df)
+    assert result is not None
+    # Fungsi (pakai slope) harus tetap membaca tren 20 hari sebagai NAIK
+    # (mayoritas hari benar-benar uptrend), bukan "turun" gara-gara 1 hari
+    # crash di ujung window.
+    assert result["label"] == "Akumulasi"
+
+
+def test_ad_line_handles_high_equals_low_days_without_crashing():
+    """Regresi bug NYATA ditemukan saat live-check (BBCA/MNCN 500 error
+    setelah nambah np.polyfit): candle dengan High==Low (hari kena ARA/ARB
+    lock, atau suspend -- BIASA terjadi di data IDX sungguhan) bikin
+    range_hl.replace(0, pd.NA) menaikkan dtype Series ke 'object', yang
+    lolos ke float() biasa tapi bikin np.polyfit CRASH (butuh float64
+    murni). Data sintetis di tes lain sengaja/tidak sengaja tidak pernah
+    punya hari High==Low, jadi tidak menangkap bug ini -- tes ini secara
+    eksplisit menyertakan beberapa hari High==Low."""
+    import numpy as np
+    import pandas as pd
+
+    from core.volume_patterns import calculate_ad_line
+
+    n = 60
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    trend = np.linspace(1000, 1200, n)
+    low = trend * 0.99
+    high = trend * 1.01
+    close = high * 0.999
+    open_ = low
+    # Beberapa hari ARA/ARB lock (High == Low == Close, tidak ada rentang
+    # intraday sama sekali) tersebar di window yang dipakai lookback.
+    for i in (-3, -10, -18):
+        high[i] = low[i] = close[i] = trend[i]
+    df = pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close,
+                        "Volume": np.full(n, 1_000_000.0)}, index=dates)
+    result = calculate_ad_line(df)  # TIDAK BOLEH raise
+    assert result is not None
+    assert result["label"] in ("Akumulasi", "Distribusi", "Akumulasi Tersembunyi", "Distribusi Tersembunyi", "Netral")
 
 
 def test_analyze_insufficient_history_404(client, monkeypatch, fake_df):

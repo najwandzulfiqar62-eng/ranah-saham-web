@@ -28,6 +28,7 @@
 # FOREIGN sudah diputuskan SKIP TOTAL sejak awal project (data asing
 # tidak ada sumber gratis resmi dari IDX).
 
+import numpy as np
 import pandas as pd
 
 
@@ -85,7 +86,16 @@ def detect_volume_spikes(df: pd.DataFrame, lookback_days: int = 10, threshold_mu
     }
 
 
-def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
+# Ambang minimum pergerakan harga (%) dalam lookback_days supaya layak
+# disebut "naik"/"turun" sama sekali -- di bawah ini harga dianggap
+# relatif flat, dan label Akumulasi/Distribusi (apalagi versi
+# "Tersembunyi") jadi TIDAK BERMAKNA (tidak ada arah harga jelas untuk
+# dibandingkan). Sebelum ada ambang ini, pergerakan harga 0.1% pun bisa
+# dilabel "naik"/"turun" murni dari tanda plus/minus, padahal itu noise.
+_AD_MIN_PRICE_MOVE_PCT = 1.5
+
+
+def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20, is_illiquid: bool = False) -> dict | None:
     """Chaikin Accumulation/Distribution Line. Formula baku (dikonfirmasi
     dari riset, konsisten di semua sumber -- MarketVolume, LiteFinance,
     investment dictionary, dll):
@@ -99,7 +109,26 @@ def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
     line saat ini, trend (naik/turun dalam lookback_days terakhir), dan
     apakah ada DIVERGENSI dengan harga (harga naik tapi A/D turun =
     sinyal distribusi tersembunyi, atau sebaliknya -- ini penggunaan
-    KLASIK indikator ini, bukan interpretasi baru)."""
+    KLASIK indikator ini, bukan interpretasi baru).
+
+    is_illiquid (opsional, dari caller yang sudah tahu klasifikasi
+    likuiditas saham ini -- lihat _liquidity_label di web/app.py): kalau
+    True, confidence sinyal diturunkan (bukan disembunyikan) -- CLV di
+    saham transaksi tipis jauh lebih rawan digerakkan 1-2 order doang,
+    bukan pola akumulasi/distribusi yang luas.
+
+    REVISI (permintaan user, akurasi): dua perbaikan atas versi awal
+    (ditemukan lewat penggunaan nyata -- sinyal "Tersembunyi" kadang
+    kerasa fake):
+    1. Arah tren A/D & harga sekarang dari SLOPE regresi linear atas
+       SELURUH hari dalam window (bukan cuma selisih 2 titik: hari
+       pertama vs hari terakhir). Selisih 2 titik gampang salah arah
+       kalau kebetulan salah satu endpoint itu 1 hari outlier (mis. 1
+       candle besar tunggal karena volume tidak likuid).
+    2. Ambang minimum pergerakan harga (_AD_MIN_PRICE_MOVE_PCT) -- kalau
+       harga nyaris flat, TIDAK dilabel Akumulasi/Distribusi apa pun
+       (dilabel Netral), bukan dipaksa mengikuti tanda +/- dari noise
+       kecil."""
     if len(df) < lookback_days + 5:
         return None
 
@@ -123,10 +152,40 @@ def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
     price_n_periods_ago = float(close.iloc[-(lookback_days + 1)])
     price_trend_pct = ((price_now / price_n_periods_ago) - 1) * 100
 
-    ad_naik = current_ad > ad_n_periods_ago
-    price_naik = price_now > price_n_periods_ago
+    # Arah tren dari SLOPE regresi linear (perbaikan #1 di atas), bukan
+    # selisih endpoint mentah -- window sengaja +1 hari (lookback_days+1
+    # titik) supaya selaras persis dengan window yang dipakai ad_trend_pct/
+    # price_trend_pct di atas.
+    # dtype=float eksplisit -- ad_line bisa jadi dtype object kalau ada
+    # candle high==low (money_flow_volume mewarisi dtype dari clv.fillna(0),
+    # dan clv sendiri mewarisi dtype object dari range_hl.replace(0, pd.NA)
+    # di atas). np.polyfit STRICT butuh array float64 murni, beda dengan
+    # float() di tempat lain di fungsi ini yang aman dipakai ke elemen
+    # tunggal apa pun dtype Series-nya.
+    x = np.arange(lookback_days + 1)
+    ad_window = ad_line.iloc[-(lookback_days + 1):].to_numpy(dtype=float)
+    price_window = close.iloc[-(lookback_days + 1):].to_numpy(dtype=float)
+    ad_slope = float(np.polyfit(x, ad_window, 1)[0])
+    price_slope = float(np.polyfit(x, price_window, 1)[0])
 
-    if price_naik and ad_naik:
+    ad_naik = ad_slope > 0
+    price_naik = price_slope > 0
+
+    # Ambang "apakah pergerakan cukup berarti" JUGA dari slope (bukan
+    # price_trend_pct endpoint di atas) -- supaya arah & ambang besarannya
+    # konsisten SATU metodologi. Kalau dicampur (arah dari slope, ambang
+    # dari endpoint), 1 hari outlier di endpoint bisa bikin dua ukuran
+    # saling kontradiksi (mis. slope bilang tren naik stabil 3 minggu,
+    # tapi endpoint bilang "turun tajam" gara-gara 1 hari crash terakhir).
+    price_slope_pct = (price_slope * lookback_days / price_n_periods_ago) * 100 if price_n_periods_ago else 0.0
+    price_is_meaningful = abs(price_slope_pct) >= _AD_MIN_PRICE_MOVE_PCT
+
+    confidence = "tinggi"
+    if not price_is_meaningful:
+        sinyal = f"◽ Harga relatif flat ({price_trend_pct:+.1f}% dalam {lookback_days} hari) -- belum ada arah harga tegas untuk dibandingkan dengan tren A/D"
+        label = "Netral"
+        confidence = "rendah"
+    elif price_naik and ad_naik:
         sinyal = "✅ KONFIRMASI BULLISH (harga naik + A/D naik, sejalan)"
         label = "Akumulasi"
     elif not price_naik and not ad_naik:
@@ -138,6 +197,10 @@ def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
     else:
         sinyal = "⚠️ DIVERGENSI BULLISH (harga turun tapi A/D naik -- mungkin ada akumulasi tersembunyi)"
         label = "Akumulasi Tersembunyi"
+
+    if is_illiquid and confidence == "tinggi":
+        confidence = "sedang"
+        sinyal += " -- keyakinan diturunkan (saham kurang likuid, CLV lebih rawan noise dari transaksi tipis)"
 
     last_clv = float(clv.iloc[-1])
     if last_clv > 0.5:
@@ -159,5 +222,6 @@ def calculate_ad_line(df: pd.DataFrame, lookback_days: int = 20) -> dict | None:
         "clv_label": clv_label,
         "sinyal": sinyal,
         "label": label,
+        "confidence": confidence,
         "lookback_days": lookback_days,
     }
