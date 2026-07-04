@@ -21,13 +21,16 @@
 #   calculate_snr_levels) -- bukan angka baru yang beda dari yang dilihat
 #   user saat sinyal itu pertama ditampilkan.
 #
-# ARSITEKTUR: TIDAK ada scheduler/cron (aplikasi ini stateless request-
-# response, tidak ada proses background). Audit dijalankan ON-DEMAND --
-# setiap kali /api/signals dipanggil (mis. user buka halaman "Audit
-# Sinyal"), semua sinyal yang masih OPEN dicek ulang terhadap harga
-# terakhir. Trade-off yang diterima sadar: status baru ter-update saat
-# ada yang benar-benar membuka halaman ini, bukan real-time strict --
-# untuk fitur audit historis (horison hari/minggu), ini cukup.
+# REVISI (Juli 2026): audit SEKARANG juga jalan otomatis via background
+# task periodik di web/app.py (_signal_auto_loop), TIDAK LAGI cuma
+# on-demand saat /api/signals dipanggil -- permintaan eksplisit user
+# supaya status sinyal & notifikasi Telegram ter-update walau tidak ada
+# yang sedang membuka halaman. record_top_picks() & audit_open_signals()
+# sekarang mengembalikan LIST sinyal yang baru dicatat/diselesaikan
+# (bukan cuma jumlah/None) supaya caller bisa mengirim notifikasi berisi
+# detail sinyalnya -- fungsi ini SENDIRI tetap tidak melakukan I/O
+# jaringan (kirim notifikasi jadi tanggung jawab caller di web/app.py),
+# supaya tetap mudah ditest tanpa mock network/Telegram.
 
 from datetime import datetime, timedelta
 
@@ -74,10 +77,17 @@ def _ensure_table():
         ''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_signal_status ON signal_history(status)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_signal_kode_date ON signal_history(kode, recorded_at)')
+        # Migrasi ringan: kolom 'pattern' (nama pola chart rule-based dari
+        # detect_patterns(), mis. "DOUBLE BOTTOM") ditambahkan belakangan --
+        # ALTER TABLE ADD COLUMN aman di SQLite utk row yang sudah ada
+        # (otomatis NULL), tidak perlu drop/recreate tabel produksi.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(signal_history)").fetchall()}
+        if "pattern" not in cols:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN pattern TEXT")
     _ensured = True
 
 
-async def record_top_picks(items: list[dict], price_lookup=None) -> int:
+async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     """Catat sinyal baru dari hasil /api/confidence (items sudah diurut
     confidence_score menurun). Hanya MAX_RECORDED_PER_DAY teratas yang skornya
     >= MIN_SCORE_TO_RECORD, dan SATU kode SAHAM cuma dicatat SEKALI per hari
@@ -89,17 +99,23 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> int:
     yang sedang flat di harga floor -- lihat catatan di core/charts/
     snr_chart.py) karena TP/SL tidak bisa didefinisikan dengan wajar.
 
-    price_lookup (BARU, opsional): async callable(kode) -> float | None utk
-    ambil harga REAL-TIME (reuse _realtime_price yang sudah ada di web/
-    app.py) sebagai entry_price, BUKAN it['harga'] (closing harian yang bisa
-    basi sampai 1 hari bursa -- entry yang dicatat dari harga penutupan yang
-    SAMA dipakai buat menghitung sinyalnya sendiri secara teknis tidak
-    pernah benar-benar bisa dieksekusi user, ini bentuk lookahead bias
-    kecil). Kalau price_lookup None atau gagal/return None utk suatu kode,
-    fallback jujur ke it['harga'] (closing harian) -- tetap lebih baik
-    daripada tidak mencatat entry sama sekali.
+    price_lookup (opsional): async callable(kode) -> float | None utk ambil
+    harga REAL-TIME (reuse _realtime_price yang sudah ada di web/app.py)
+    sebagai entry_price, BUKAN it['harga'] (closing harian yang bisa basi
+    sampai 1 hari bursa -- entry yang dicatat dari harga penutupan yang SAMA
+    dipakai buat menghitung sinyalnya sendiri secara teknis tidak pernah
+    benar-benar bisa dieksekusi user, ini bentuk lookahead bias kecil).
+    Kalau price_lookup None atau gagal/return None utk suatu kode, fallback
+    jujur ke it['harga'] (closing harian) -- tetap lebih baik daripada
+    tidak mencatat entry sama sekali.
 
-    Returns jumlah sinyal baru yang benar-benar disimpan."""
+    'pattern' (opsional, dari core/screening_pro.py::detect_patterns) ikut
+    disimpan kalau ada di item -- konteks tambahan "kenapa sinyal ini
+    muncul", ditampilkan di Audit Sinyal/kartu Signal Confirmed.
+
+    Returns LIST sinyal yang baru disimpan (bukan cuma jumlah) -- caller
+    (web/app.py) pakai ini utk kirim notifikasi Telegram berisi detail
+    entry/TP/SL, bukan sekadar angka."""
     _ensure_table()
     candidates = [
         it for it in items
@@ -111,9 +127,9 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> int:
     ][:MAX_RECORDED_PER_DAY]
 
     if not candidates:
-        return 0
+        return []
 
-    saved = 0
+    saved = []
     for it in candidates:
         with get_db() as conn:
             already = conn.execute('''
@@ -133,20 +149,29 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> int:
             except Exception:
                 pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
 
+        tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        pattern = it.get("pattern")
         with get_db() as conn:
-            conn.execute('''
+            cur = conn.execute('''
                 INSERT INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                it["kode"], entry_price, it["potensi_naik_pct"], it["risiko_turun_pct"],
-                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
+                it["kode"], entry_price, tp_pct, sl_pct,
+                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
             ))
-        saved += 1
+            new_id = cur.lastrowid
+        saved.append({
+            "id": new_id, "kode": it["kode"], "entry_price": entry_price,
+            "tp_pct": tp_pct, "sl_pct": sl_pct,
+            "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
+            "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
+            "confidence_score": it.get("confidence_score"), "pattern": pattern,
+        })
     return saved
 
 
-async def audit_open_signals(price_lookup) -> None:
+async def audit_open_signals(price_lookup) -> list[dict]:
     """Cek ulang semua sinyal berstatus OPEN terhadap harga TERKINI.
 
     price_lookup: async callable(kode: str) -> float | None -- caller (web/
@@ -159,13 +184,18 @@ async def audit_open_signals(price_lookup) -> None:
     - SL_HIT: harga <= entry x (1 - sl_pct/100)
     - EXPIRED: belum kena TP/SL tapi sudah lewat MAX_HOLD_DAYS sejak dicatat
     - OPEN: belum satupun kondisi di atas terpenuhi, tetap dibiarkan terbuka
-    """
+
+    Returns LIST sinyal yang BARU SAJA berpindah status di pemanggilan ini
+    (bukan sinyal yang sudah lama closed) -- caller pakai ini utk kirim
+    notifikasi Telegram cuma sekali per sinyal, persis saat statusnya
+    berubah, bukan berulang setiap audit berikutnya."""
     _ensure_table()
     with get_db() as conn:
         open_rows = conn.execute(
             "SELECT id, kode, recorded_at, entry_price, tp_pct, sl_pct FROM signal_history WHERE status = 'OPEN'"
         ).fetchall()
 
+    just_resolved = []
     for row in open_rows:
         price = await price_lookup(row["kode"])
         if price is None or price <= 0:
@@ -195,6 +225,14 @@ async def audit_open_signals(price_lookup) -> None:
                     return_pct = ?, days_to_resolve = ?
                 WHERE id = ?
             ''', (status, price, return_pct, age_days, row["id"]))
+
+        just_resolved.append({
+            "id": row["id"], "kode": row["kode"], "entry_price": entry,
+            "status": status, "resolved_price": price, "return_pct": return_pct,
+            "days_to_resolve": age_days, "recorded_at": row["recorded_at"],
+        })
+
+    return just_resolved
 
 
 def get_signal_report() -> dict:

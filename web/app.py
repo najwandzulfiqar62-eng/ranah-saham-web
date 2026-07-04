@@ -26,6 +26,7 @@ import asyncio
 import tempfile
 import hashlib
 from collections import defaultdict
+from contextlib import asynccontextmanager
 
 import redis
 import pickle
@@ -197,7 +198,24 @@ def _load_shares():
         print(f"⚠️ gagal load shares: {e}")
     return _SHARES
 
-app = FastAPI(title="Ranah Saham API", version="1.0")
+
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    """Nyalakan background task auto-audit sinyal (_signal_auto_loop,
+    didefinisikan di bawah dekat kode signal_history lainnya) saat
+    aplikasi start, matikan bersih saat berhenti. TIDAK ADA proses/infra
+    baru -- cuma 1 asyncio task dalam proses yang sama (bukan Celery/cron
+    terpisah), cukup untuk skala aplikasi ini."""
+    task = asyncio.create_task(_signal_auto_loop())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="Ranah Saham API", version="1.0", lifespan=_lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
@@ -1180,20 +1198,109 @@ def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
         reasons.append(f"Proxy volume: {bandar['label']}")
     rr = it.get("rr_ratio")
     if rr is not None and rr >= 1.5:
-        reasons.append(f"RR teknikal {rr:.1f}:1 (potensi ke R1 > risiko ke S1)")
+        reasons.append(f"RR teknikal {rr:.1f}:1 (target take profit > risiko stop loss)")
     if it["likuiditas"] in ("Sangat Likuid", "Likuid"):
         reasons.append(f"Likuiditas {it['likuiditas']}")
+    if it.get("pattern") and it.get("pattern_bias") == "BULLISH":
+        reasons.append(f"Pola chart: {it['pattern']} (bullish)")
 
     if it["likuiditas"] in ("Tidak Likuid", "Kurang Likuid"):
         warnings.append(f"Likuiditas {it['likuiditas']} -- eksekusi & spread bisa jadi kendala nyata")
     if rr is not None and rr < 1:
-        warnings.append(f"Risiko turun ke S1 lebih besar dari potensi naik ke R1 (RR {rr:.1f}:1)")
+        warnings.append(f"Risiko stop loss lebih besar dari target take profit (RR {rr:.1f}:1)")
     if bandar and bandar["label"] in ("Distribusi", "Distribusi Tersembunyi"):
         warnings.append(f"Proxy volume: {bandar['label']} -- volume belum mengonfirmasi penguatan")
+    if it.get("pattern") and it.get("pattern_bias") == "BEARISH":
+        warnings.append(f"Pola chart: {it['pattern']} (bearish) -- perlu diwaspadai meski skor gabungan tinggi")
 
     if not reasons:
         reasons.append("Skor gabungan cukup untuk masuk daftar, tanpa satu faktor yang menonjol.")
     return reasons, warnings
+
+
+async def _signal_entry_price_lookup(kode: str) -> float | None:
+    """Harga REAL-TIME (reuse _realtime_price) dipakai sebagai entry_price
+    saat mencatat sinyal BARU -- BUKAN closing harian, yang JUGA dipakai
+    menghitung sinyalnya sendiri (lookahead bias kecil, lihat catatan di
+    core/signal_history.py::record_top_picks). Dipisah jadi fungsi modul
+    (bukan closure lokal di dalam confidence()) supaya bisa dipakai ulang
+    oleh siklus auto-audit berkala (_run_signal_auto_cycle)."""
+    try:
+        rt = await _realtime_price(kode + ".JK")
+        return rt["price"] if rt else None
+    except Exception:
+        return None
+
+
+async def _signal_audit_price_lookup(kode: str) -> float | None:
+    """Harga closing harian terakhir (via _clean, sudah cache 300 detik)
+    dipakai utk audit sinyal yang SUDAH tercatat -- horison audit historis
+    (hari/minggu) tidak butuh presisi real-time, dan reuse cache yang sama
+    dgn endpoint lain menghindari panggilan jaringan tambahan."""
+    try:
+        df = await _clean(kode + ".JK")
+        if df is None or len(df) == 0:
+            return None
+        return float(df["Close"].iloc[-1])
+    except Exception:
+        return None
+
+
+async def _run_signal_audit_and_notify() -> list[dict]:
+    """Audit semua sinyal OPEN + kirim notifikasi Telegram (kalau
+    dikonfigurasi -- lihat core/telegram_notify.py, no-op aman kalau
+    tidak) utk yang BARU selesai. Dipakai bersama oleh /api/signals
+    (dipicu user membuka halaman Audit Sinyal) DAN oleh siklus otomatis
+    berkala (_run_signal_auto_cycle) -- satu sumber logic, tidak ada
+    duplikasi antara jalur manual dan jalur background."""
+    from core.signal_history import audit_open_signals
+    from core.telegram_notify import send_message, format_signal_resolved
+
+    resolved = await audit_open_signals(_signal_audit_price_lookup)
+    for sig in resolved:
+        try:
+            await send_message(format_signal_resolved(sig))
+        except Exception as e:
+            print(f"⚠️ Gagal kirim notifikasi sinyal selesai: {type(e).__name__}: {e}")
+    return resolved
+
+
+# Interval siklus auto-audit background (detik) -- default 600 (10 menit),
+# meniru cadence kompetitor yang jadi rujukan user. Bisa diubah lewat env
+# var tanpa redeploy kode kalau perlu diperlambat/dipercepat.
+SIGNAL_AUTO_INTERVAL_SECONDS = int(os.getenv("SIGNAL_AUTO_INTERVAL_SECONDS", "600"))
+
+
+async def _run_signal_auto_cycle():
+    """Satu putaran auto-audit: (1) refresh Top Pick -- otomatis mencatat
+    sinyal baru & mengirim notifikasi Telegram utk itu (logic ada di
+    dalam confidence(), dipanggil LANGSUNG sebagai fungsi biasa, pola yang
+    sama dipakai /api/insight/{kode} memanggil ihsg()); (2) audit semua
+    sinyal OPEN + notifikasi utk yang baru selesai. Dipisah dari loop-nya
+    sendiri (bukan langsung di dalam while True) supaya SATU putaran bisa
+    dipanggil & ditest langsung tanpa perlu menunggu interval sungguhan."""
+    try:
+        await confidence()
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal refresh Top Pick: {type(e).__name__}: {e}")
+    try:
+        await _run_signal_audit_and_notify()
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal audit sinyal: {type(e).__name__}: {e}")
+
+
+async def _signal_auto_loop():
+    """Loop background tak berhenti: tunggu SIGNAL_AUTO_INTERVAL_SECONDS,
+    jalankan 1 putaran, ulangi. Kegagalan tak terduga pada satu putaran
+    (di luar yang sudah ditangani _run_signal_auto_cycle sendiri) TIDAK
+    BOLEH menghentikan loop selamanya -- dibungkus try/except supaya
+    proses auto-audit tetap hidup sampai aplikasi benar-benar berhenti."""
+    while True:
+        await asyncio.sleep(SIGNAL_AUTO_INTERVAL_SECONDS)
+        try:
+            await _run_signal_auto_cycle()
+        except Exception as e:
+            print(f"⚠️ signal auto loop error tak terduga: {type(e).__name__}: {e}")
 
 
 async def _confidence_raw_signals() -> list[dict]:
@@ -1206,7 +1313,7 @@ async def _confidence_raw_signals() -> list[dict]:
         return cached
 
     from core.async_yf import async_download_many
-    from core.screening_pro import _score_minervini, calculate_confluence
+    from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns
 
     ihsg_raw = await _clean("^JKSE", period="1y")
     market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
@@ -1257,6 +1364,15 @@ async def _confidence_raw_signals() -> list[dict]:
                         if potensi_naik_pct and risiko_turun_pct and risiko_turun_pct > 0 else None)
             ad = calculate_ad_line(df)
             market_cap = (shares.get(kode, 0) * price) or None
+            # Pattern Analyst: reuse detect_patterns() (core/screening_pro.py,
+            # rule-based, sudah ada & teruji lewat "Pattern Scan") -- BUKAN
+            # heuristik baru. Cuma pola PERTAMA (kalau ada) yang disimpan
+            # sebagai konteks ringkas "kenapa sinyal ini muncul", ditampilkan
+            # di alasan Top Pick & kartu Signal Confirmed.
+            pattern_result = detect_patterns(df, kode)
+            first_pattern = pattern_result["patterns"][0] if pattern_result.get("patterns") else None
+            pattern_name = first_pattern["nama"] if first_pattern else None
+            pattern_bias = first_pattern["bias"] if first_pattern else None
 
             items.append({
                 "kode": kode,
@@ -1275,6 +1391,8 @@ async def _confidence_raw_signals() -> list[dict]:
                 "risiko_turun_pct": round(risiko_turun_pct, 2) if risiko_turun_pct is not None else None,
                 "rr_ratio": round(rr_ratio, 2) if rr_ratio is not None else None,
                 "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
+                "pattern": pattern_name,
+                "pattern_bias": pattern_bias,
             })
         except Exception:
             continue
@@ -1326,23 +1444,20 @@ async def confidence():
     # signals) -- SEBELUM user tahu hasilnya, supaya track record kredibel
     # (lihat catatan lengkap di core/signal_history.py). Dibungkus try/except
     # supaya kegagalan/lambatnya SQLite atau lookup harga real-time TIDAK
-    # PERNAH menggagalkan respons Top Pick itu sendiri.
-    #
-    # entry_price pakai harga REAL-TIME (_realtime_price, sudah ada & dipakai
-    # /api/analyze), BUKAN closing harian (it['harga']) -- closing harian
-    # bisa basi sampai 1 hari bursa, dan itu JUGA harga yang dipakai
-    # menghitung sinyalnya sendiri, jadi mencatatnya sebagai "entry yang
-    # bisa dieksekusi" adalah lookahead bias kecil yang tidak jujur.
-    async def _signal_entry_price_lookup(kode: str) -> float | None:
-        try:
-            rt = await _realtime_price(kode + ".JK")
-            return rt["price"] if rt else None
-        except Exception:
-            return None
-
+    # PERNAH menggagalkan respons Top Pick itu sendiri. Notifikasi Telegram
+    # (kalau dikonfigurasi -- lihat core/telegram_notify.py, no-op aman
+    # kalau tidak) dikirim utk tiap sinyal yang BENAR-BENAR baru dicatat
+    # (bukan yang di-skip krn dedup harian).
     try:
         from core.signal_history import record_top_picks
-        await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
+        from core.telegram_notify import send_message, format_signal_new
+
+        newly_recorded = await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
+        for sig in newly_recorded:
+            try:
+                await send_message(format_signal_new(sig))
+            except Exception as e:
+                print(f"⚠️ Gagal kirim notifikasi sinyal baru: {type(e).__name__}: {e}")
     except Exception as e:
         print(f"⚠️ Gagal mencatat signal history: {type(e).__name__}: {e}")
 
@@ -1377,20 +1492,15 @@ async def signals():
     (lihat core/signal_history.py) + statistik win rate/return, HANYA dari
     sinyal yang sudah selesai (TP/SL tercapai atau kadaluarsa). Kalau belum
     ada satupun sinyal yang selesai, 'stats' bernilai None -- frontend WAJIB
-    menampilkan ini sebagai "belum cukup data", BUKAN mengarang angka."""
-    from core.signal_history import audit_open_signals, get_signal_report
+    menampilkan ini sebagai "belum cukup data", BUKAN mengarang angka.
 
-    async def _price_lookup(kode: str) -> float | None:
-        try:
-            df = await _clean(kode + ".JK")
-            if df is None or len(df) == 0:
-                return None
-            return float(df["Close"].iloc[-1])
-        except Exception:
-            return None
+    Audit juga jalan otomatis via background task berkala (lihat
+    _signal_auto_loop) -- pemanggilan endpoint ini TIDAK LAGI satu-satunya
+    pemicu audit, cuma memastikan data terbaru saat halaman dibuka."""
+    from core.signal_history import get_signal_report
 
     try:
-        await audit_open_signals(_price_lookup)
+        await _run_signal_audit_and_notify()
     except Exception as e:
         print(f"⚠️ Gagal audit signal history: {type(e).__name__}: {e}")
 

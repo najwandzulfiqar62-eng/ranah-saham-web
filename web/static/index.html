@@ -2640,6 +2640,16 @@ async function loadSignalAudit(){
   body.innerHTML='<section class="panel skel loadbar"></section>';
   let d; try{d=await api('/api/signals')}catch(e){body.innerHTML=errBox(e.message);return}
   const signals=d.signals||[];
+  const confirmed=signals.filter(s=>s.status==='TP_HIT').sort((a,b)=>(b.resolved_at||'').localeCompare(a.resolved_at||'')).slice(0,3);
+  const confirmedHtml=confirmed.length?`<section class="panel" style="border:1px solid var(--bull);background:linear-gradient(180deg,rgba(46,125,82,.10),transparent)">
+    <p class="eyebrow" style="color:var(--bull)">✅ Signal Confirmed</p>
+    <div class="decision-grid">${confirmed.map(s=>`<div class="decision-card">
+      <div class="label">${s.kode}</div>
+      <div class="value" style="color:var(--bull)">+${fmt(s.return_pct,2)}%</div>
+      <div class="sub">Rp${fmt(s.entry_price)} → Rp${fmt(s.resolved_price)} · ${s.days_to_resolve} hari${s.pattern?' · '+s.pattern:''}</div>
+    </div>`).join('')}</div>
+    <p class="audit-note" style="margin-top:10px">Bisa diverifikasi lewat data kami sendiri (endpoint <b>/api/signals</b>), bukan tangkapan layar -- sinyal dicatat otomatis SEBELUM hasilnya diketahui (bandingkan tanggal dicatat vs selesai di tabel bawah).</p>
+  </section>`:'';
   let statsHtml;
   if(!d.stats){
     statsHtml=`<section class="panel">
@@ -2677,7 +2687,7 @@ async function loadSignalAudit(){
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
       <td style="color:${retColor}">${retTxt}</td></tr>`;
   }).join('');
-  body.innerHTML=statsHtml+`<section class="panel">
+  body.innerHTML=confirmedHtml+statsHtml+`<section class="panel">
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
   </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));

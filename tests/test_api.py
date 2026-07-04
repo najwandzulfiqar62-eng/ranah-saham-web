@@ -736,7 +736,7 @@ def test_confidence_reasons_flags_illiquid_and_distribution():
     assert any("AI Score kuat" in r for r in reasons)
     assert any("Tidak Likuid" in w for w in warnings)
     assert any("Distribusi" in w for w in warnings)
-    assert any("Risiko turun" in w for w in warnings)
+    assert any("Risiko stop loss lebih besar" in w for w in warnings)
 
 
 def test_confidence_endpoint_includes_composite_fields(client):
@@ -810,10 +810,11 @@ def test_record_top_picks_respects_threshold_and_dedup(clean_signal_db):
         {**_fake_confidence_item("ZZNODATA", MIN_SCORE_TO_RECORD + 5), "potensi_naik_pct": None},  # skip
     ]
     saved = asyncio.run(record_top_picks(items))
-    assert saved == 1  # cuma ZZHIGH yang lolos
+    assert len(saved) == 1  # cuma ZZHIGH yang lolos
+    assert saved[0]["kode"] == "ZZHIGH"
 
     saved_again = asyncio.run(record_top_picks(items))  # panggil lagi, hari yang sama
-    assert saved_again == 0  # ZZHIGH sudah tercatat hari ini -- dedup
+    assert saved_again == []  # ZZHIGH sudah tercatat hari ini -- dedup
 
     report = get_signal_report()
     kodes = [s["kode"] for s in report["signals"]]
@@ -829,7 +830,7 @@ def test_record_top_picks_caps_per_day(clean_signal_db):
 
     items = [_fake_confidence_item(f"ZZCAP{i}", MIN_SCORE_TO_RECORD + 1) for i in range(MAX_RECORDED_PER_DAY + 5)]
     saved = asyncio.run(record_top_picks(items))
-    assert saved == MAX_RECORDED_PER_DAY
+    assert len(saved) == MAX_RECORDED_PER_DAY
 
 
 def test_record_top_picks_uses_realtime_price_with_fallback(clean_signal_db):
@@ -854,7 +855,7 @@ def test_record_top_picks_uses_realtime_price_with_fallback(clean_signal_db):
         return None  # simulasikan lookup gagal utk ZZFAIL
 
     saved = asyncio.run(record_top_picks(items, price_lookup=fake_lookup))
-    assert saved == 2
+    assert len(saved) == 2
 
     report = get_signal_report()
     by_kode = {s["kode"]: s for s in report["signals"]}
@@ -979,3 +980,112 @@ def test_signals_endpoint_returns_report_structure(client, clean_signal_db):
     assert r.status_code == 200
     data = r.json()
     assert "signals" in data and "stats" in data and "n_open" in data and "n_total" in data
+
+
+def test_confidence_reasons_flags_pattern_bullish_and_bearish():
+    """Regresi: hasil detect_patterns() (Pattern Analyst, rule-based) harus
+    ikut memengaruhi reasons/warnings Top Pick -- pola bullish memperkuat
+    alasan BUY, pola bearish jadi warning meski skor gabungan tinggi
+    (chart pattern bisa jadi sinyal awal pembalikan yang belum tertangkap
+    indikator lain)."""
+    import web.app as app_module
+
+    it_bullish = {
+        "ai_score": 70, "minervini_criteria_met": 7, "confluence_bullish": 4, "confluence_bearish": 1,
+        "bandar": None, "rr_ratio": 2.0, "likuiditas": "Likuid",
+        "pattern": "DOUBLE BOTTOM", "pattern_bias": "BULLISH",
+    }
+    reasons, warnings = app_module._confidence_reasons(it_bullish)
+    assert any("DOUBLE BOTTOM" in r and "bullish" in r for r in reasons)
+
+    it_bearish = {**it_bullish, "pattern": "HEAD AND SHOULDERS", "pattern_bias": "BEARISH"}
+    _, warnings_bear = app_module._confidence_reasons(it_bearish)
+    assert any("HEAD AND SHOULDERS" in w and "bearish" in w for w in warnings_bear)
+
+
+def test_confidence_endpoint_includes_pattern_fields(client):
+    """Regresi: /api/confidence harus menyertakan field 'pattern'/
+    'pattern_bias' (dari detect_patterns(), core/screening_pro.py) di
+    setiap item -- dasar utk badge Pattern Analyst yang lebih ditonjolkan
+    di UI, dan utk disimpan di signal_history saat sinyal dicatat."""
+    r = client.get("/api/confidence")
+    assert r.status_code == 200
+    it = r.json()["items"][0]
+    assert "pattern" in it and "pattern_bias" in it
+
+
+def test_run_signal_auto_cycle_runs_refresh_and_audit_independently(monkeypatch):
+    """Regresi fitur auto-audit berkala: _run_signal_auto_cycle() (satu
+    putaran, dipakai baik oleh _signal_auto_loop maupun langsung ditest di
+    sini) HARUS menjalankan refresh Top Pick (confidence(), yang otomatis
+    mencatat sinyal baru) DAN audit sinyal OPEN (_run_signal_audit_and_notify())
+    -- dan kegagalan salah satu TIDAK BOLEH menghalangi yang lain jalan,
+    supaya siklus background tetap berguna sebagian walau mis. Yahoo
+    Finance sedang down saat refresh Top Pick."""
+    import asyncio
+
+    import web.app as app_module
+
+    calls = []
+
+    async def fake_confidence():
+        calls.append("confidence")
+        raise RuntimeError("simulasi kegagalan refresh Top Pick")
+
+    async def fake_audit():
+        calls.append("audit")
+
+    monkeypatch.setattr(app_module, "confidence", fake_confidence)
+    monkeypatch.setattr(app_module, "_run_signal_audit_and_notify", fake_audit)
+
+    asyncio.run(app_module._run_signal_auto_cycle())
+    assert calls == ["confidence", "audit"]
+
+
+def test_telegram_send_message_fail_open_when_unconfigured(monkeypatch):
+    """Tanpa TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID dikonfigurasi (_ENABLED
+    False), send_message() harus diam-diam return False -- BUKAN raise --
+    supaya pencatatan/audit sinyal tidak pernah gagal gara-gara notifikasi
+    belum di-setup (fail-open, sama disiplinnya dengan Redis/DB)."""
+    import asyncio
+
+    import core.telegram_notify as tg
+
+    monkeypatch.setattr(tg, "_ENABLED", False)
+    assert asyncio.run(tg.send_message("halo")) is False
+
+
+def test_telegram_format_signal_new_contains_key_fields():
+    from core.telegram_notify import format_signal_new
+
+    sig = {
+        "kode": "BBCA", "entry_price": 9500.0, "tp_pct": 6.0, "sl_pct": 3.0,
+        "tp_price": 10070.0, "sl_price": 9215.0, "confidence_score": 78.5,
+        "pattern": "DOUBLE BOTTOM",
+    }
+    msg = format_signal_new(sig)
+    assert "BBCA" in msg
+    assert "Rp10,070" in msg
+    assert "DOUBLE BOTTOM" in msg
+    assert "bukan rekomendasi investasi" in msg
+
+
+def test_telegram_format_signal_resolved_labels_each_status():
+    """Regresi kejujuran: SL_HIT (rugi) harus dilaporkan dengan bahasa &
+    format yang SAMA transparannya dengan TP_HIT (untung) -- bukan
+    disamarkan -- supaya track record yang dikirim ke Telegram kredibel."""
+    from core.telegram_notify import format_signal_resolved
+
+    base = {
+        "kode": "BBCA", "entry_price": 9500.0, "resolved_price": 10000.0,
+        "return_pct": 5.0, "days_to_resolve": 7, "recorded_at": "2026-06-01 10:00:00",
+    }
+
+    tp_msg = format_signal_resolved({**base, "status": "TP_HIT"})
+    assert "Target tercapai" in tp_msg and "BBCA" in tp_msg
+
+    sl_msg = format_signal_resolved({**base, "status": "SL_HIT", "return_pct": -3.0})
+    assert "Kena stop loss" in sl_msg
+
+    exp_msg = format_signal_resolved({**base, "status": "EXPIRED"})
+    assert "Kadaluarsa" in exp_msg
