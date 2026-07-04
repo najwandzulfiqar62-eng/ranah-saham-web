@@ -2594,16 +2594,27 @@ async function loadTopPick(){
   if(badge)badge.textContent=d.weight_source==='jurnal'
     ?'· Bobot dipersonalisasi dari Jurnal Screening kamu':'· Bobot default (belum cukup data jurnal untuk personalisasi)';
   if(!items.length){body.innerHTML='<section class="panel"><p class="insight muted">Belum ada saham yang bisa dinilai saat ini.</p></section>';return}
-  const tr=items.map(r=>`<tr data-k="${r.kode}" style="cursor:pointer">
-    <td class="tk">${r.kode}</td>
+  const regimeColor=d.market_regime==='BULLISH'?'var(--bull)':d.market_regime==='BEARISH'?'var(--bear)':'var(--gold)';
+  const regimeBanner=d.market_regime?`<div class="audit-note" style="margin-bottom:12px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#07120F">
+    <b style="color:${regimeColor}">Regime IHSG: ${d.market_regime}</b> — skor di bawah ini dibaca DI DALAM kondisi pasar ini, bukan lepas darinya. Sinyal individual yang bagus di tengah pasar bearish tetap butuh konfirmasi ekstra.
+  </div>`:'';
+  const rrColorTp=rr=>rr==null?'var(--muted)':rr>=1.5?'var(--bull)':rr>=1?'var(--gold)':'var(--bear)';
+  const tr=items.map(r=>{
+    const note=(r.warnings&&r.warnings[0])||(r.reasons&&r.reasons[0])||'';
+    return `<tr data-k="${r.kode}" style="cursor:pointer">
+    <td class="tk">${r.kode}${r.liquidity_capped?' <span title="Skor dibatasi karena likuiditas kurang baik" style="color:var(--bear)">⚠</span>':''}
+      <div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px;max-width:220px;white-space:normal">${note}</div>
+    </td>
     <td><span class="minibar"><i style="width:${r.confidence_score}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${fmt(r.confidence_score,1)}</td>
     <td class="hide-xs">${fmt(r.ai_score,1)}</td>
-    <td class="hide-xs">${fmt(r.minervini_score,1)}</td>
-    <td class="${r.confluence_bullish>=r.confluence_bearish?'up':'down'}">${r.confluence_bullish}−${r.confluence_bearish}</td>
-    <td>Rp${fmt(r.harga)}</td></tr>`).join('');
+    <td class="hide-xs">${r.sektor||'-'}</td>
+    <td style="color:${likColor(r.likuiditas)}">${r.likuiditas||'-'}</td>
+    <td style="color:${rrColorTp(r.rr_ratio)}">${r.rr_ratio!=null?('1:'+fmt(r.rr_ratio,2)):'-'}</td>
+    <td>Rp${fmt(r.harga)}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}%. Tap baris untuk analisis.</p>
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor Keyakinan</th><th class="hide-xs">AI Score</th><th class="hide-xs">Minervini</th><th>Confluence</th><th>Harga</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
+    ${regimeBanner}
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}% · Likuiditas ${fmt(d.weights.liq*100,0)}% · Risk/Reward ${fmt(d.weights.rr*100,0)}%. Saham kurang/tidak likuid (⚠) skornya DIBATASI, bukan disembunyikan. Tap baris untuk analisis.</p>
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor Keyakinan</th><th class="hide-xs">AI Score</th><th class="hide-xs">Sektor</th><th>Likuiditas</th><th>RR</th><th>Harga</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }
 $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});

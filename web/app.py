@@ -1106,18 +1106,101 @@ async def screenerpro():
     return payload
 
 
-# ---------- skor keyakinan (confidence score) ----------
-_CONFIDENCE_DEFAULT_WEIGHTS = {"ai": 0.40, "mv": 0.35, "cf": 0.25}
+# ---------- skor keyakinan (confidence score / Top Pick) ----------
+# REVISI (Juli 2026, permintaan eksplisit user): ranking SEBELUMNYA cuma
+# menggabungkan AI Score + Minervini + Confluence -- semuanya murni
+# TEKNIKAL, tidak ada satupun yang mempertimbangkan likuiditas atau
+# risk/reward, jadi saham tidak likuid dengan chart kebetulan bagus bisa
+# nangkring di #1 Top Pick walau praktis susah dieksekusi. Bobot sekarang
+# menyertakan likuiditas & risk/reward teknikal (REUSE fungsi yang sama
+# dipakai Ringkasan Cepat di /api/analyze -- _liquidity_label,
+# calculate_snr_levels, calculate_ad_line -- BUKAN heuristik baru
+# terpisah), plus saham "Tidak Likuid"/"Kurang Likuid" DIBATASI skor
+# maksimalnya (bukan disembunyikan total -- tetap tampil dengan warning
+# eksplisit, sesuai instruksi "hindari ATAU beri warning jelas").
+# Fundamental minimum SENGAJA tidak ikut jadi bobot skor -- fetch
+# fundamental per-saham (yfinance .info) lambat & unitnya tidak selalu
+# konsisten (lihat catatan jujur di core/fundamental.py), jadi market cap
+# (dari shares x harga, sudah ada lokal tanpa network call) dipakai
+# sebagai KONTEKS tampilan saja, bukan komponen skor.
+_CONFIDENCE_DEFAULT_WEIGHTS = {"ai": 0.25, "mv": 0.20, "cf": 0.15, "liq": 0.20, "rr": 0.20}
 
 
 def _confluence_norm(bullish: int, bearish: int) -> float:
     return round(max(0.0, min(100.0, 50 + (bullish - bearish) * (50 / 6))), 1)
 
 
+def _liquidity_score(likuiditas: str) -> float:
+    return {"Sangat Likuid": 100.0, "Likuid": 75.0, "Kurang Likuid": 40.0, "Tidak Likuid": 10.0}.get(likuiditas, 50.0)
+
+
+def _rr_score(rr: float | None) -> float:
+    """Skor 0-100 dari rasio risk/reward teknikal (potensi naik ke R1
+    dibanding risiko turun ke S1). None (data tidak cukup) dianggap netral
+    (50), BUKAN nol -- supaya tidak menghukum saham yang datanya kebetulan
+    tidak lengkap padahal indikator lain bagus."""
+    if rr is None:
+        return 50.0
+    if rr >= 2:
+        return 100.0
+    if rr >= 1.5:
+        return 80.0
+    if rr >= 1:
+        return 60.0
+    if rr >= 0.5:
+        return 35.0
+    return 15.0
+
+
+def _apply_liquidity_cap(score: float, likuiditas: str) -> tuple[float, bool]:
+    """Batasi (bukan hilangkan) skor gabungan kalau likuiditas buruk --
+    lihat catatan di atas _CONFIDENCE_DEFAULT_WEIGHTS. Returns (skor akhir,
+    apakah kena batas)."""
+    if likuiditas == "Tidak Likuid" and score > 35:
+        return 35.0, True
+    if likuiditas == "Kurang Likuid" and score > 55:
+        return 55.0, True
+    return score, False
+
+
+def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
+    """Alasan (kenapa masuk top pick) & warning (risiko yang perlu
+    diwaspadai) -- SEMUA diturunkan dari field yang sudah dihitung, tidak
+    ada klaim baru. Dipisah 2 list supaya frontend bisa tampilkan beda
+    warna (netral vs waspada)."""
+    reasons, warnings = [], []
+    if it["ai_score"] >= 65:
+        reasons.append(f"AI Score kuat ({it['ai_score']:.0f}/100)")
+    if it["minervini_criteria_met"] >= 6:
+        reasons.append(f"Kriteria Minervini terpenuhi ({it['minervini_criteria_met']}/8)")
+    if it["confluence_bullish"] > it["confluence_bearish"]:
+        reasons.append(f"Konfluensi bullish {it['confluence_bullish']}-{it['confluence_bearish']}")
+    bandar = it.get("bandar")
+    if bandar and bandar["label"] in ("Akumulasi", "Akumulasi Tersembunyi"):
+        reasons.append(f"Proxy volume: {bandar['label']}")
+    rr = it.get("rr_ratio")
+    if rr is not None and rr >= 1.5:
+        reasons.append(f"RR teknikal {rr:.1f}:1 (potensi ke R1 > risiko ke S1)")
+    if it["likuiditas"] in ("Sangat Likuid", "Likuid"):
+        reasons.append(f"Likuiditas {it['likuiditas']}")
+
+    if it["likuiditas"] in ("Tidak Likuid", "Kurang Likuid"):
+        warnings.append(f"Likuiditas {it['likuiditas']} -- eksekusi & spread bisa jadi kendala nyata")
+    if rr is not None and rr < 1:
+        warnings.append(f"Risiko turun ke S1 lebih besar dari potensi naik ke R1 (RR {rr:.1f}:1)")
+    if bandar and bandar["label"] in ("Distribusi", "Distribusi Tersembunyi"):
+        warnings.append(f"Proxy volume: {bandar['label']} -- volume belum mengonfirmasi penguatan")
+
+    if not reasons:
+        reasons.append("Skor gabungan cukup untuk masuk daftar, tanpa satu faktor yang menonjol.")
+    return reasons, warnings
+
+
 async def _confidence_raw_signals() -> list[dict]:
-    """Hitung AI Score + Minervini + Confluence untuk SCREENER_UNIVERSE dari
-    satu fetch period=1y bersama. Cache global 300 detik (sama untuk semua
-    user, tidak bergantung personalisasi)."""
+    """Hitung AI Score + Minervini + Confluence + likuiditas + risk/reward
+    + proxy bandar untuk SCREENER_UNIVERSE dari satu fetch period=1y
+    bersama. Cache global 300 detik (sama untuk semua user, tidak
+    bergantung personalisasi)."""
     cached = _cache_get("confidence:raw")
     if cached is not None:
         return cached
@@ -1128,6 +1211,7 @@ async def _confidence_raw_signals() -> list[dict]:
     ihsg_raw = await _clean("^JKSE", period="1y")
     market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
 
+    shares = _load_shares()
     tickers = [t + ".JK" for t in SCREENER_UNIVERSE]
     data = await async_download_many(tickers, period="1y", interval="1d")
 
@@ -1143,15 +1227,36 @@ async def _confidence_raw_signals() -> list[dict]:
             cf = calculate_confluence(df, kode)
             if not ai or not mv or not cf:
                 continue
+
+            price = mv["harga"] or 0
+            avg_value_20 = float((df["Close"] * df["Volume"]).tail(20).mean())
+            likuiditas = _liquidity_label(avg_value_20)
+            snr = calculate_snr_levels(df)
+            r1, s1 = snr["r1"], snr["s1"]
+            potensi_naik_pct = ((r1 / price) - 1) * 100 if price else None
+            risiko_turun_pct = (1 - (s1 / price)) * 100 if price else None
+            rr_ratio = (potensi_naik_pct / risiko_turun_pct
+                        if potensi_naik_pct and risiko_turun_pct and risiko_turun_pct > 0 else None)
+            ad = calculate_ad_line(df)
+            market_cap = (shares.get(kode, 0) * price) or None
+
             items.append({
                 "kode": kode,
-                "harga": mv["harga"],
+                "harga": price,
+                "sektor": SECTOR_MAP_UNIVERSE.get(kode, "Lainnya"),
+                "market_cap": market_cap,
                 "ai_score": ai["score"],
                 "ai_rating": ai["rating"],
                 "minervini_score": mv["skor"],
                 "minervini_criteria_met": mv["criteria_met"],
                 "confluence_bullish": cf["bullish"],
                 "confluence_bearish": cf["bearish"],
+                "likuiditas": likuiditas,
+                "avg_value_20": round(avg_value_20, 0),
+                "potensi_naik_pct": round(potensi_naik_pct, 2) if potensi_naik_pct is not None else None,
+                "risiko_turun_pct": round(risiko_turun_pct, 2) if risiko_turun_pct is not None else None,
+                "rr_ratio": round(rr_ratio, 2) if rr_ratio is not None else None,
+                "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"]},
             })
         except Exception:
             continue
@@ -1161,15 +1266,21 @@ async def _confidence_raw_signals() -> list[dict]:
 
 
 def _confidence_weights() -> tuple[dict, str]:
-    """Bobot gabungan untuk Skor Keyakinan (AI Score + Minervini + Confluence).
-    Versi web memakai bobot tetap (tanpa personalisasi per-akun)."""
+    """Bobot gabungan untuk Skor Keyakinan (AI Score + Minervini +
+    Confluence + Likuiditas + Risk/Reward). Versi web memakai bobot tetap
+    (tanpa personalisasi per-akun)."""
     return dict(_CONFIDENCE_DEFAULT_WEIGHTS), "default"
 
 
 @app.get("/api/confidence")
 async def confidence():
-    """Skor Keyakinan: gabungan AI Score + Minervini + Confluence dalam satu
-    peringkat atas universe likuid (bobot tetap)."""
+    """Skor Keyakinan (Top Pick): gabungan AI Score + Minervini +
+    Confluence + Likuiditas + Risk/Reward teknikal dalam satu peringkat
+    atas universe likuid (bobot tetap). Saham 'Tidak Likuid'/'Kurang
+    Likuid' skornya DIBATASI (bukan disembunyikan) supaya tidak nangkring
+    di posisi teratas meski chart-nya kebetulan menarik -- tetap tampil
+    dengan warning eksplisit. Menyertakan konteks regime IHSG supaya
+    sinyal individual tidak dibaca lepas dari kondisi pasar."""
     try:
         raw_items = await _confidence_raw_signals()
     except Exception:
@@ -1180,16 +1291,40 @@ async def confidence():
     items = []
     for it in raw_items:
         cf_norm = _confluence_norm(it["confluence_bullish"], it["confluence_bearish"])
+        liq_sc = _liquidity_score(it["likuiditas"])
+        rr_sc = _rr_score(it.get("rr_ratio"))
         score = (it["ai_score"] * weights["ai"] + it["minervini_score"] * weights["mv"]
-                 + cf_norm * weights["cf"])
-        items.append({**it, "confluence_norm": cf_norm, "confidence_score": round(score, 1)})
+                 + cf_norm * weights["cf"] + liq_sc * weights["liq"] + rr_sc * weights["rr"])
+        score, capped = _apply_liquidity_cap(score, it["likuiditas"])
+        reasons, warnings = _confidence_reasons(it)
+        items.append({
+            **it, "confluence_norm": cf_norm, "confidence_score": round(score, 1),
+            "liquidity_capped": capped, "reasons": reasons, "warnings": warnings,
+        })
 
     items.sort(key=lambda x: x["confidence_score"], reverse=True)
+
+    # Konteks regime pasar (IHSG) -- satu kali untuk semua, BUKAN per saham,
+    # supaya user tahu skor individual di atas dibaca dalam kondisi pasar
+    # apa (skor bagus di tengah IHSG bearish beda maknanya dari saat bullish).
+    market_regime, market_regime_score = None, None
+    try:
+        ihsg_df = await _clean("^JKSE", period="1y")
+        ai_ihsg = calculate_ai_score_from_df(ihsg_df) if ihsg_df is not None and len(ihsg_df) >= 50 else None
+        if ai_ihsg:
+            market_regime_score = ai_ihsg["score"]
+            market_regime = ("BULLISH" if market_regime_score >= 60
+                              else "BEARISH" if market_regime_score < 40 else "SIDEWAYS/NETRAL")
+    except Exception:
+        pass
+
     return _py({
         "items": items,
         "weights": weights,
         "weight_source": weight_source,
         "universe": len(SCREENER_UNIVERSE),
+        "market_regime": market_regime,
+        "market_regime_score": market_regime_score,
         "computed_at": int(time.time()),
     })
 

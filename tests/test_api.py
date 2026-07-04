@@ -680,3 +680,78 @@ def test_insight_ihsg_includes_deep_analysis_and_backtest_critique(client):
     assert isinstance(data.get("bear_case"), list)
     assert data.get("analisis_mendalam")
     assert "Prediksi sistem" in data["analisis_mendalam"]
+
+
+def test_liquidity_score_thresholds():
+    import web.app as app_module
+
+    assert app_module._liquidity_score("Sangat Likuid") == 100.0
+    assert app_module._liquidity_score("Likuid") == 75.0
+    assert app_module._liquidity_score("Kurang Likuid") == 40.0
+    assert app_module._liquidity_score("Tidak Likuid") == 10.0
+
+
+def test_rr_score_thresholds():
+    import web.app as app_module
+
+    assert app_module._rr_score(None) == 50.0
+    assert app_module._rr_score(2.5) == 100.0
+    assert app_module._rr_score(1.6) == 80.0
+    assert app_module._rr_score(1.0) == 60.0
+    assert app_module._rr_score(0.6) == 35.0
+    assert app_module._rr_score(0.2) == 15.0
+
+
+def test_apply_liquidity_cap_limits_illiquid_scores():
+    """Regresi: sebelum perbaikan ini, ranking Top Pick murni teknikal --
+    saham tidak likuid dengan chart kebetulan bagus bisa nangkring di #1
+    meski praktis susah dieksekusi. _apply_liquidity_cap() harus membatasi
+    (bukan menyembunyikan) skor saham kurang/tidak likuid."""
+    import web.app as app_module
+
+    score, capped = app_module._apply_liquidity_cap(90.0, "Tidak Likuid")
+    assert score == 35.0 and capped is True
+
+    score, capped = app_module._apply_liquidity_cap(90.0, "Kurang Likuid")
+    assert score == 55.0 and capped is True
+
+    score, capped = app_module._apply_liquidity_cap(90.0, "Sangat Likuid")
+    assert score == 90.0 and capped is False
+
+    # Skor yang sudah di bawah batas tidak boleh dinaikkan (cap cuma turun, tidak naik)
+    score, capped = app_module._apply_liquidity_cap(20.0, "Tidak Likuid")
+    assert score == 20.0 and capped is False
+
+
+def test_confidence_reasons_flags_illiquid_and_distribution():
+    import web.app as app_module
+
+    it_warn = {
+        "ai_score": 70, "minervini_criteria_met": 7, "confluence_bullish": 4, "confluence_bearish": 1,
+        "bandar": {"label": "Distribusi", "sinyal": "x"}, "rr_ratio": 0.5, "likuiditas": "Tidak Likuid",
+    }
+    reasons, warnings = app_module._confidence_reasons(it_warn)
+    assert any("AI Score kuat" in r for r in reasons)
+    assert any("Tidak Likuid" in w for w in warnings)
+    assert any("Distribusi" in w for w in warnings)
+    assert any("Risiko turun" in w for w in warnings)
+
+
+def test_confidence_endpoint_includes_composite_fields(client):
+    """Regresi: /api/confidence (Top Pick) dulu cuma menjumlah AI Score +
+    Minervini + Confluence, semuanya teknikal murni -- sekarang harus
+    menyertakan likuiditas, risk/reward, proxy bandar, sektor, alasan, dan
+    konteks regime pasar IHSG di level respons."""
+    r = client.get("/api/confidence")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["items"], "harus ada minimal 1 item dari SCREENER_UNIVERSE"
+    it = data["items"][0]
+    for field in ("likuiditas", "rr_ratio", "bandar", "sektor", "reasons", "warnings",
+                  "liquidity_capped", "confidence_score"):
+        assert field in it, f"field '{field}' hilang dari item Top Pick"
+    assert "liq" in data["weights"] and "rr" in data["weights"]
+    assert data["market_regime"] in ("BULLISH", "BEARISH", "SIDEWAYS/NETRAL", None)
+    # Urutan harus menurun berdasarkan confidence_score
+    scores = [x["confidence_score"] for x in data["items"]]
+    assert scores == sorted(scores, reverse=True)
