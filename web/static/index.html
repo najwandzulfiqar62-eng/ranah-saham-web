@@ -190,6 +190,7 @@
   .ctable tbody tr:nth-child(even) td{background:rgba(255,255,255,.018)}
   .ctable tr:hover td{background:var(--panel2)}
   .ctable .tk{font-family:"Space Grotesk";font-weight:700;font-size:16px}
+  .tk-row{display:inline-flex;align-items:center;gap:7px}
   .minibar{height:6px;width:90px;background:var(--panel2);border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:8px}
   .minibar i{display:block;height:100%}
 
@@ -437,6 +438,7 @@
 .home-sug{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;max-height:340px;overflow-y:auto;z-index:40;text-align:left;box-shadow:0 12px 40px rgba(0,0,0,.4)}
 .home-sug:empty{display:none}
 .sugrow{display:flex;align-items:baseline;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--line)}
+.sugrow img{align-self:center}
 .sugrow:last-child{border-bottom:none}
 .sugrow:hover,.sugrow.sel{background:var(--panel2)}
 .sugrow b{font-family:'JetBrains Mono',monospace;color:var(--gold);font-size:14px;min-width:62px}
@@ -1452,6 +1454,29 @@ const loaded={};
 let chartObj=null, ihsgChartObj=null;
 
 function fmt(n,d=0){return(n==null||isNaN(n))?'–':Number(n).toLocaleString('id-ID',{minimumFractionDigits:d,maximumFractionDigits:d})}
+
+/* ---------- LOGO EMITEN PER TICKER ---------- */
+// Sumber logo publik (CDN Stockbit, dipakai luas di ekosistem app saham
+// Indonesia) -- kalau gagal load (kode tidak dikenal/CDN down), otomatis
+// fallback ke avatar inisial bulat generated di klien sendiri (data: URI
+// SVG, tanpa request jaringan tambahan) supaya TIDAK PERNAH ada ikon patah.
+function _tickerAvatarHue(kode){let h=0;for(let i=0;i<kode.length;i++){h=kode.charCodeAt(i)+((h<<5)-h)}return Math.abs(h)%360}
+function _tickerFallbackSvg(kode,size){
+  const initials=(kode||'?').slice(0,2);
+  const hue=_tickerAvatarHue(kode||'?');
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><rect width="100%" height="100%" rx="${size/2}" fill="hsl(${hue},42%,26%)"/><text x="50%" y="53%" font-family="Space Grotesk,sans-serif" font-size="${Math.round(size*0.4)}" fill="#EFE9DC" text-anchor="middle" dominant-baseline="middle" font-weight="700">${initials}</text></svg>`;
+  return 'data:image/svg+xml,'+encodeURIComponent(svg);
+}
+function tickerLogo(kode,size=22){
+  kode=(kode||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(!kode)return '';
+  const fb=_tickerFallbackSvg(kode,size);
+  return `<img src="https://assets.stockbit.com/logos/companies/${kode}.png" onerror="this.onerror=null;this.src='${fb}'" width="${size}" height="${size}" style="border-radius:50%;object-fit:cover;background:#0c1a15;flex-shrink:0;vertical-align:middle" alt="" loading="lazy">`;
+}
+// Bungkus logo + label ticker jadi satu baris inline-flex -- dipakai di
+// sel tabel/kartu supaya logo & kode saham sejajar rapi tanpa mengganggu
+// konten lain (mis. baris tanggal) yang ditumpuk di bawahnya.
+function tickerTag(kode,size=20,label){return `<span class="tk-row">${tickerLogo(kode,size)}<span>${label||kode}</span></span>`}
 const SECTOR_COLORS={Financials:['#2FB57E','rgba(47,181,126,.13)'],Infrastructure:['#3FA7C4','rgba(63,167,196,.13)'],
   Industrials:['#9B8CFF','rgba(155,140,255,.13)'],'Consumer Non-Cyclical':['#E0913B','rgba(224,145,59,.13)'],
   Healthcare:['#E05B8A','rgba(224,91,138,.13)'],Energy:['#E0566B','rgba(224,86,107,.13)'],
@@ -1613,7 +1638,7 @@ function matchTickers(q){
     if(k.startsWith(q))code.push(t); else if(k.includes(q)||n.includes(q))name.push(t);}
   return [...code,...name].slice(0,12);
 }
-function sugRows(list){return list.map((t,i)=>`<div class="sugrow${i===0?' sel':''}" data-k="${t.kode}"><b>${t.kode}</b><span>${t.nama||''}</span></div>`).join('')}
+function sugRows(list){return list.map((t,i)=>`<div class="sugrow${i===0?' sel':''}" data-k="${t.kode}">${tickerLogo(t.kode,18)}<b>${t.kode}</b><span>${t.nama||''}</span></div>`).join('')}
 
 function openCmd(){cmdk.classList.add('on');cmdInput.value='';cmdInput.focus();$('#cmdResults').innerHTML='';ensureTickers()}
 function closeCmd(){cmdk.classList.remove('on')}
@@ -1651,7 +1676,7 @@ async function analyze(kode){
     <div class="analysis-head">
       <div>
         <p class="eyebrow" style="margin-bottom:10px">Analisis Saham</p>
-        <div class="analysis-title">${d.kode}</div>
+        <div class="analysis-title" style="display:flex;align-items:center;gap:12px">${tickerLogo(d.kode,40)}<span>${d.kode}</span></div>
         <div class="analysis-sub">Harga Rp<span id="anzPrice">${fmt(d.price)}</span> ·
           <span id="anzChg1d" class="${d.change_1d>=0?'up':'down'}">${d.change_1d>=0?'+':''}${fmt(d.change_1d,2)}% (1h)</span> ·
           <span class="${d.change_5d>=0?'up':'down'}">${d.change_5d>=0?'+':''}${fmt(d.change_5d,2)}% (5h)</span> ${liveBadge('analisis')}</div>
@@ -2060,7 +2085,7 @@ async function doCompare(){
     ['Volatilitas (ATR%)', x=>x.atr_pct, x=>x.atr_pct==null?'–':fmt(x.atr_pct,1)+'%', 'none', null],
     ['Sinyal (▲/●/▼)', null, x=>`<span class="up">${x.bullish_count||0}</span>/${x.netral_count||0}/<span class="down">${x.bearish_count||0}</span>`, 'none', null],
   ];
-  const head=`<tr><th style="text-align:left">Metrik</th>${ok.map(x=>`<th class="cmp-h" data-k="${x.kode}">${x.kode}</th>`).join('')}</tr>`;
+  const head=`<tr><th style="text-align:left">Metrik</th>${ok.map(x=>`<th class="cmp-h" data-k="${x.kode}">${tickerTag(x.kode,18)}</th>`).join('')}</tr>`;
   const trs=rows.map(([label,valf,fmtf,dir,colf])=>{
     let best=null;
     if(dir!=='none'&&valf){const vals=ok.map(valf).filter(v=>v!=null);if(vals.length)best=dir==='hi'?Math.max(...vals):Math.min(...vals);}
@@ -2283,7 +2308,7 @@ function applyPreset(p){
   if(!rows.length){body.innerHTML='<section class="panel"><p class="insight muted">Tidak ada saham yang cocok dengan preset ini saat ini.</p></section>';return}
   const lastRows=rows;
   const tr=rows.map(r=>{const fvc=/Discount/.test(r.vwap_label||'')?'var(--bull)':/Premium/.test(r.vwap_label||'')?'var(--bear)':'var(--muted)';
-    return`<tr data-k="${r.kode}" style="cursor:pointer"><td class="tk">${r.kode}</td><td class="hide-xs">${secTag(r.sector)}</td>
+    return`<tr data-k="${r.kode}" style="cursor:pointer"><td class="tk">${tickerTag(r.kode)}</td><td class="hide-xs">${secTag(r.sector)}</td>
       <td><span class="minibar"><i style="width:${r.score}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${r.score}</td>
       <td>Rp${fmt(r.price)}</td><td class="${r.change_1d>=0?'up':'down'}">${r.change_1d>=0?'+':''}${fmt(r.change_1d,2)}%</td>
       <td class="hide-xs ${r.change_5d>=0?'up':'down'}">${r.change_5d>=0?'+':''}${fmt(r.change_5d,2)}%</td>
@@ -2307,7 +2332,7 @@ function renderUniverse(){
   if(!rows.length){body.innerHTML='<section class="panel"><p class="insight muted">Tidak ada saham yang cocok dengan filter.</p></section>';return}
   const tr=rows.map(r=>{const fvc=/Discount/.test(r.vwap_label||'')?'var(--bull)':/Premium/.test(r.vwap_label||'')?'var(--bear)':'var(--muted)';
     return `<tr data-k="${r.kode}" style="cursor:pointer">
-    <td class="tk">${r.kode}</td>
+    <td class="tk">${tickerTag(r.kode)}</td>
     <td class="hide-xs">${secTag(r.sector)}</td>
     <td class="hide-xs muted" style="font-size:12px">${r.grup==='Independen'?'–':r.grup}</td>
     <td><span class="minibar"><i style="width:${r.score}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${r.score}</td>
@@ -2425,7 +2450,7 @@ async function runCustomScreener(){
     const fvc=/Discount/.test(r.vwap_label||'')?'var(--bull)':/Premium/.test(r.vwap_label||'')?'var(--bear)':'var(--muted)';
     const rsiCol=r.rsi!=null?(r.rsi>70?'var(--bear)':r.rsi<30?'var(--bull)':'var(--text)'):'var(--muted)';
     return `<tr data-k="${r.kode}" style="cursor:pointer">
-      <td class="tk">${r.kode}</td>
+      <td class="tk">${tickerTag(r.kode)}</td>
       <td>${secTag(r.sector)}</td>
       <td><span class="minibar"><i style="width:${r.score||0}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${r.score||'–'}</td>
       <td style="text-align:right;font-family:JetBrains Mono">Rp${fmt(r.price)}</td>
@@ -2544,7 +2569,7 @@ async function loadBsjp(forceScope){
     return;
   }
   const rows=items.map(r=>`<div class="sm-row" data-k="${r.ticker}" style="cursor:pointer">
-    <div class="sm-ticker">${r.ticker}</div>
+    <div class="sm-ticker">${tickerTag(r.ticker,16)}</div>
     <div style="flex:1;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)">Rp${fmt(r.price)}</div>
     <div class="sm-chg" style="color:${r.change>=0?'var(--green)':'var(--bear)'}">${r.change>=0?'+':''}${fmt(r.change,2)}%</div>
     <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);white-space:nowrap">${fmtCap(r.value)}</div>
@@ -2568,7 +2593,7 @@ async function loadFilter(mode){
   const items=d.items||[];
   if(!items.length){body.innerHTML=`<section class="panel"><p class="insight muted">Tidak ada saham yang lolos filter "${FILTER_LABEL[mode]}" saat ini.</p></section>`;return}
   const tr=items.map(r=>`<tr data-k="${r.ticker}" style="cursor:pointer">
-    <td class="tk">${r.ticker}</td><td>Rp${fmt(r.price)}</td>
+    <td class="tk">${tickerTag(r.ticker)}</td><td>Rp${fmt(r.price)}</td>
     <td class="${r.change>=0?'up':'down'}">${r.change>=0?'+':''}${fmt(r.change,2)}%</td>
     <td>${fmt(r.rsi,1)}</td><td style="font-size:12px">${r.status||''}</td>
     <td class="muted hide-xs" style="font-size:12px;font-family:Inter">${r.extra||''}</td></tr>`).join('');
@@ -2585,7 +2610,7 @@ async function loadScreenerPro(){
   if(!items.length){body.innerHTML='<section class="panel"><p class="insight muted">Belum ada saham yang lolos ambang skor Minervini (≥65) saat ini. Pasar mungkin sedang lemah.</p></section>';return}
   const tr=items.map(r=>{const bar='█'.repeat(r.criteria_met)+'░'.repeat(8-r.criteria_met);
     return `<tr data-k="${r.ticker}" style="cursor:pointer">
-    <td class="tk">${r.ticker}</td>
+    <td class="tk">${tickerTag(r.ticker)}</td>
     <td><span class="minibar"><i style="width:${r.skor}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${fmt(r.skor,1)}</td>
     <td style="color:var(--gold);font-size:12px" title="${r.criteria_met}/8 kriteria">${bar} ${r.criteria_met}/8</td>
     <td>Rp${fmt(r.harga)}</td>
@@ -2615,7 +2640,7 @@ async function loadTopPick(){
   const tr=items.map(r=>{
     const note=(r.warnings&&r.warnings[0])||(r.reasons&&r.reasons[0])||'';
     return `<tr data-k="${r.kode}" style="cursor:pointer">
-    <td class="tk">${r.kode}${r.liquidity_capped?' <span title="Skor dibatasi karena likuiditas kurang baik" style="color:var(--bear)">⚠</span>':''}
+    <td class="tk">${tickerTag(r.kode)}${r.liquidity_capped?' <span title="Skor dibatasi karena likuiditas kurang baik" style="color:var(--bear)">⚠</span>':''}
       <div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px;max-width:220px;white-space:normal">${note}</div>
     </td>
     <td><span class="minibar"><i style="width:${r.confidence_score}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${fmt(r.confidence_score,1)}</td>
@@ -2696,7 +2721,7 @@ async function loadSignalAudit(){
     const retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
     const retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
     return `<tr data-k="${s.kode}" style="cursor:pointer">
-      <td class="tk">${s.kode}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
+      <td class="tk">${tickerTag(s.kode)}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
       <td>${_sourceLabel(s.source)}</td>
       <td>Rp${fmt(s.entry_price)}</td>
       <td style="color:var(--bull)">Rp${fmt(s.tp_price)}<div class="muted" style="font-size:10.5px">+${fmt(s.tp_pct,1)}%</div></td>
@@ -2718,7 +2743,7 @@ async function loadSignal(){
   const items=d.items||[];
   if(!items.length){body.innerHTML='<section class="panel"><p class="insight muted">Tidak ada sinyal breakout saat ini (MA5&gt;MA20 + lonjakan volume + likuid). Pasar mungkin lesu.</p></section>';return}
   const tr=items.map(r=>`<tr data-k="${r.ticker}" style="cursor:pointer">
-    <td class="tk">${r.ticker}</td><td>${r.signal||''}</td><td>Rp${fmt(r.price)}</td><td>${fmt(r.volume)}</td>
+    <td class="tk">${tickerTag(r.ticker)}</td><td>${r.signal||''}</td><td>Rp${fmt(r.price)}</td><td>${fmt(r.volume)}</td>
     <td style="color:var(--gold)">Analisis →</td></tr>`).join('');
   body.innerHTML=`<section class="panel">
     <p class="insight muted" style="font-size:13px;margin-bottom:10px">Sinyal breakout (sama dengan /signal di bot): MA5 &gt; MA20, lonjakan volume, likuid. Tap baris untuk analisis.</p>
@@ -2776,12 +2801,12 @@ function renderPasar(items){
   let cols,rows;
   if(m==='airank'){
     cols='<th>#</th><th>Saham</th><th>Sektor</th><th>Skor</th><th>Harga</th><th>% Hari</th><th>VWAP</th>';
-    rows=top.map((r,i)=>`<tr data-k="${r.kode}" style="cursor:pointer"><td class="muted">${i+1}</td><td class="tk">${r.kode}</td><td>${secTag(r.sector)}</td>
+    rows=top.map((r,i)=>`<tr data-k="${r.kode}" style="cursor:pointer"><td class="muted">${i+1}</td><td class="tk">${tickerTag(r.kode)}</td><td>${secTag(r.sector)}</td>
       <td><span class="minibar"><i style="width:${r.score}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${r.score}</td>
       <td>Rp${fmt(r.price)}</td><td class="${r.change_1d>=0?'up':'down'}">${r.change_1d>=0?'+':''}${fmt(r.change_1d,2)}%</td><td style="color:${/Discount/.test(r.vwap_label||'')?'var(--bull)':/Premium/.test(r.vwap_label||'')?'var(--bear)':'var(--muted)'}">${r.vwap_label||'–'}</td></tr>`).join('');
   }else{
     cols='<th>#</th><th>Saham</th><th>Sektor</th><th>Harga</th><th>% Hari</th><th>Volume</th><th>Nilai</th>';
-    rows=top.map((r,i)=>`<tr data-k="${r.kode}" style="cursor:pointer"><td class="muted">${i+1}</td><td class="tk">${r.kode}</td><td>${secTag(r.sector)}</td>
+    rows=top.map((r,i)=>`<tr data-k="${r.kode}" style="cursor:pointer"><td class="muted">${i+1}</td><td class="tk">${tickerTag(r.kode)}</td><td>${secTag(r.sector)}</td>
       <td>Rp${fmt(r.price)}</td><td class="${r.change_1d>=0?'up':'down'}">${r.change_1d>=0?'+':''}${fmt(r.change_1d,2)}%</td>
       <td>${fmt(r.volume)}</td><td>Rp${fmtCap(r.value)}</td></tr>`).join('');
   }
@@ -3591,7 +3616,7 @@ function _renderForeignFlow(d){
     const volBarW=Math.min(100,Math.round((s.vol_ratio/3)*100));
     const hasGrup=s.grup&&s.grup!=='Independen';
     return`<div class="sm-row" onclick="analyze('${s.kode}')">
-      <div class="sm-ticker">${s.kode}${hasGrup?`<div class="sm-grup" title="${s.grup}">${s.grup.replace(/^Grup /,'')}</div>`:''}</div>
+      <div class="sm-ticker">${tickerTag(s.kode,16)}${hasGrup?`<div class="sm-grup" title="${s.grup}">${s.grup.replace(/^Grup /,'')}</div>`:''}</div>
       <div class="sm-chg" style="color:${cc}">${s.chg1>0?'+':''}${s.chg1.toFixed(2)}%</div>
       <div class="sm-bar-wrap">
         <div class="sm-bar-bg"><div class="sm-bar-fill" style="width:${volBarW}%;background:${side==='akum'?'var(--green)':'var(--bear)'}"></div></div>
@@ -4625,7 +4650,7 @@ function renderPortfolioTable(data,prices){
       const chg=r.info?.change!=null?`<span class="${dc}">${r.info.change>=0?'+':''}${r.info.change.toFixed(2)}%`:'—';
       return`<tr>
         <td class="kode-col" onclick="route('analisis');setTimeout(()=>doSearch('${r.kode}'),200)">
-          <b>${r.kode}</b><br><span style="font-size:10px;color:var(--muted);font-family:Inter;font-weight:400">${(r.info?.name||'').slice(0,22)}</span>
+          <span class="tk-row">${tickerLogo(r.kode,18)}<b>${r.kode}</b></span><br><span style="font-size:10px;color:var(--muted);font-family:Inter;font-weight:400">${(r.info?.name||'').slice(0,22)}</span>
         </td>
         <td>${r.qty/100}</td>
         <td>${_rpFull(r.avgPrice)}</td>
@@ -4737,7 +4762,7 @@ function goAnalyze(k){k=(k||'').trim().toUpperCase();if(k){route('analisis');ana
     inp.addEventListener('keydown',e=>{if(e.key==='Enter'){const m=matchTickers(inp.value);pick(m.length?m[0].kode:inp.value)}});
     inp.addEventListener('blur',()=>setTimeout(()=>{if(sug)sug.innerHTML=''},150));
   }
-  const q=$('#homeQuick'); if(q){['BBCA','BBRI','TLKM','GOTO','ASII','BMRI','ANTM','MDKA'].forEach(k=>{const b=el(`<button>${k}</button>`);b.onclick=()=>goAnalyze(k);q.appendChild(b)});}
+  const q=$('#homeQuick'); if(q){['BBCA','BBRI','TLKM','GOTO','ASII','BMRI','ANTM','MDKA'].forEach(k=>{const b=el(`<button style="display:inline-flex;align-items:center;gap:6px">${tickerLogo(k,15)}${k}</button>`);b.onclick=()=>goAnalyze(k);q.appendChild(b)});}
   ensureTickers();
 })();
 
@@ -4791,7 +4816,7 @@ function _homeSignalCard(id,title,icon){
 function _homeSignalRows(items,labelFn,subFn){
   if(!items.length)return`<div style="color:var(--muted);font-size:12px;margin-top:8px">Tidak ada data saat ini</div>`;
   return items.slice(0,6).map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer" onclick="route('analisis');analyze('${labelFn(r)}')">
-    <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13px;color:var(--gold)">${labelFn(r)}</span>
+    <span class="tk-row" style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13px;color:var(--gold)">${tickerLogo(labelFn(r),16)}${labelFn(r)}</span>
     <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)">${subFn(r)}</span>
   </div>`).join('');
 }
@@ -4882,7 +4907,7 @@ async function loadHomeMovers(){
   const valid=items.filter(x=>x.change_1d!=null);
   const gainers=[...valid].sort((a,b)=>b.change_1d-a.change_1d).slice(0,5);
   const losers=[...valid].sort((a,b)=>a.change_1d-b.change_1d).slice(0,5);
-  const row=x=>`<tr data-k="${x.kode}"><td style="font-family:JetBrains Mono;font-weight:700">${x.kode}</td><td>${secTag(x.sector)}</td><td style="text-align:right;font-family:JetBrains Mono">Rp${fmt(x.price)}</td><td style="text-align:right;font-family:JetBrains Mono" class="${x.change_1d>=0?'up':'down'}">${x.change_1d>=0?'+':''}${fmt(x.change_1d,2)}%</td></tr>`;
+  const row=x=>`<tr data-k="${x.kode}"><td style="font-family:JetBrains Mono;font-weight:700">${tickerTag(x.kode,16)}</td><td>${secTag(x.sector)}</td><td style="text-align:right;font-family:JetBrains Mono">Rp${fmt(x.price)}</td><td style="text-align:right;font-family:JetBrains Mono" class="${x.change_1d>=0?'up':'down'}">${x.change_1d>=0?'+':''}${fmt(x.change_1d,2)}%</td></tr>`;
   box.innerHTML=`<section class="panel"><p class="eyebrow">Top Movers (saham likuid)</p>
     <div class="movers-grid">
       <div><div class="mv-h up">▲ Penguatan</div><table class="ctable mini">${gainers.map(row).join('')}</table></div>
