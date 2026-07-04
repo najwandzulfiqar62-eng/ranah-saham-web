@@ -1014,6 +1014,79 @@ def test_confidence_endpoint_includes_pattern_fields(client):
     assert "pattern" in it and "pattern_bias" in it
 
 
+def _macd_cross_df(direction: str):
+    """Bangun DataFrame sintetis yang histogram MACD-nya (MACD line -
+    Signal line) BENAR-BENAR berpindah sisi persis di bar terakhir --
+    dicari otomatis lewat calculate_macd() sendiri (bukan ditebak manual)
+    supaya test-nya robust terhadap perubahan parameter EMA di masa depan."""
+    import numpy as np
+    import pandas as pd
+
+    from core.indicators import calculate_macd
+
+    if direction == "bullish":
+        leg1, leg2 = np.linspace(2000, 1200, 70), np.linspace(1200, 2400, 30)
+    else:
+        leg1, leg2 = np.linspace(1200, 2400, 70), np.linspace(2400, 1200, 30)
+    close_full = np.concatenate([leg1, leg2])
+    _, _, hist = calculate_macd(pd.Series(close_full))
+    h = hist.values
+    cross_idx = None
+    for i in range(1, len(h)):
+        if direction == "bullish" and h[i - 1] <= 0 < h[i]:
+            cross_idx = i
+            break
+        if direction == "bearish" and h[i - 1] >= 0 > h[i]:
+            cross_idx = i
+            break
+    assert cross_idx is not None, "gagal membangun fixture MACD cross -- cek parameter leg1/leg2"
+    close = close_full[:cross_idx + 1]
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=len(close))
+    return pd.DataFrame({"Close": close}, index=dates)
+
+
+def test_detect_patterns_flags_macd_histogram_bullish_cross():
+    """Regresi fitur baru: histogram MACD baru berbalik dari negatif ke
+    positif di bar terakhir harus dideteksi sebagai pola momentum
+    tersendiri -- 'entry point' teknikal terpisah dari pola struktur harga
+    (Double Top/Bottom, HH/HL, LH/LL) yang sudah ada."""
+    from core.screening_pro import detect_patterns
+
+    df = _macd_cross_df("bullish")
+    res = detect_patterns(df, "ZZMACD")
+    names = [p["nama"] for p in res["patterns"]]
+    assert "MACD HISTOGRAM BULLISH CROSS" in names
+    p = next(p for p in res["patterns"] if p["nama"] == "MACD HISTOGRAM BULLISH CROSS")
+    assert p["bias"] == "BULLISH"
+
+
+def test_detect_patterns_flags_macd_histogram_bearish_cross():
+    from core.screening_pro import detect_patterns
+
+    df = _macd_cross_df("bearish")
+    res = detect_patterns(df, "ZZMACD")
+    names = [p["nama"] for p in res["patterns"]]
+    assert "MACD HISTOGRAM BEARISH CROSS" in names
+    p = next(p for p in res["patterns"] if p["nama"] == "MACD HISTOGRAM BEARISH CROSS")
+    assert p["bias"] == "BEARISH"
+
+
+def test_confidence_reasons_uses_momentum_label_for_macd_pattern():
+    """Regresi: label pola MACD di reasons/warnings Top Pick harus 'Sinyal
+    momentum', BUKAN 'Pola chart' -- MACD cross itu sinyal momentum
+    indikator, bukan pola struktur harga, jadi labelnya harus jujur beda."""
+    import web.app as app_module
+
+    it = {
+        "ai_score": 50, "minervini_criteria_met": 4, "confluence_bullish": 2, "confluence_bearish": 2,
+        "bandar": None, "rr_ratio": 1.2, "likuiditas": "Likuid",
+        "pattern": "MACD HISTOGRAM BULLISH CROSS", "pattern_bias": "BULLISH",
+    }
+    reasons, _ = app_module._confidence_reasons(it)
+    assert any("Sinyal momentum: MACD HISTOGRAM BULLISH CROSS" in r for r in reasons)
+    assert not any("Pola chart: MACD" in r for r in reasons)
+
+
 def test_run_signal_auto_cycle_runs_refresh_and_audit_independently(monkeypatch):
     """Regresi fitur auto-audit berkala: _run_signal_auto_cycle() (satu
     putaran, dipakai baik oleh _signal_auto_loop maupun langsung ditest di

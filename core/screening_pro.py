@@ -318,11 +318,12 @@ def _find_swing_points(close: pd.Series, lookback: int = 5) -> tuple[list, list]
 
 
 def detect_patterns(df: pd.DataFrame, ticker: str) -> dict:
-    """Deteksi 4 pola chart klasik berbasis swing points:
-    - Double Top (bearish reversal)
-    - Double Bottom (bullish reversal)
-    - Higher Highs / Higher Lows (uptrend)
-    - Lower Highs / Lower Lows (downtrend)
+    """Deteksi pola chart/momentum rule-based:
+    - Double Top (bearish reversal, berbasis swing points)
+    - Double Bottom (bullish reversal, berbasis swing points)
+    - Higher Highs / Higher Lows (uptrend, berbasis swing points)
+    - Lower Highs / Lower Lows (downtrend, berbasis swing points)
+    - MACD Histogram Bullish/Bearish Cross (momentum shift, berbasis MACD)
 
     Non-repainting: hanya menggunakan bar yang sudah terconfirmasi."""
     close = df["Close"]
@@ -380,6 +381,31 @@ def detect_patterns(df: pd.DataFrame, ticker: str) -> dict:
                 "bias": "BEARISH",
                 "emoji": "📉",
                 "desc": "Tren turun terstruktur: setiap puncak dan lembah lebih rendah dari sebelumnya",
+            })
+
+    # MACD Histogram Crossover: histogram (MACD line - Signal line) baru
+    # saja berpindah sisi di bar terakhir -- definisi standar "MACD
+    # bullish/bearish crossover" (momentum shift), objektif dan gampang
+    # diverifikasi. Sengaja ditambahkan SETELAH pola struktur harga di atas
+    # (bukan sebelum) karena cross ini jauh lebih SERING muncul -- kalau
+    # caller cuma pakai patterns[0] (mis. badge Top Pick), pola struktur
+    # yang lebih jarang/signifikan tetap diprioritaskan duluan.
+    macd_line, signal_line, hist = calculate_macd(close)
+    if len(hist) >= 2:
+        hist_prev, hist_now = float(hist.iloc[-2]), float(hist.iloc[-1])
+        if hist_prev <= 0 < hist_now:
+            patterns.append({
+                "nama": "MACD HISTOGRAM BULLISH CROSS",
+                "bias": "BULLISH",
+                "emoji": "🟢",
+                "desc": f"Histogram MACD baru berbalik positif ({hist_prev:+.1f} -> {hist_now:+.1f}), momentum mulai menguat",
+            })
+        elif hist_prev >= 0 > hist_now:
+            patterns.append({
+                "nama": "MACD HISTOGRAM BEARISH CROSS",
+                "bias": "BEARISH",
+                "emoji": "🔴",
+                "desc": f"Histogram MACD baru berbalik negatif ({hist_prev:+.1f} -> {hist_now:+.1f}), momentum mulai melemah",
             })
 
     return {"ticker": ticker, "harga": round(price_now, 0), "patterns": patterns}

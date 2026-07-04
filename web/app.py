@@ -1201,8 +1201,9 @@ def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
         reasons.append(f"RR teknikal {rr:.1f}:1 (target take profit > risiko stop loss)")
     if it["likuiditas"] in ("Sangat Likuid", "Likuid"):
         reasons.append(f"Likuiditas {it['likuiditas']}")
+    pattern_label = "Sinyal momentum" if (it.get("pattern") or "").startswith("MACD") else "Pola chart"
     if it.get("pattern") and it.get("pattern_bias") == "BULLISH":
-        reasons.append(f"Pola chart: {it['pattern']} (bullish)")
+        reasons.append(f"{pattern_label}: {it['pattern']} (bullish)")
 
     if it["likuiditas"] in ("Tidak Likuid", "Kurang Likuid"):
         warnings.append(f"Likuiditas {it['likuiditas']} -- eksekusi & spread bisa jadi kendala nyata")
@@ -1211,7 +1212,7 @@ def _confidence_reasons(it: dict) -> tuple[list[str], list[str]]:
     if bandar and bandar["label"] in ("Distribusi", "Distribusi Tersembunyi"):
         warnings.append(f"Proxy volume: {bandar['label']} -- volume belum mengonfirmasi penguatan")
     if it.get("pattern") and it.get("pattern_bias") == "BEARISH":
-        warnings.append(f"Pola chart: {it['pattern']} (bearish) -- perlu diwaspadai meski skor gabungan tinggi")
+        warnings.append(f"{pattern_label}: {it['pattern']} (bearish) -- perlu diwaspadai meski skor gabungan tinggi")
 
     if not reasons:
         reasons.append("Skor gabungan cukup untuk masuk daftar, tanpa satu faktor yang menonjol.")
