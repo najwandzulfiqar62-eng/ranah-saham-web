@@ -66,6 +66,31 @@ MAX_RECORDED_PER_DAY = 10
 # TIDAK terkait skor gabungan sama sekali (lihat record_macd_cross_signals).
 MACD_CROSS_MAX_PER_DAY = 10
 
+
+def _is_bursa_weekend() -> bool:
+    """True kalau HARI INI Sabtu/Minggu -- BEI tidak buka, jadi closing
+    price yfinance yang dipakai utk hitung confidence_score/entry masih
+    PERSIS closing hari bursa terakhir (Jumat), bukan data baru.
+
+    BUG NYATA ditemukan lewat inspeksi data produksi: siklus auto-audit
+    (jalan tiap 600 detik, 24/7, tidak peduli akhir pekan) tetap mencatat
+    "sinyal Top Pick baru" di hari Sabtu & Minggu dengan entry_price/tp_pct/
+    sl_pct yang IDENTIK dengan sinyal Jumat -- karena memang belum ada
+    pergerakan harga sungguhan. Akibatnya satu pergerakan pasar bisa
+    tercatat sebagai 2-3 sinyal terpisah (Jumat, Sabtu, Minggu semua dgn
+    angka sama), yang MENGGANDAKAN statistik win-rate secara palsu kalau
+    nanti sinyal itu kena TP/SL -- justru bertentangan dengan prinsip
+    kredibilitas "jangan mengarang win rate" yang jadi alasan fitur ini
+    dibuat.
+
+    KETERBATASAN YANG JUJUR DICATAT: ini cuma cek akhir pekan, BELUM
+    menutup hari libur nasional Indonesia yang jatuh di hari kerja (mis.
+    Idul Fitri, Natal) -- itu butuh kalender libur bursa eksternal yang di
+    luar cakupan perbaikan ini. Tetap perbaikan nyata utk kasus dominan
+    (2 dari 7 hari), bukan solusi lengkap."""
+    return datetime.now().weekday() >= 5  # 5=Sabtu, 6=Minggu
+
+
 _ensured = False
 
 
@@ -107,6 +132,54 @@ def _ensure_table():
         # dari Top Pick sebelum fitur MACD Cross ada), aman tanpa migrasi data manual.
         if "source" not in cols:
             conn.execute("ALTER TABLE signal_history ADD COLUMN source TEXT NOT NULL DEFAULT 'TOP_PICK'")
+        # Migrasi ketiga: BUG NYATA ditemukan lewat inspeksi data produksi --
+        # record_top_picks()/record_macd_cross_signals() dulu cek duplikat
+        # via SELECT lalu INSERT terpisah (bukan atomic), dengan sebuah
+        # `await price_lookup(...)` (network call) di ANTARA keduanya. Kalau
+        # dua panggilan confidence() tumpang tindih (mis. siklus auto-audit
+        # 600 detik vs request /api/confidence manual yang bersamaan), event
+        # loop bisa berpindah task tepat di celah itu -- kedua task lolos
+        # SELECT "belum ada" sebelum salah satu sempat INSERT, hasilnya
+        # baris duplikat persis (kode+tanggal+source sama, selisih detik).
+        # Dibuktikan nyata: /api/signals produksi berisi ~12 kode tercatat
+        # 2x dengan recorded_at berselisih ~1 detik.
+        #
+        # Bersihkan duplikat lama SEBELUM index unique dibuat (kalau
+        # tidak, CREATE UNIQUE INDEX gagal karena data existing sudah
+        # melanggar constraint-nya) -- baris ber-id TERKECIL per grup
+        # dipertahankan (yang pertama tercatat).
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                GROUP BY kode, date(recorded_at), source
+            )
+        ''')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique_daily
+            ON signal_history(kode, date(recorded_at), source)
+        ''')
+        # Migrasi keempat: kelas duplikasi TERPISAH dari race condition di
+        # atas -- sebelum _is_bursa_weekend() ada, siklus auto-audit tetap
+        # mencatat "sinyal baru" di hari Sabtu/Minggu dengan entry_price/
+        # tp_pct/sl_pct IDENTIK dengan sinyal hari sebelumnya (BEI tutup,
+        # closing price belum berubah) -- baris-baris ini LOLOS index unique
+        # di atas karena tanggalnya beda (Sabtu vs Jumat), padahal secara
+        # substansi itu sinyal yang SAMA persis, cuma dicatat ulang tanpa
+        # informasi baru. Kalau dibiarkan, satu pergerakan pasar bisa
+        # dihitung sebagai 2+ kemenangan/kekalahan terpisah begitu kena TP/
+        # SL. Hapus baris yang PERSIS sama (kode+source+entry_price+tp_pct+
+        # sl_pct) selain yang PALING AWAL tercatat (id terkecil) -- dijalankan
+        # tiap startup, idempotent, aman diulang (kalau sudah bersih tidak
+        # menghapus apa-apa). _is_bursa_weekend() sudah mencegah kasus BARU,
+        # ini cuma membersihkan sisa data historis dari sebelum fix itu ada.
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                GROUP BY kode, source, entry_price, tp_pct, sl_pct
+            )
+        ''')
     _ensured = True
 
 
@@ -140,6 +213,8 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     (web/app.py) pakai ini utk kirim notifikasi Telegram berisi detail
     entry/TP/SL, bukan sekadar angka."""
     _ensure_table()
+    if _is_bursa_weekend():
+        return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
     candidates = [
         it for it in items
         if it.get("confidence_score", 0) >= MIN_SCORE_TO_RECORD
@@ -176,13 +251,21 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         pattern = it.get("pattern")
         with get_db() as conn:
             cur = conn.execute('''
-                INSERT INTO signal_history
+                INSERT OR IGNORE INTO signal_history
                     (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK')
             ''', (
                 it["kode"], entry_price, tp_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
             ))
+            # OR IGNORE: kalau baris ini SEBENARNYA sudah tercatat proses/
+            # task lain di celah antara SELECT di atas dan INSERT ini
+            # (race, lihat catatan idx_signal_unique_daily di _ensure_table),
+            # constraint UNIQUE membuat SQLite diam-diam skip insert ini --
+            # rowcount jadi 0, bukan exception. Jangan masukkan ke `saved`
+            # (bukan baris baru, caller tidak perlu kirim notifikasi lagi).
+            if cur.rowcount == 0:
+                continue
             new_id = cur.lastrowid
         saved.append({
             "id": new_id, "kode": it["kode"], "entry_price": entry_price,
@@ -217,6 +300,8 @@ async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> lis
     price_lookup/pattern/return: lihat docstring record_top_picks(), pola
     yang sama persis dipakai di sini."""
     _ensure_table()
+    if _is_bursa_weekend():
+        return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
     candidates = [
         it for it in items
         if it.get("macd_bullish_cross")
@@ -253,13 +338,18 @@ async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> lis
         tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
         with get_db() as conn:
             cur = conn.execute('''
-                INSERT INTO signal_history
+                INSERT OR IGNORE INTO signal_history
                     (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'MACD HISTOGRAM BULLISH CROSS', 'MACD_CROSS')
             ''', (
                 it["kode"], entry_price, tp_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
             ))
+            # Lihat catatan sama di record_top_picks(): OR IGNORE + index
+            # unique adalah pengaman ATOMIC terakhir terhadap race antara
+            # SELECT dedup di atas dan INSERT ini.
+            if cur.rowcount == 0:
+                continue
             new_id = cur.lastrowid
         saved.append({
             "id": new_id, "kode": it["kode"], "entry_price": entry_price,

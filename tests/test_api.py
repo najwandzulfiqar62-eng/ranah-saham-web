@@ -995,6 +995,148 @@ def test_record_top_picks_uses_realtime_price_with_fallback(clean_signal_db):
     assert by_kode["ZZFAIL"]["entry_price"] == 2000.0  # fallback ke closing harian
 
 
+def test_record_top_picks_concurrent_calls_never_duplicate(clean_signal_db):
+    """Regresi BUG NYATA ditemukan lewat inspeksi data produksi: /api/signals
+    berisi ~12 kode tercatat 2x dengan recorded_at berselisih ~1 detik.
+    Akar masalah: cek dedup (SELECT) dan INSERT dipisah, dengan sebuah
+    `await price_lookup(...)` (network call) di ANTARA keduanya -- kalau
+    dua panggilan record_top_picks() untuk kode yang SAMA tumpang tindih
+    (mis. siklus auto-audit 600 detik vs request /api/confidence manual
+    yang kebetulan bersamaan), event loop bisa berpindah task tepat di
+    celah `await` itu: kedua task lolos SELECT "belum ada" sebelum salah
+    satu sempat INSERT.
+
+    Simulasikan itu di sini dengan price_lookup yang sengaja `await
+    asyncio.sleep(...)` (memaksa interleaving asyncio terjadi, meniru delay
+    network call sungguhan) dan panggil record_top_picks() dua kali
+    BERSAMAAN via asyncio.gather utk kode yang SAMA -- total baris
+    tersimpan utk kode itu HARUS tetap 1, bukan 2."""
+    import asyncio
+
+    from core.signal_history import record_top_picks, get_signal_report, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZRACE", MIN_SCORE_TO_RECORD + 5)]
+
+    async def slow_lookup(kode):
+        await asyncio.sleep(0.05)  # celah yang memicu race di kode lama
+        return 1234.0
+
+    async def _run_concurrent():
+        return await asyncio.gather(
+            record_top_picks(items, price_lookup=slow_lookup),
+            record_top_picks(items, price_lookup=slow_lookup),
+        )
+
+    results = asyncio.run(_run_concurrent())
+    total_saved = sum(len(r) for r in results)
+    assert total_saved == 1, f"diharapkan cuma 1 dari 2 panggilan bersamaan yang berhasil mencatat, dapat {total_saved}"
+
+    report = get_signal_report()
+    kodes = [s["kode"] for s in report["signals"]]
+    assert kodes.count("ZZRACE") == 1
+
+
+def test_is_bursa_weekend_detects_saturday_and_sunday():
+    """Unit test murni utk _is_bursa_weekend() -- Sabtu/Minggu True, hari
+    kerja False. Verified via kalender: 2026-07-04=Sabtu, 2026-07-05=Minggu,
+    2026-06-29=Senin."""
+    from datetime import datetime as _dt
+
+    import core.signal_history as sh
+
+    class _FakeDatetime(_dt):
+        _now = None
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls._now
+
+    import importlib
+
+    try:
+        for fake_now, expected in [
+            (_dt(2026, 7, 4), True),   # Sabtu
+            (_dt(2026, 7, 5), True),   # Minggu
+            (_dt(2026, 6, 29), False),  # Senin
+        ]:
+            _FakeDatetime._now = fake_now
+            sh.datetime = _FakeDatetime
+            assert sh._is_bursa_weekend() is expected, f"{fake_now} salah diklasifikasikan"
+    finally:
+        importlib.reload(sh)  # kembalikan `datetime` asli di modul
+
+
+def test_record_top_picks_and_macd_skip_on_weekend(clean_signal_db, monkeypatch):
+    """Regresi BUG NYATA ditemukan lewat inspeksi data produksi: siklus
+    auto-audit jalan 24/7 (tiap 600 detik) TIDAK PEDULI akhir pekan, dan
+    dulu tetap mencatat 'sinyal Top Pick baru' di hari Sabtu/Minggu dengan
+    entry_price/tp_pct/sl_pct IDENTIK dengan hari Jumat -- karena BEI tutup,
+    closing price yfinance belum berubah sama sekali. Satu pergerakan pasar
+    (Jumat) jadi tercatat sebagai 2-3 sinyal terpisah (Jumat+Sabtu+Minggu),
+    yang MENGGANDAKAN statistik win-rate secara palsu kalau nanti kena TP/SL.
+
+    record_top_picks()/record_macd_cross_signals() HARUS return [] (skip
+    total, tidak mencatat apa pun) kalau _is_bursa_weekend() True -- di-mock
+    langsung (bukan datetime) supaya tidak tercampur dgn clean_signal_db
+    yang sudah mem-patch _is_bursa_weekend ke False secara default."""
+    import asyncio
+
+    import core.signal_history as sh
+
+    monkeypatch.setattr(sh, "_is_bursa_weekend", lambda: True)
+
+    items = [_fake_confidence_item("ZZWEEKEND", sh.MIN_SCORE_TO_RECORD + 5, macd_bullish_cross=True)]
+    assert asyncio.run(sh.record_top_picks(items)) == []
+    assert asyncio.run(sh.record_macd_cross_signals(items)) == []
+
+    report = sh.get_signal_report()
+    assert "ZZWEEKEND" not in [s["kode"] for s in report["signals"]]
+
+
+def test_ensure_table_migration_collapses_identical_weekend_duplicates(clean_signal_db):
+    """Regresi BUG NYATA ditemukan lewat inspeksi data produksi: sebelum
+    _is_bursa_weekend() ada, siklus auto-audit tetap mencatat 'sinyal baru'
+    di hari Sabtu/Minggu dengan entry_price/tp_pct/sl_pct IDENTIK dengan
+    hari sebelumnya (BEI tutup, harga belum berubah) -- baris ini LOLOS
+    index unique (kode,tanggal,source) karena tanggalnya beda. Migrasi
+    _ensure_table() harus membersihkan baris yang PERSIS sama (kode+
+    source+entry_price+tp_pct+sl_pct), menyisakan yang id-nya PALING KECIL
+    (paling awal tercatat)."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
+            VALUES ('ZZDUP', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-04 06:00:00')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
+            VALUES ('ZZDUP', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-05 00:06:00')
+        ''')
+        # Kontrol: kode+source SAMA tapi entry_price BEDA (perubahan pasar
+        # sungguhan) -- harus TETAP keduanya, bukan ikut kehapus.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
+            VALUES ('ZZREAL', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-04 06:00:00')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
+            VALUES ('ZZREAL', 1010, 3.0, 1.9, 'TOP_PICK', '2026-07-06 06:00:00')
+        ''')
+
+    sh._ensured = False  # paksa migrasi jalan ulang meski sudah pernah _ensure_table()
+    sh._ensure_table()
+
+    with get_db() as conn:
+        dup_rows = conn.execute("SELECT recorded_at FROM signal_history WHERE kode='ZZDUP'").fetchall()
+        real_rows = conn.execute("SELECT entry_price FROM signal_history WHERE kode='ZZREAL' ORDER BY entry_price").fetchall()
+
+    assert len(dup_rows) == 1
+    assert dup_rows[0]["recorded_at"] == "2026-07-04 06:00:00"  # yang dipertahankan = paling awal
+    assert [r["entry_price"] for r in real_rows] == [1000.0, 1010.0]  # keduanya tetap ada
+
+
 def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):
     """Regresi inti fitur audit: TP_HIT kalau harga >= entry*(1+tp_pct%),
     SL_HIT kalau harga <= entry*(1-sl_pct%), EXPIRED kalau sudah lewat
@@ -1912,3 +2054,231 @@ def test_parse_ksei_pdf_sanitizes_literal_null_name():
     assert parsed["nama"] == ""
     assert parsed["pct_sebelum"] == 100.0
     assert parsed["pct_setelah"] == 100.0
+
+
+# =========================
+# SMART $ (VOLUME ANOMALI SCANNER) -- REGRESI HASIL AUDIT
+# =========================
+# Ditemukan lewat audit menyeluruh (3 reviewer independen + verifikasi
+# adversarial, semua temuan CONFIRMED, tidak ada yang REFUTED): 5 bug
+# nyata + beberapa gap metodologi sistematis di _sm_classify/
+# _process_sm_df. Setiap test di bawah memverifikasi SATU temuan spesifik,
+# dgn skenario yang sudah diverifikasi manual lewat skrip Python langsung
+# sebelum assertion ditulis (pola yang sama dipakai auditor: buktikan
+# lewat eksekusi, bukan cuma baca kode).
+
+def _sm_df(closes, volumes, start_offset_days=0, gap_before_last_n=None, gap_days=0):
+    """Helper: bikin DataFrame OHLCV sintetis dgn Close & Volume TERKONTROL
+    penuh per hari (index bdate_range) -- utk skenario presisi yang
+    dibutuhkan tes Smart $ (beda dari _fake_ohlcv random di conftest).
+
+    gap_before_last_n/gap_days (opsional): sisipkan gap kalender sebesar
+    gap_days SEBELUM `gap_before_last_n` hari terakhir -- utk simulasi
+    suspensi bursa."""
+    import pandas as pd
+    n = len(closes)
+    assert len(volumes) == n
+    if gap_before_last_n:
+        first_n = n - gap_before_last_n
+        dates_a = pd.bdate_range(
+            end=pd.Timestamp.today().normalize() - pd.Timedelta(days=gap_days + gap_before_last_n * 2),
+            periods=first_n,
+        )
+        dates_b = pd.bdate_range(start=dates_a[-1] + pd.Timedelta(days=gap_days), periods=gap_before_last_n)
+        dates = dates_a.append(dates_b)
+    else:
+        dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    return pd.DataFrame(
+        {"Close": closes, "Volume": volumes, "Open": closes, "High": closes, "Low": closes},
+        index=dates,
+    )
+
+
+def test_sm_classify_chg1_and_rsi_are_no_longer_dead_parameters():
+    """Regresi: chg1 & rsi dulu ada di signature _sm_classify tapi tak
+    sekali pun direferensikan di body -- klasifikasi identik walau
+    keduanya diubah ekstrem. Sekarang harus benar-benar mempengaruhi hasil
+    (guard exhaustion/reversal): saham yang trennya naik TAPI hari ini
+    sendiri ambruk tajam (chg1 sangat negatif) tidak lagi dilabeli
+    'Agresif' begitu saja."""
+    import web.app as app_module
+
+    # vol_ratio & chg5 SAMA persis di kedua panggilan -- HANYA chg1/rsi beda.
+    label_normal = app_module._sm_classify(vol_ratio=2.6, chg5=2.0, chg1=1.0, rsi=60.0)
+    label_reversal = app_module._sm_classify(vol_ratio=2.6, chg5=2.0, chg1=-20.0, rsi=60.0)
+    label_overbought = app_module._sm_classify(vol_ratio=2.6, chg5=2.0, chg1=1.0, rsi=95.0)
+
+    assert label_normal == "Akumulasi Agresif"
+    assert label_reversal != label_normal, "chg1 ekstrem harusnya menurunkan label dari Agresif"
+    assert label_overbought != label_normal, "RSI overbought harusnya menurunkan label dari Agresif"
+
+
+def test_sm_classify_breakout_volume_is_reachable():
+    """Regresi bug nyata (dibuktikan lewat pembuktian boolean lengkap saat
+    audit): definisi lama 'Breakout Volume' (chg5>5 and vol_ratio>=1.3)
+    adalah SUBSET PENUH dari kondisi Akumulasi/Siluman di atasnya --
+    kategori ini TIDAK PERNAH bisa ter-return sama sekali (dead code),
+    padahal legend UI menjanjikannya ke user. Sekarang dibedakan lewat
+    chg1 (lonjakan SATU hari, bukan tren 5 hari) -- harus benar-benar
+    reachable."""
+    import web.app as app_module
+
+    # chg5 kecil (tidak match Akumulasi/Siluman manapun), tapi chg1 besar --
+    # HANYA bisa match kalau Breakout Volume benar-benar reachable.
+    label = app_module._sm_classify(vol_ratio=1.5, chg5=1.0, chg1=4.0, rsi=50.0)
+    assert label == "Breakout Volume"
+
+
+def test_sm_process_df_rsi_aligned_to_valid_idx_not_last_bar():
+    """Regresi BUG NYATA (paling serius dari audit): RSI dulu SELALU
+    dihitung dari bar TERAKHIR mentah di dataframe, tidak peduli valid_idx
+    (hari yg sebenarnya dianalisis utk harga/chg1/chg5/vol_ratio) sudah
+    mundur beberapa hari krn hari-hari setelahnya volumenya nyaris kosong.
+    Skenario: breakout naik tajam di valid_idx, lalu 4 hari volume nyaris
+    mati dgn harga ambruk -- RSI versi lama akan oversold (~13.6, terverifikasi
+    manual), versi benar harus overbought (>50) karena breakout di valid_idx."""
+    import web.app as app_module
+
+    n = 65
+    closes = [1000.0] * n
+    for i in range(1, n - 5):
+        closes[i] = closes[i - 1] * (1.003 if i % 2 == 0 else 0.998)
+    volumes = [8_000_000.0] * n
+
+    closes[-5] = closes[-6] * 1.07  # breakout +7% di hari valid_idx
+    volumes[-5] = 40_000_000.0
+    for i in range(-4, 0):
+        closes[i] = closes[i - 1] * 0.85  # ambruk 15%/hari, 4 hari
+        volumes[i] = 8_000.0  # jauh di bawah 10% baseline -- valid_idx mundur ke -5
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTRSI", df)
+
+    assert result is not None
+    assert result["hari_lalu"] == 4  # valid_idx=-5 -> hari_lalu = abs(-5)-1
+    assert result["rsi"] is not None and result["rsi"] > 50, (
+        f"RSI seharusnya overbought (breakout di valid_idx), dapat {result['rsi']}"
+    )
+
+
+def test_sm_process_df_rsi_all_gains_returns_100_not_none():
+    """Regresi bug nyata: RSI utk kasus loss==0 (semua hari dalam window
+    naik, tanpa hari turun sekalipun) dulu return None -- seharusnya 100
+    menurut definisi RSI standar (RS -> tak hingga). Asimetris dgn kasus
+    sebaliknya (semua turun) yang sudah benar jadi 0."""
+    import web.app as app_module
+
+    n = 65
+    closes = [1000.0 * (1.01 ** i) for i in range(n)]  # naik terus, tanpa hari turun
+    volumes = [8_000_000.0] * n
+    volumes[-1] = 20_000_000.0
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTGAIN", df)
+
+    assert result is not None
+    assert result["rsi"] == 100.0
+
+
+def test_sm_process_df_vol_avg20_window_is_exactly_20_days():
+    """Regresi off-by-one: window vol_avg20 dulu 21 elemen
+    ([end_vol-21:end_vol)), bukan 20 seperti nama variabelnya. Taruh nilai
+    volume EKSTREM persis di hari ke-21 dari valid_idx (index end_vol-21)
+    -- kalau window masih 21 (bug lama), rata-rata akan ikut tertarik naik
+    signifikan; kalau benar 20, nilai ekstrem itu di LUAR window dan tidak
+    berpengaruh sama sekali."""
+    import web.app as app_module
+
+    n = 65
+    closes = [1000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 1050.0
+    volumes[-1] = 20_000_000.0
+    volumes[-22] = 500_000_000.0  # ekstrem, hanya masuk window LAMA (21), bukan window BENAR (20)
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTWIN", df)
+
+    assert result is not None
+    # vol_avg20 (benar) = 8_000_000 -> vol_ratio = 20e6/8e6 = 2.5
+    # vol_avg20 (bug lama, window 21) akan jauh lebih besar krn ikut nilai ekstrem
+    assert result["vol_ratio"] == 2.5, f"window vol_avg20 masih ikut nilai ekstrem di luar 20 hari, dapat vol_ratio={result['vol_ratio']}"
+
+
+def test_sm_process_df_filters_illiquid_stocks():
+    """Regresi gap metodologi: dulu TIDAK ADA filter likuiditas sama
+    sekali -- saham dengan nilai transaksi kecil (rentan vol_ratio palsu
+    dari satu transaksi ganjil) tetap ikut diklasifikasikan. Reuse
+    _liquidity_label yang sudah dipakai fitur lain (record_macd_cross_
+    signals)."""
+    import web.app as app_module
+
+    n = 65
+    closes = [100.0] * n
+    volumes = [50_000.0] * n  # Rp100 x 50rb = Rp5jt/hari -- Tidak Likuid
+    closes[-1] = 105.0
+    volumes[-1] = 200_000.0
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTILLIQ", df)
+    assert result is None
+
+
+def test_sm_process_df_skips_young_listings():
+    """Regresi gap metodologi: dulu tidak ada guard umur listing -- saham
+    IPO baru (<60 hari bursa) dgn baseline volume tidak stabil tetap bisa
+    diklasifikasikan. Data dgn 40 hari (< _SM_MIN_TRADING_DAYS=60) harus
+    di-skip meski pola harga/volumenya sendiri valid."""
+    import web.app as app_module
+
+    n = 40
+    closes = [1000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 1050.0
+    volumes[-1] = 20_000_000.0
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTYOUNG", df)
+    assert result is None
+
+
+def test_sm_process_df_skips_suspension_gap():
+    """Regresi gap metodologi: dulu chg5/vol_ratio bisa diam-diam
+    melompati gap suspensi berminggu-minggu (baris Volume=0/NaN sudah
+    dibuang sebelum masuk _process_sm_df), membandingkan harga SEBELUM vs
+    SESUDAH suspensi tapi disajikan seolah tren 5 hari sungguhan. Window
+    dengan gap kalender >_SM_MAX_GAP_DAYS di rentang yang dipakai harus
+    di-skip (return None), bukan menghasilkan angka yang salah."""
+    import web.app as app_module
+
+    n = 65
+    closes = [1000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 1050.0
+    volumes[-1] = 20_000_000.0
+
+    df = _sm_df(closes, volumes, gap_before_last_n=5, gap_days=25)
+    result = app_module._process_sm_df("TESTGAP", df)
+    assert result is None
+
+
+def test_sm_process_df_exposes_freshness_metadata():
+    """Regresi gap: dulu valid_idx (bar keberapa yang sebenarnya kena
+    anomali) tidak diekspos ke caller sama sekali -- tidak bisa bedakan
+    'anomali hari ini' vs 'anomali beberapa hari lalu yang baru
+    terdeteksi'. hari_lalu=0 & tanggal harus ada utk kasus anomali di hari
+    terakhir (valid_idx=-1, tidak perlu mundur)."""
+    import web.app as app_module
+
+    n = 65
+    closes = [1000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 1060.0
+    volumes[-1] = 25_000_000.0
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTFRESH", df)
+
+    assert result is not None
+    assert result["hari_lalu"] == 0
+    assert "tanggal" in result and result["tanggal"]

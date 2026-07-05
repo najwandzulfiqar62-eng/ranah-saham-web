@@ -2930,24 +2930,65 @@ _SM_UNIVERSE = [
 
 
 def _sm_classify(vol_ratio: float, chg5: float, chg1: float, rsi: float | None) -> str:
-    """Klasifikasi pola institusional berdasarkan volume + price action."""
+    """Klasifikasi pola institusional berdasarkan volume + price action.
+
+    chg1 & rsi SEKARANG benar-benar dipakai (BUG NYATA ditemukan lewat
+    audit: dulu keduanya ada di signature tapi tak sekali pun dipakai di
+    body -- saham yang hari itu SENDIRI ambruk tajam, atau RSI sudah
+    sangat overbought/oversold, tetap bisa dilabeli "Agresif" hanya dari
+    vol_ratio + tren 5 hari, padahal momentumnya sedang berbalik/jenuh).
+    Sekarang keduanya jadi guard exhaustion/reversal: kondisi "Agresif"
+    diturunkan ke versi biasa kalau ada tanda pembalikan/kejenuhan.
+
+    chg1 JUGA dipakai sbg pembeda kategori "Breakout Volume" (lonjakan
+    SATU hari) -- definisi lama (`chg5 > 5`) selalu jadi subset PENUH dari
+    kondisi Akumulasi/Siluman di bawahnya, sehingga TIDAK PERNAH bisa
+    tercapai (dead code, dibuktikan lewat pembuktian boolean lengkap saat
+    audit, dan sudah jadi UI mismatch aktif -- legend menjanjikan kategori
+    yang backend tidak pernah bisa kembalikan)."""
     high_vol = vol_ratio >= 1.8
     very_high = vol_ratio >= 2.5
     rising = chg5 > 1.5
     falling = chg5 < -1.5
+    overbought = rsi is not None and rsi >= 80
+    oversold = rsi is not None and rsi <= 20
+    reversal_down = chg1 <= -3  # hari ini sendiri ambruk -- lawan arah tren naik 5 hari
+    reversal_up = chg1 >= 3     # hari ini sendiri rebound -- lawan arah tren turun 5 hari
+
+    if chg1 > 3 and vol_ratio >= 1.3:
+        return "Breakout Volume"
     if very_high and rising:
-        return "Akumulasi Agresif"
+        return "Akumulasi" if (reversal_down or overbought) else "Akumulasi Agresif"
     if high_vol and rising:
         return "Akumulasi"
     if very_high and falling:
-        return "Distribusi Agresif"
+        return "Distribusi" if (reversal_up or oversold) else "Distribusi Agresif"
     if high_vol and falling:
         return "Distribusi"
     if not high_vol and rising and chg5 > 3:
         return "Siluman (quiet buy)"
-    if chg5 > 5 and vol_ratio >= 1.3:
-        return "Breakout Volume"
     return ""
+
+
+# Minimum data historis (hari bursa) sebelum saham layak di-scan -- guard
+# umur listing (BUG NYATA ditemukan lewat audit: saham IPO baru/baru lepas
+# suspensi dengan baseline <20 hari menghasilkan vol_ratio yang tidak
+# stabil/palsu, tidak ada guard ini sebelumnya). 45 (bukan ~60/3-bulan
+# penuh) -- diverifikasi live: period="3mo" yfinance SETELAH filter
+# Volume>0 konsisten menghasilkan ~58 hari trading utk saham likuid biasa
+# (BUKAN 60+), jadi threshold 60 justru mengecualikan SEMUA saham lama
+# sekalipun (ditemukan saat verifikasi live, BBCA pun ikut ter-skip).
+# 45 memberi margin aman di bawah ~58 utk saham normal, sambil tetap jauh
+# di atas kasus IPO super baru (biasanya <20-30 hari trading).
+_SM_MIN_TRADING_DAYS = 45
+
+# Gap kalender maksimum (hari) yang dianggap wajar antar candle berurutan
+# dalam window yang dipakai -- weekend/libur pendek biasa cuma 1-4 hari;
+# gap lebih besar mengindikasikan suspensi bursa. Tanpa guard ini, window
+# vol_avg20/chg5 bisa diam-diam melompati suspensi berminggu-minggu,
+# membandingkan harga SEBELUM vs SESUDAH suspensi tapi disajikan seolah
+# tren 5 hari yang sungguhan (temuan audit, dikonfirmasi lewat trace kode).
+_SM_MAX_GAP_DAYS = 10
 
 
 def _process_sm_df(kode: str, df_tr) -> dict | None:
@@ -2955,7 +2996,7 @@ def _process_sm_df(kode: str, df_tr) -> dict | None:
     try:
         close = df_tr["Close"]
         volume = df_tr["Volume"]
-        if len(close) < 6 or len(volume) < 10:
+        if len(close) < _SM_MIN_TRADING_DAYS or len(volume) < _SM_MIN_TRADING_DAYS:
             return None
 
         vol_baseline = float(volume.iloc[:-1].mean()) if len(volume) > 1 else float(volume.mean())
@@ -2970,8 +3011,21 @@ def _process_sm_df(kode: str, df_tr) -> dict | None:
             return None
 
         end_vol = len(volume) + valid_idx
+        window_start = max(0, end_vol - 20)
+
+        # Deteksi gap suspensi lewat kontinuitas TANGGAL KALENDER (bukan
+        # cuma jumlah bar) dalam rentang yang dipakai vol_avg20 + hari
+        # valid_idx sendiri.
+        window_dates = df_tr.index[window_start:end_vol + 1]
+        if len(window_dates) >= 2:
+            gaps = window_dates.to_series().diff().dt.days.dropna()
+            if (gaps > _SM_MAX_GAP_DAYS).any():
+                return None
+
         vol_today = float(volume.iloc[valid_idx])
-        vol_window = volume.iloc[max(0, end_vol - 21):end_vol]
+        vol_window = volume.iloc[window_start:end_vol]
+        # off-by-one lama: window ini dulu 21 elemen ([end_vol-21:end_vol)),
+        # bukan 20 seperti nama variabelnya -- diperbaiki jadi persis 20.
         vol_avg20 = float(vol_window.mean()) if len(vol_window) >= 5 else vol_baseline
         vol_ratio = round(vol_today / vol_avg20, 2) if vol_avg20 > 0 else 1.0
 
@@ -2981,18 +3035,55 @@ def _process_sm_df(kode: str, df_tr) -> dict | None:
         end_close = len(close) + valid_idx
         chg5 = round((price / float(close.iloc[max(0, end_close - 5)]) - 1) * 100, 2) if end_close >= 5 else 0.0
 
-        delta = close.diff().dropna()
+        # Filter likuiditas (reuse _liquidity_label -- field yang SAMA
+        # dipakai record_macd_cross_signals utk memastikan sinyal "bisa
+        # dieksekusi secara wajar"). BUG NYATA ditemukan lewat audit: dulu
+        # TIDAK ADA filter likuiditas sama sekali di scanner ini, padahal
+        # saham illikuid paling rentan vol_ratio palsu (satu transaksi
+        # ganjil bisa melonjakkan ratio tanpa mencerminkan minat
+        # institusional sungguhan).
+        avg_value_20 = float((close.iloc[window_start:end_vol] * volume.iloc[window_start:end_vol]).mean()) if end_vol > window_start else 0.0
+        likuiditas = _liquidity_label(avg_value_20)
+        if likuiditas in ("Kurang Likuid", "Tidak Likuid"):
+            return None
+
+        # RSI dihitung dari histori SAMPAI hari valid_idx (bukan hari
+        # terakhir mentah di df) -- BUG NYATA ditemukan lewat audit: window
+        # RSI dulu SELALU memakai .iloc[-1] tanpa peduli valid_idx sudah
+        # mundur beberapa hari (mis. karena 1-4 hari terakhir volumenya
+        # nyaris kosong), sehingga RSI bisa mencerminkan kondisi BEBERAPA
+        # HARI SETELAH hari yang sebenarnya dianalisis -- bisa terbalik
+        # arah sepenuhnya (oversold vs overbought).
+        close_upto_valid = close.iloc[:end_close + 1]
+        delta = close_upto_valid.diff().dropna()
         gain = delta.clip(lower=0).rolling(14).mean()
         loss = (-delta.clip(upper=0)).rolling(14).mean()
-        rs_val = gain.iloc[-1] / loss.iloc[-1] if (loss.iloc[-1] != 0 and not _np.isnan(loss.iloc[-1])) else None
-        rsi = round(100 - 100 / (1 + rs_val), 1) if rs_val is not None else None
+        if len(gain) == 0 or _np.isnan(gain.iloc[-1]) or _np.isnan(loss.iloc[-1]):
+            rsi = None  # window RSI (14 hari) belum cukup data sampai hari valid_idx
+        else:
+            gain_last, loss_last = float(gain.iloc[-1]), float(loss.iloc[-1])
+            if loss_last == 0 and gain_last == 0:
+                rsi = 50.0  # harga flat total 14 hari terakhir -- tak ada naik/turun sama sekali
+            elif loss_last == 0:
+                rsi = 100.0  # semua hari naik -- RS -> tak hingga (BUG lama: dulu return None)
+            else:
+                rsi = round(100 - 100 / (1 + gain_last / loss_last), 1)
 
         pattern = _sm_classify(vol_ratio, chg5, chg1, rsi)
         if not pattern:
             return None
 
+        # Freshness: berapa hari yang lalu anomali ini sebenarnya terjadi
+        # relatif ke hari terakhir data yang tersedia -- dulu tidak
+        # diekspos sama sekali (temuan audit), caller/UI tidak bisa
+        # membedakan "anomali hari ini" vs "anomali beberapa hari lalu
+        # yang baru terdeteksi karena data tipis".
+        hari_lalu = abs(valid_idx) - 1
+        tanggal = str(df_tr.index[valid_idx].date())
+
         return {"kode": kode, "harga": int(price), "chg1": chg1, "chg5": chg5,
                 "vol_ratio": vol_ratio, "rsi": rsi, "pola": pattern,
+                "hari_lalu": hari_lalu, "tanggal": tanggal,
                 "grup": GRUP_KONGLOMERASI.get(kode, "Independen")}
     except Exception:
         return None
@@ -3002,7 +3093,10 @@ async def _scan_one_sm(kode: str) -> dict | None:
     """Scan satu ticker untuk anomali volume."""
     try:
         df = await _clean(kode + ".JK", period="3mo", interval="1d")
-        if df is None or len(df) < 15:
+        # Selaras dgn guard umur listing di _process_sm_df (_SM_MIN_TRADING_
+        # DAYS) -- skip lebih awal di sini juga supaya tidak buang compute
+        # utk saham yang sudah pasti gagal guard itu.
+        if df is None or len(df) < _SM_MIN_TRADING_DAYS:
             return None
         df_tr = df[df["Volume"] > 0].dropna(subset=["Close", "Volume"])
         return _process_sm_df(kode, df_tr)

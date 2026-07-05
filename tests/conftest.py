@@ -135,10 +135,29 @@ def client():
 
 
 @pytest.fixture
-def clean_signal_db():
+def clean_signal_db(monkeypatch):
     """Kosongkan tabel signal_history sebelum & sesudah tes -- supaya
     assertion statistik (win rate, avg return, dst) tidak terpengaruh sisa
-    baris dari tes lain yang jalan lebih dulu di sesi pytest yang sama."""
+    baris dari tes lain yang jalan lebih dulu di sesi pytest yang sama.
+
+    Juga mem-patch _is_bursa_weekend() di core.signal_history supaya
+    SELALU False (hari kerja) -- record_top_picks()/record_macd_cross_
+    signals() sengaja SKIP pencatatan di akhir pekan, jadi tanpa ini
+    SEMUA tes yang mengandalkan fixture ini akan gagal kalau kebetulan
+    dijalankan di hari Sabtu/Minggu sungguhan (bukan bug tes, tapi
+    lingkungan tes yang harus deterministik terlepas dari kapan `pytest`
+    dijalankan). Sengaja patch fungsi ini SAJA (bukan `datetime` module-
+    level) -- audit_open_signals() di modul yang sama juga pakai
+    datetime.now() sungguhan utk hitung EXPIRED (MAX_HOLD_DAYS), jadi
+    memalsukan seluruh datetime modul akan merusak perhitungan itu. Tes
+    yang KHUSUS menguji perilaku akhir pekan (lihat
+    test_record_top_picks_and_macd_skip_on_weekend) mem-patch ulang
+    _is_bursa_weekend() jadi True sendiri setelah fixture ini, jadi tetap
+    bisa override."""
+    import core.signal_history as _sh
+
+    monkeypatch.setattr(_sh, "_is_bursa_weekend", lambda: False)
+
     from core.signal_history import _ensure_table
     from core.database import get_db
 
