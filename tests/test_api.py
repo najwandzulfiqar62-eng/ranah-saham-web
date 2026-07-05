@@ -1822,3 +1822,88 @@ def test_whymove_404_when_data_insufficient(client, monkeypatch):
     monkeypatch.setattr(app_module, "_clean", _too_short)
     r = client.get("/api/whymove/BBCA")
     assert r.status_code == 404
+
+
+def test_split_akumulasi_distribusi_excludes_zero_change():
+    """Regresi bug nyata (dilaporkan user via screenshot 'pemegang
+    sahamnya kosong'): beberapa laporan X-15 adalah buyback/repurchase
+    agreement yang dilaporkan lewat anggota Direksi/Komisaris atas nama
+    pengendali -- pct_sebelum==pct_setelah (0.00% perubahan, sekadar
+    reafirmasi formal) DAN field nama kosong (IDX sendiri merender
+    'null'). Baris begini TIDAK BOLEH nongol di 'Top Akumulasi' karena
+    bukan sinyal akumulasi sungguhan -- cuma baris kosong tanpa nama
+    tanpa makna. akumulasi HARUS perubahan > 0 (strict), bukan >= 0."""
+    import web.app as app_module
+
+    items = [
+        {"kode": "FAST", "nama": "", "jenis": "beli", "perubahan": 0.0,
+         "pct_sebelum": 100.0, "pct_setelah": 100.0, "pengendali": True, "jabatan": "Dewan Komisaris"},
+        {"kode": "BBCA", "nama": "Big Fund", "jenis": "beli", "perubahan": 2.5,
+         "pct_sebelum": 10.0, "pct_setelah": 12.5, "pengendali": False, "jabatan": ""},
+        {"kode": "TLKM", "nama": "Retail X", "jenis": "jual", "perubahan": -1.0,
+         "pct_sebelum": 6.0, "pct_setelah": 5.0, "pengendali": False, "jabatan": ""},
+    ]
+    akumulasi, distribusi = app_module._split_akumulasi_distribusi(items)
+    assert [x["kode"] for x in akumulasi] == ["BBCA"]
+    assert [x["kode"] for x in distribusi] == ["TLKM"]
+
+
+def test_x15_and_insider_endpoints_both_exclude_zero_change_buyback(client, monkeypatch):
+    """Regresi yang sama seperti di atas, tapi lewat endpoint /api/x15 DAN
+    /api/insider -- keduanya berbagi _split_akumulasi_distribusi() jadi
+    satu perbaikan otomatis berlaku ke dua-duanya (dulu 2 salinan logika
+    filter yang identik, rawan satu diperbaiki satunya lupa)."""
+    import web.app as app_module
+
+    raw_items = [
+        {"kode": "FAST", "tanggal": "2026-07-05", "pdf_url": "x", "nama": "",
+         "perusahaan": "FAST FOOD INDONESIA", "jabatan": "Dewan Komisaris",
+         "pct_sebelum": 100.0, "pct_setelah": 100.0, "perubahan": 0.0,
+         "jenis": "beli", "pengendali": True},
+    ]
+
+    async def _fake_fetch(days_back=0):
+        return raw_items
+
+    monkeypatch.setattr(app_module, "_fetch_x15_today", _fake_fetch)
+
+    x15 = client.get("/api/x15?hari=0").json()
+    assert x15["akumulasi"] == []
+    assert x15["distribusi"] == []
+
+    insider = client.get("/api/insider?hari=0").json()
+    assert insider["akumulasi"] == []
+    assert insider["distribusi"] == []
+
+
+def test_parse_ksei_pdf_sanitizes_literal_null_name():
+    """Regresi: PDF X-15 untuk laporan buyback/repurchase agreement lewat
+    anggota Direksi/Komisaris punya field 'Nama (sesuai SID)' yang oleh
+    sistem IDX sendiri di-render literal jadi teks 'null' (bukan
+    dikosongkan seperti field privasi lain, mis. 'Tidak ditampilkan').
+    _parse_ksei_pdf harus mengubahnya jadi string kosong "" -- BUKAN
+    membiarkan literal 'null' bocor sebagai nama sungguhan ke UI/
+    konsumen lain (yang mungkin cuma cek truthiness biasa, bukan
+    bandingkan ke string 'null' secara eksplisit)."""
+    import zlib
+    import web.app as app_module
+
+    # PDF minimal: satu content stream berisi string literal PDF dengan
+    # parens ter-escape (persis pola nyata dari PDF KSEI sungguhan),
+    # supaya regex parsing di _parse_ksei_pdf teruji dengan bentuk asli.
+    content = rb"(Nama \(sesuai SID\)) Tj (: null) Tj (Hak Suara Sebelum Transaksi) Tj (: 100,00%) Tj (Hak Suara Setelah Transaksi) Tj (: 100,00%) Tj "
+    # _parse_ksei_pdf men-strip() bytes stream mentah sebelum decompress --
+    # kalau kebetulan byte awal/akhir hasil zlib.compress() masuk definisi
+    # whitespace bytes.strip() (mis. 0x0b), stream jadi terpotong & gagal
+    # decompress. Trailing spasi di atas dipilih supaya kebetulan itu
+    # TIDAK terjadi untuk payload tes ini (diverifikasi tidak diawali/
+    # diakhiri whitespace byte) -- bukan mengoreksi fragility itu sendiri
+    # (di luar cakupan bug ini), sekadar menghindarinya di data tes.
+    compressed = zlib.compress(content)
+    assert compressed[:1] not in b" \t\n\r\x0b\x0c" and compressed[-1:] not in b" \t\n\r\x0b\x0c"
+    pdf_bytes = b"stream\n" + compressed + b"\nendstream"
+
+    parsed = app_module._parse_ksei_pdf(pdf_bytes)
+    assert parsed["nama"] == ""
+    assert parsed["pct_sebelum"] == 100.0
+    assert parsed["pct_setelah"] == 100.0

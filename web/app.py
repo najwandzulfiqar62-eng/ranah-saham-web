@@ -3130,8 +3130,18 @@ def _parse_ksei_pdf(pdf_bytes: bytes) -> dict:
         except Exception:
             return 0.0
 
-    nama = _find_val("sesuai SID", "Name (SID", "Name \\(SID")
-    perusahaan = _find_val("Nama Perusahaan Tbk", "Issuer")
+    def _clean_nama(s: str) -> str:
+        """Beberapa laporan buyback/repurchase agreement yang dilaporkan
+        via anggota Direksi/Komisaris (bukan investor individu ber-SID)
+        punya field 'Nama (sesuai SID)' yang oleh sistem IDX sendiri
+        di-render literal jadi teks 'null' (bukan dikosongkan/'Tidak
+        ditampilkan' seperti field privasi lain) -- BUKAN bug parsing
+        di sisi kita, tapi tetap harus disaring supaya 'null' tidak
+        bocor sebagai nama sungguhan ke UI/konsumen lain."""
+        return "" if s.strip().lower() == "null" else s
+
+    nama = _clean_nama(_find_val("sesuai SID", "Name (SID", "Name \\(SID"))
+    perusahaan = _clean_nama(_find_val("Nama Perusahaan Tbk", "Issuer"))
     jabatan = _find_val("Jabatan", "Position")
     pct_sebelum = _parse_pct(_find_val("Hak Suara Sebelum", "Voting rights before"))
     pct_setelah = _parse_pct(_find_val("Hak Suara Setelah", "Voting rights after"))
@@ -3221,6 +3231,30 @@ def _is_insider_jabatan(jabatan: str) -> bool:
     return any(kw in j for kw in ("direktur", "komisaris", "direksi"))
 
 
+def _split_akumulasi_distribusi(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Pisah item X-15 jadi akumulasi (naik) / distribusi (turun), dipakai
+    SAMA oleh /api/x15 dan /api/insider (dulu 2 salinan logika yang sama
+    persis -- risiko satu diperbaiki, satunya lupa, seperti kasus nyata
+    ticker-matching di core/news.py sebelumnya).
+
+    perubahan HARUS strictly non-zero (>0 / <0) -- bukan >=0 -- karena
+    beberapa laporan (mis. buyback/repurchase agreement yang dilaporkan
+    lewat anggota Direksi/Komisaris atas nama pengendali) punya
+    pct_sebelum==pct_setelah (0.00% perubahan, sekadar reafirmasi/
+    otorisasi formal, BUKAN transaksi akumulasi sungguhan) dan field
+    nama yang kosong -- kalau ditampilkan di 'Top Akumulasi' hasilnya
+    baris tanpa nama & tanpa sinyal apa pun, membingungkan user."""
+    akumulasi = sorted(
+        [x for x in items if x["jenis"] == "beli" and x["perubahan"] > 0],
+        key=lambda x: x["perubahan"], reverse=True,
+    )
+    distribusi = sorted(
+        [x for x in items if x["jenis"] in ("jual", "transfer") or x["perubahan"] < 0],
+        key=lambda x: x["perubahan"],
+    )
+    return akumulasi, distribusi
+
+
 @app.get("/api/x15")
 async def api_x15(hari: int = 0):
     """Ringkasan harian transaksi kepemilikan ≥5% dari IDX X-15 filings.
@@ -3240,15 +3274,7 @@ async def api_x15(hari: int = 0):
     # insider kecil (direksi/komisaris di bawah 5%) sengaja disaring keluar
     # di sini, lihat /api/insider untuk itu.
     items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
-
-    akumulasi = sorted(
-        [x for x in items if x["jenis"] in ("beli",) and x["perubahan"] >= 0],
-        key=lambda x: x["perubahan"], reverse=True,
-    )
-    distribusi = sorted(
-        [x for x in items if x["jenis"] in ("jual", "transfer") or x["perubahan"] < 0],
-        key=lambda x: x["perubahan"],
-    )
+    akumulasi, distribusi = _split_akumulasi_distribusi(items)
 
     from datetime import timedelta as _td, datetime as _dt
     tgl_str = (_dt.now() - _td(days=hari)).strftime("%d %b %Y")
@@ -3283,15 +3309,7 @@ async def api_insider(hari: int = 0):
         raise HTTPException(502, f"Gagal fetch data insider: {e}")
 
     items = [x for x in raw_items if _is_insider_jabatan(x["jabatan"])]
-
-    akumulasi = sorted(
-        [x for x in items if x["jenis"] in ("beli",) and x["perubahan"] >= 0],
-        key=lambda x: x["perubahan"], reverse=True,
-    )
-    distribusi = sorted(
-        [x for x in items if x["jenis"] in ("jual", "transfer") or x["perubahan"] < 0],
-        key=lambda x: x["perubahan"],
-    )
+    akumulasi, distribusi = _split_akumulasi_distribusi(items)
 
     from datetime import timedelta as _td, datetime as _dt
     tgl_str = (_dt.now() - _td(days=hari)).strftime("%d %b %Y")

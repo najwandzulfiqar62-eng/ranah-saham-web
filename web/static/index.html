@@ -3926,10 +3926,17 @@ function _topRow(item,type){
   const cc=type==='aku'?'var(--bull)':'var(--bear)';
   const bigMove=Math.abs(perubahan)>=1;
   const flashBadge=bigMove?`<span style="font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:${cc}22;color:${cc};margin-left:4px">${perubahan>0?'LONJAK':'SUSUT'}</span>`:'';
-  const jabatan=_pemegangMode==='insider'&&item.jabatan?`<span style="font-size:9.5px;color:var(--muted);display:block">${item.jabatan}</span>`:'';
+  const hasNama=item.nama&&item.nama!=='null';
+  // Tampilkan jabatan sebagai fallback konteks kalau nama tidak
+  // tersedia (mis. laporan buyback/repurchase agreement yang dilaporkan
+  // lewat anggota Direksi/Komisaris -- IDX sendiri tidak mencantumkan
+  // nama individu untuk jenis laporan ini) -- jangan biarkan baris
+  // cuma tampil "—" tanpa konteks apa pun kalau kita punya info jabatan.
+  const showJabatan=(_pemegangMode==='insider'||!hasNama)&&item.jabatan;
+  const jabatan=showJabatan?`<span style="font-size:9.5px;color:var(--muted);display:block">${item.jabatan}</span>`:'';
   return`<div class="x15-top-row">
     <span class="x15-top-ticker" onclick="loadHolders('${item.kode}')">${item.kode}${flashBadge}</span>
-    <span class="x15-top-name" title="${item.nama||''}${item.jabatan?' · '+item.jabatan:''}">${(item.nama&&item.nama!=='null'?item.nama:'—')}${jabatan}</span>
+    <span class="x15-top-name" title="${item.nama||''}${item.jabatan?' · '+item.jabatan:''}">${(hasNama?item.nama:'—')}${jabatan}</span>
     <span class="x15-top-chg" style="color:${cc}">${sign}${perubahan.toFixed(2)}%</span>
     <span class="x15-top-kep">${item.pct_setelah.toFixed(2)}%</span>
   </div>`;
@@ -4027,7 +4034,7 @@ async function loadBerulang(){
       <div class="berulang-hdr">
         <span class="berulang-ticker" onclick="loadHolders('${item.kode}')">${item.kode}</span>
         <span class="berulang-days">${dayCount} hari</span>
-        <span class="berulang-holder" title="${item.nama||''}${item.jabatan?' · '+item.jabatan:''}">${(item.nama&&item.nama!=='null'?item.nama:'—')}${_pemegangMode==='insider'&&item.jabatan?' · '+item.jabatan:''}</span>
+        <span class="berulang-holder" title="${item.nama||''}${item.jabatan?' · '+item.jabatan:''}">${(item.nama&&item.nama!=='null'?item.nama:'—')}${(_pemegangMode==='insider'||!(item.nama&&item.nama!=='null'))&&item.jabatan?' · '+item.jabatan:''}</span>
       </div>
       <div class="berulang-tl">${dots}</div>
       <div class="berulang-range"><span>${pctStart}%</span><span style="font-size:9px;color:var(--line);align-self:center;padding:0 4px">→</span><span class="end">${pctEnd}%</span></div>
