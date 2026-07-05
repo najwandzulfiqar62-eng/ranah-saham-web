@@ -1824,15 +1824,17 @@ def test_whymove_404_when_data_insufficient(client, monkeypatch):
     assert r.status_code == 404
 
 
-def test_split_akumulasi_distribusi_excludes_zero_change():
+def test_split_x15_items_moves_zero_change_to_aksi_korporasi():
     """Regresi bug nyata (dilaporkan user via screenshot 'pemegang
     sahamnya kosong'): beberapa laporan X-15 adalah buyback/repurchase
     agreement yang dilaporkan lewat anggota Direksi/Komisaris atas nama
     pengendali -- pct_sebelum==pct_setelah (0.00% perubahan, sekadar
     reafirmasi formal) DAN field nama kosong (IDX sendiri merender
     'null'). Baris begini TIDAK BOLEH nongol di 'Top Akumulasi' karena
-    bukan sinyal akumulasi sungguhan -- cuma baris kosong tanpa nama
-    tanpa makna. akumulasi HARUS perubahan > 0 (strict), bukan >= 0."""
+    bukan sinyal akumulasi sungguhan -- akumulasi HARUS perubahan > 0
+    (strict), bukan >= 0. Follow-up permintaan user: laporan begini
+    JANGAN dibuang total, tapi dipisah ke kategori 'aksi_korporasi'
+    supaya tetap ada sebagai konteks (bukan ranking akumulasi)."""
     import web.app as app_module
 
     items = [
@@ -1843,15 +1845,16 @@ def test_split_akumulasi_distribusi_excludes_zero_change():
         {"kode": "TLKM", "nama": "Retail X", "jenis": "jual", "perubahan": -1.0,
          "pct_sebelum": 6.0, "pct_setelah": 5.0, "pengendali": False, "jabatan": ""},
     ]
-    akumulasi, distribusi = app_module._split_akumulasi_distribusi(items)
+    akumulasi, distribusi, aksi_korporasi = app_module._split_x15_items(items)
     assert [x["kode"] for x in akumulasi] == ["BBCA"]
     assert [x["kode"] for x in distribusi] == ["TLKM"]
+    assert [x["kode"] for x in aksi_korporasi] == ["FAST"]
 
 
-def test_x15_and_insider_endpoints_both_exclude_zero_change_buyback(client, monkeypatch):
+def test_x15_and_insider_endpoints_both_move_zero_change_to_aksi_korporasi(client, monkeypatch):
     """Regresi yang sama seperti di atas, tapi lewat endpoint /api/x15 DAN
-    /api/insider -- keduanya berbagi _split_akumulasi_distribusi() jadi
-    satu perbaikan otomatis berlaku ke dua-duanya (dulu 2 salinan logika
+    /api/insider -- keduanya berbagi _split_x15_items() jadi satu
+    perbaikan otomatis berlaku ke dua-duanya (dulu 2 salinan logika
     filter yang identik, rawan satu diperbaiki satunya lupa)."""
     import web.app as app_module
 
@@ -1870,10 +1873,12 @@ def test_x15_and_insider_endpoints_both_exclude_zero_change_buyback(client, monk
     x15 = client.get("/api/x15?hari=0").json()
     assert x15["akumulasi"] == []
     assert x15["distribusi"] == []
+    assert [x["kode"] for x in x15["aksi_korporasi"]] == ["FAST"]
 
     insider = client.get("/api/insider?hari=0").json()
     assert insider["akumulasi"] == []
     assert insider["distribusi"] == []
+    assert [x["kode"] for x in insider["aksi_korporasi"]] == ["FAST"]
 
 
 def test_parse_ksei_pdf_sanitizes_literal_null_name():

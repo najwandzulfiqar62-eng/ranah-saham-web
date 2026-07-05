@@ -1346,6 +1346,12 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       </section>
 
     </div>
+
+    <!-- AKSI KORPORASI (buyback/reafirmasi tanpa perubahan %) -->
+    <section class="panel x15-panel" id="pnl-aksi-korporasi" style="margin-top:12px">
+      <div class="skel loadbar" style="height:120px;border-radius:8px"></div>
+    </section>
+
   </div>
   <!-- BERITA -->
   <div class="view" id="v-berita">
@@ -3970,13 +3976,53 @@ function _renderTopPanels(d){
     </div>
     ${colHdr}
     ${dis.slice(0,6).map(r=>_topRow(r,'dis')).join('')||noData}`;
+  _renderAksiKorporasi(d);
+}
+
+// Laporan X-15 dengan pct_sebelum==pct_setelah (0% perubahan, mis.
+// buyback/repurchase agreement yang dilaporkan lewat anggota Direksi/
+// Komisaris atas nama pengendali -- lihat _split_x15_items() di
+// web/app.py) TIDAK dianggap sinyal akumulasi/distribusi asli, tapi
+// user tetap mau ini ditampilkan sebagai KONTEKS aksi korporasi,
+// terpisah dari ranking akumulasi -- bukan disembunyikan total.
+function _aksiKorporasiRow(item){
+  const label=item.jenis==='beli'?'Pembelian (buyback)':item.jenis==='jual'?'Penjualan':'Reafirmasi';
+  const nama=item.nama&&item.nama!=='null'?item.nama:(item.perusahaan||'—');
+  return`<div class="x15-top-row">
+    <span class="x15-top-ticker" onclick="loadHolders('${item.kode}')">${item.kode}</span>
+    <span class="x15-top-name" title="${item.jabatan||''}">${nama}${item.jabatan?`<span style="font-size:9.5px;color:var(--muted);display:block">${item.jabatan}</span>`:''}</span>
+    <span class="x15-top-chg" style="color:var(--muted);font-size:11px">${label}</span>
+    <span class="x15-top-kep">${item.pct_setelah.toFixed(2)}%</span>
+  </div>`;
+}
+
+function _renderAksiKorporasi(d){
+  const el=$('#pnl-aksi-korporasi');
+  if(!el)return;
+  const list=d?d.aksi_korporasi||[]:[];
+  const noData=`<p class="muted" style="font-size:13px;padding:14px 0 4px">Tidak ada aksi korporasi untuk tanggal ini.</p>`;
+  const colHdr=`<div style="display:flex;gap:6px;padding-bottom:7px;border-bottom:1px solid var(--line);font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--faint)">
+    <span style="min-width:44px">SAHAM</span><span style="flex:1">PERUSAHAAN / PELAPOR</span>
+    <span style="min-width:110px;text-align:right">JENIS</span>
+    <span class="x15-col-kep" style="min-width:42px;text-align:right">KEP %</span>
+  </div>`;
+  el.innerHTML=`
+    <div class="x15-top-head">
+      <span style="color:var(--gold)">◆</span>
+      <span style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--gold)">AKSI KORPORASI (TANPA PERUBAHAN %)</span>
+      <span style="margin-left:auto;background:rgba(210,153,34,.13);color:var(--gold);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${list.length}</span>
+    </div>
+    ${colHdr}
+    ${list.map(_aksiKorporasiRow).join('')||noData}
+    <p class="muted" style="font-size:10.5px;margin-top:10px;line-height:1.6">Laporan X-15 tanpa perubahan % kepemilikan (mis. buyback/repurchase agreement yang dilaporkan lewat anggota Direksi/Komisaris atas nama pengendali) -- bukan sinyal akumulasi/distribusi, sekadar konteks aksi korporasi.</p>`;
 }
 
 async function loadX15(hari=0){
   _x15DaySelected=hari;
-  const akuEl=$('#pnl-top-aku');const disEl=$('#pnl-top-dis');
+  const akuEl=$('#pnl-top-aku');const disEl=$('#pnl-top-dis');const aksiEl=$('#pnl-aksi-korporasi');
   const skel=`<div class="skel loadbar" style="height:180px;border-radius:8px"></div>`;
   if(akuEl)akuEl.innerHTML=skel;if(disEl)disEl.innerHTML=skel;
+  if(aksiEl)aksiEl.innerHTML=`<div class="skel loadbar" style="height:120px;border-radius:8px"></div>`;
   let d;
   try{d=await _fetchX15(hari)}catch(e){if(akuEl)akuEl.innerHTML=errBox('Gagal: '+e.message);return}
   _renderTopPanels(d);

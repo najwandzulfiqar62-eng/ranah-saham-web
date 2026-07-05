@@ -3231,19 +3231,22 @@ def _is_insider_jabatan(jabatan: str) -> bool:
     return any(kw in j for kw in ("direktur", "komisaris", "direksi"))
 
 
-def _split_akumulasi_distribusi(items: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Pisah item X-15 jadi akumulasi (naik) / distribusi (turun), dipakai
-    SAMA oleh /api/x15 dan /api/insider (dulu 2 salinan logika yang sama
-    persis -- risiko satu diperbaiki, satunya lupa, seperti kasus nyata
-    ticker-matching di core/news.py sebelumnya).
+def _split_x15_items(items: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Klasifikasi item X-15 jadi akumulasi (naik) / distribusi (turun) /
+    aksi_korporasi (tanpa perubahan %), dipakai SAMA oleh /api/x15 dan
+    /api/insider (dulu 2 salinan logika yang sama persis -- risiko satu
+    diperbaiki, satunya lupa, seperti kasus nyata ticker-matching di
+    core/news.py sebelumnya).
 
-    perubahan HARUS strictly non-zero (>0 / <0) -- bukan >=0 -- karena
-    beberapa laporan (mis. buyback/repurchase agreement yang dilaporkan
-    lewat anggota Direksi/Komisaris atas nama pengendali) punya
-    pct_sebelum==pct_setelah (0.00% perubahan, sekadar reafirmasi/
-    otorisasi formal, BUKAN transaksi akumulasi sungguhan) dan field
-    nama yang kosong -- kalau ditampilkan di 'Top Akumulasi' hasilnya
-    baris tanpa nama & tanpa sinyal apa pun, membingungkan user."""
+    akumulasi/distribusi HARUS strictly non-zero (>0 / <0) -- bukan
+    >=0/<=0 -- karena beberapa laporan (mis. buyback/repurchase
+    agreement yang dilaporkan lewat anggota Direksi/Komisaris atas nama
+    pengendali) punya pct_sebelum==pct_setelah (0.00% perubahan, sekadar
+    reafirmasi/otorisasi formal, BUKAN transaksi akumulasi/distribusi
+    sungguhan) dan field nama individu yang kosong (IDX sendiri
+    merender 'null'). User MASIH ingin laporan tanpa-perubahan ini
+    ditampilkan sebagai KONTEKS aksi korporasi (bukan disembunyikan
+    total) -- makanya dipisah ke kategori ketiga, bukan cuma dibuang."""
     akumulasi = sorted(
         [x for x in items if x["jenis"] == "beli" and x["perubahan"] > 0],
         key=lambda x: x["perubahan"], reverse=True,
@@ -3252,7 +3255,11 @@ def _split_akumulasi_distribusi(items: list[dict]) -> tuple[list[dict], list[dic
         [x for x in items if x["jenis"] in ("jual", "transfer") or x["perubahan"] < 0],
         key=lambda x: x["perubahan"],
     )
-    return akumulasi, distribusi
+    aksi_korporasi = sorted(
+        [x for x in items if x["perubahan"] == 0],
+        key=lambda x: x["kode"],
+    )
+    return akumulasi, distribusi, aksi_korporasi
 
 
 @app.get("/api/x15")
@@ -3274,7 +3281,7 @@ async def api_x15(hari: int = 0):
     # insider kecil (direksi/komisaris di bawah 5%) sengaja disaring keluar
     # di sini, lihat /api/insider untuk itu.
     items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
-    akumulasi, distribusi = _split_akumulasi_distribusi(items)
+    akumulasi, distribusi, aksi_korporasi = _split_x15_items(items)
 
     from datetime import timedelta as _td, datetime as _dt
     tgl_str = (_dt.now() - _td(days=hari)).strftime("%d %b %Y")
@@ -3282,6 +3289,7 @@ async def api_x15(hari: int = 0):
     payload = _py({
         "akumulasi": akumulasi,
         "distribusi": distribusi,
+        "aksi_korporasi": aksi_korporasi,
         "total": len(items),
         "tanggal": tgl_str,
         "hari": hari,
@@ -3309,7 +3317,7 @@ async def api_insider(hari: int = 0):
         raise HTTPException(502, f"Gagal fetch data insider: {e}")
 
     items = [x for x in raw_items if _is_insider_jabatan(x["jabatan"])]
-    akumulasi, distribusi = _split_akumulasi_distribusi(items)
+    akumulasi, distribusi, aksi_korporasi = _split_x15_items(items)
 
     from datetime import timedelta as _td, datetime as _dt
     tgl_str = (_dt.now() - _td(days=hari)).strftime("%d %b %Y")
@@ -3317,6 +3325,7 @@ async def api_insider(hari: int = 0):
     payload = _py({
         "akumulasi": akumulasi,
         "distribusi": distribusi,
+        "aksi_korporasi": aksi_korporasi,
         "total": len(items),
         "tanggal": tgl_str,
         "hari": hari,
