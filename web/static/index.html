@@ -4040,17 +4040,28 @@ async function loadBerulang(){
   // Build date tabs from the 5 most recent sessions
   _buildDateTabs(sessions.slice(0,5));
 
-  // Map: "kode::nama" → {item, days:[], pctByDay:{}}
+  // Map: kode → {item, daysSet, pctByDay, namesSet}. SENGAJA dikunci per
+  // SAHAM saja (bukan per kode+nama individu seperti sebelumnya) --
+  // dengan kunci per-individu, pola nyaris tidak pernah muncul (insider/
+  // pemegang jarang beli saham PERSIS SAMA berkali-kali dalam seminggu),
+  // padahal "saham X terus menerus dibeli insider/pemegang -- walau oleh
+  // orang berbeda-beda di tiap sesi" tetap sinyal minat yang valid,
+  // cuma kurang spesifik soal siapa individunya. Set (bukan array) utk
+  // daysSet supaya beberapa pelapor berbeda yang beli di HARI YANG SAMA
+  // tidak keliru dihitung sebagai beberapa "hari" terpisah.
   const map={};
   sessions.forEach((sess,idx)=>{
     (sess.akumulasi||[]).forEach(item=>{
-      const key=item.kode+'::'+item.nama;
-      if(!map[key])map[key]={item,days:[],pctByDay:{}};
-      map[key].days.push(idx);
+      const key=item.kode;
+      if(!map[key])map[key]={item,daysSet:new Set(),pctByDay:{},namesSet:new Set()};
+      map[key].daysSet.add(idx);
       map[key].pctByDay[idx]=item.pct_setelah;
+      map[key].item=item;
+      if(item.nama&&item.nama!=='null')map[key].namesSet.add(item.nama);
     });
   });
   const repeats=Object.values(map)
+    .map(r=>({...r, days:[...r.daysSet]}))
     .filter(r=>r.days.length>=2)
     .sort((a,b)=>b.days.length-a.days.length||b.days[0]-a.days[0]);
 
@@ -4058,7 +4069,7 @@ async function loadBerulang(){
   if(!repeats.length){
     panel.innerHTML=`<div style="text-align:center;padding:38px 16px">
       <p style="font-weight:700;font-size:14px;margin:0 0 6px;color:var(--text)">Tidak ada pola berulang</p>
-      <p class="muted" style="font-size:12px">Tidak ditemukan ${subjekLabel} yang akumulasi di 2+ sesi dari ${N} hari terakhir.</p>
+      <p class="muted" style="font-size:12px">Tidak ditemukan saham yang dibeli ${subjekLabel} di 2+ sesi dari ${N} hari terakhir.</p>
     </div>`;
     return;
   }
@@ -4070,6 +4081,12 @@ async function loadBerulang(){
     const latest=Math.min(...r.days);
     const pctStart=(r.pctByDay[earliest]||0).toFixed(2);
     const pctEnd=(r.pctByDay[latest]||0).toFixed(2);
+    const namesArr=[...r.namesSet];
+    // Kalau lebih dari satu pelapor berbeda ikut membeli sahamnya, JANGAN
+    // klaim seolah satu orang yang sama terus beli -- sebut jumlahnya
+    // secara jujur ("3 insider berbeda"), bukan cuma nama yang terakhir
+    // kebetulan tercatat.
+    const holderLabel=namesArr.length===0?'—':namesArr.length===1?namesArr[0]:`${namesArr.length} ${subjekLabel} berbeda`;
     // Build dot-line: N dots (index 0=today, N-1=oldest)
     const dots=[...Array(N).keys()].map(i=>{
       const on=r.days.includes(i);
@@ -4080,7 +4097,7 @@ async function loadBerulang(){
       <div class="berulang-hdr">
         <span class="berulang-ticker" onclick="loadHolders('${item.kode}')">${item.kode}</span>
         <span class="berulang-days">${dayCount} hari</span>
-        <span class="berulang-holder" title="${item.nama||''}${item.jabatan?' · '+item.jabatan:''}">${(item.nama&&item.nama!=='null'?item.nama:'—')}${(_pemegangMode==='insider'||!(item.nama&&item.nama!=='null'))&&item.jabatan?' · '+item.jabatan:''}</span>
+        <span class="berulang-holder" title="${namesArr.join(', ')}">${holderLabel}</span>
       </div>
       <div class="berulang-tl">${dots}</div>
       <div class="berulang-range"><span>${pctStart}%</span><span style="font-size:9px;color:var(--line);align-self:center;padding:0 4px">→</span><span class="end">${pctEnd}%</span></div>
@@ -4090,10 +4107,10 @@ async function loadBerulang(){
   panel.innerHTML=`
     <div class="x15-top-head" style="margin-bottom:12px">
       <span style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--bull)">AKUMULASI BERULANG</span>
-      <span style="margin-left:auto;background:rgba(63,176,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${repeats.length} ${subjekLabel}</span>
+      <span style="margin-left:auto;background:rgba(63,176,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${repeats.length} saham</span>
     </div>
     ${cards}
-    <p class="muted" style="font-size:10.5px;margin-top:12px;line-height:1.6">${_pemegangMode==='insider'?'Direksi/komisaris':'Pemegang ≥5%'} yang akumulasi di 2+ sesi dari ${N} hari terakhir. Titik hijau = hari aktif. Tap ticker untuk analisis.</p>`;
+    <p class="muted" style="font-size:10.5px;margin-top:12px;line-height:1.6">Saham yang dibeli ${_pemegangMode==='insider'?'direksi/komisaris':'pemegang ≥5%'} (siapa pun pelapornya) di 2+ sesi dari ${N} hari terakhir. Titik hijau = hari aktif. Tap ticker untuk analisis.</p>`;
 }
 
 /* ---------- PEMEGANG SAHAM ---------- */
