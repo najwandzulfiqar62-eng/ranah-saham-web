@@ -2799,7 +2799,7 @@ $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});
 /* ---------- AUDIT SINYAL ---------- */
 function _auditStatusColor(s){return s==='TP_HIT'?'var(--bull)':s==='SL_HIT'?'var(--bear)':s==='EXPIRED'?'var(--muted)':'var(--gold)'}
 function _auditStatusLabel(s){return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan'}[s]||s}
-function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross'}[s]||s||'Top Pick'}
+function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money'}[s]||s||'Top Pick'}
 async function loadSignalAudit(){
   const body=$('#auditBody');
   body.innerHTML='<section class="panel skel loadbar"></section>';
@@ -2839,8 +2839,8 @@ async function loadSignalAudit(){
   const bySource=d.stats_by_source||{};
   const sourceKeys=Object.keys(bySource);
   const bySourceHtml=sourceKeys.length?`<section class="panel">
-    <p class="eyebrow">Top Pick vs MACD Cross</p>
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Dua teori entry point diaudit TERPISAH -- supaya kelihatan mana yang benar-benar lebih valid di data real, bukan tercampur jadi satu angka.</p>
+    <p class="eyebrow">Perbandingan Antar Teori Entry</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Tiap teori entry point diaudit TERPISAH -- supaya kelihatan mana yang benar-benar lebih valid di data real, bukan tercampur jadi satu angka.</p>
     <div class="decision-grid">${sourceKeys.map(src=>{
       const s=bySource[src];
       const wrColor=s.win_rate==null?'var(--muted)':s.win_rate>=55?'var(--bull)':s.win_rate>=45?'var(--gold)':'var(--bear)';

@@ -1093,6 +1093,39 @@ def test_record_top_picks_and_macd_skip_on_weekend(clean_signal_db, monkeypatch)
     assert "ZZWEEKEND" not in [s["kode"] for s in report["signals"]]
 
 
+def test_recorded_at_uses_local_time_not_utc(clean_signal_db):
+    """Regresi BUG NYATA ditemukan lewat inspeksi live: SQLite's
+    `datetime('now')` SELALU UTC, sedangkan BEI beroperasi WIB (UTC+7) dan
+    _is_bursa_weekend() memakai Python `datetime.now()` (local/WIB). Server
+    ini berjalan WIB (UTC+7) -- kalau record_top_picks() masih memakai
+    `datetime('now')` polos (tanpa 'localtime'), recorded_at yang tersimpan
+    akan berselisih ~7 JAM dari waktu lokal sungguhan. Antara jam 00:00-
+    06:59 WIB, tanggal UTC masih 'kemarin' -- satu hari bursa WIB yang sama
+    bisa terbagi jadi 2 tanggal UTC berbeda, membuat dedup check gagal
+    mendeteksi duplikat yang sebenarnya sama hari bursa.
+
+    Verifikasi: recorded_at yang BARU disimpan harus dekat (toleransi
+    beberapa detik) dengan Python datetime.now() -- BUKAN berselisih jam."""
+    import asyncio
+    from datetime import datetime
+
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZTZ", MIN_SCORE_TO_RECORD + 5)]
+    saved = asyncio.run(record_top_picks(items))
+    assert len(saved) == 1
+
+    from core.database import get_db
+    with get_db() as conn:
+        row = conn.execute("SELECT recorded_at FROM signal_history WHERE kode='ZZTZ'").fetchone()
+    recorded_at = datetime.fromisoformat(row["recorded_at"])
+    delta_seconds = abs((datetime.now() - recorded_at).total_seconds())
+    assert delta_seconds < 30, (
+        f"recorded_at ({recorded_at}) berselisih {delta_seconds:.0f} detik dari waktu lokal sekarang "
+        f"({datetime.now()}) -- kemungkinan masih memakai UTC, bukan localtime"
+    )
+
+
 def test_ensure_table_migration_collapses_identical_weekend_duplicates(clean_signal_db):
     """Regresi BUG NYATA ditemukan lewat inspeksi data produksi: sebelum
     _is_bursa_weekend() ada, siklus auto-audit tetap mencatat 'sinyal baru'
@@ -1439,9 +1472,9 @@ def test_telegram_format_signal_resolved_labels_each_status():
 
 
 def test_telegram_messages_include_source_label():
-    """Regresi: signal_history sekarang punya 2 sumber entry independen
-    (TOP_PICK vs MACD_CROSS) -- pesan Telegram HARUS selalu menyebut
-    sumbernya supaya user tidak salah kira kedua teori itu sama."""
+    """Regresi: signal_history sekarang punya 3 sumber entry independen
+    (TOP_PICK, MACD_CROSS, SMART_MONEY) -- pesan Telegram HARUS selalu
+    menyebut sumbernya supaya user tidak salah kira teori-teori itu sama."""
     from core.telegram_notify import format_signal_new, format_signal_resolved
 
     new_sig = {
@@ -1456,6 +1489,12 @@ def test_telegram_messages_include_source_label():
         "status": "TP_HIT", "source": "TOP_PICK",
     }
     assert "Top Pick" in format_signal_resolved(resolved_sig)
+
+    sm_sig = {
+        "kode": "BBCA", "entry_price": 9500.0, "tp_pct": 6.0, "sl_pct": 3.0,
+        "tp_price": 10070.0, "sl_price": 9215.0, "source": "SMART_MONEY",
+    }
+    assert "Smart Money" in format_signal_new(sm_sig)
 
 
 def test_record_macd_cross_signals_ignores_confidence_score(clean_signal_db):
@@ -1516,6 +1555,154 @@ def test_record_macd_cross_signals_dedup_independent_of_top_pick(clean_signal_db
     saved_tp_again = asyncio.run(record_top_picks(items))
     saved_macd_again = asyncio.run(record_macd_cross_signals(items))
     assert saved_tp_again == [] and saved_macd_again == []
+
+
+def _fake_sm_item(kode, pola, harga=1000.0, likuiditas="Sangat Likuid",
+                   naik=3.0, turun=2.0):
+    return {
+        "kode": kode, "harga": harga, "pola": pola, "likuiditas": likuiditas,
+        "potensi_naik_pct": naik, "risiko_turun_pct": turun,
+        "confidence_score": 60.0, "ai_score": 55.0, "ai_rating": "BAGUS",
+    }
+
+
+def test_record_smart_money_signals_only_records_buy_categories(clean_signal_db):
+    """Regresi inti fitur integrasi: signal_history/audit_open_signals baru
+    mendukung matematika long-only, jadi HANYA kategori yg dipetakan ke BUY
+    (Akumulasi/Akumulasi Agresif/Siluman/Breakout Volume) boleh dicatat --
+    Distribusi/Distribusi Agresif (arah SELL, belum ada infra bidirectional)
+    sengaja TIDAK dicatat sama sekali di source ini."""
+    import asyncio
+
+    from core.signal_history import record_smart_money_signals
+
+    items = [
+        _fake_sm_item("ZZAKU", "Akumulasi Agresif"),
+        _fake_sm_item("ZZSIL", "Siluman (quiet buy)"),
+        _fake_sm_item("ZZBRK", "Breakout Volume"),
+        _fake_sm_item("ZZDIS", "Distribusi Agresif"),
+    ]
+    saved = asyncio.run(record_smart_money_signals(items))
+    saved_kodes = {s["kode"] for s in saved}
+    assert saved_kodes == {"ZZAKU", "ZZSIL", "ZZBRK"}
+    assert "ZZDIS" not in saved_kodes
+    assert all(s["source"] == "SMART_MONEY" for s in saved)
+
+
+def test_record_smart_money_signals_requires_liquidity(clean_signal_db):
+    """Regresi: sama seperti MACD Cross, Smart Money tetap harus disaring
+    likuiditas (kriteria bisa-dieksekusi) -- saham tidak likuid dgn pola
+    akumulasi TIDAK boleh ikut dicatat."""
+    import asyncio
+
+    from core.signal_history import record_smart_money_signals
+
+    items = [_fake_sm_item("ZZILLIQ", "Akumulasi Agresif", likuiditas="Tidak Likuid")]
+    saved = asyncio.run(record_smart_money_signals(items))
+    assert saved == []
+
+
+def test_record_smart_money_signals_dedup_independent_of_other_sources(clean_signal_db):
+    """Regresi: dedup Smart Money per hari HARUS scoped ke
+    source='SMART_MONEY' sendiri -- kode yang sama boleh tercatat di
+    TOP_PICK, MACD_CROSS, DAN SMART_MONEY sekaligus di hari yang sama,
+    tiga teori entry berbeda yang sengaja diaudit terpisah."""
+    import asyncio
+
+    from core.signal_history import (
+        record_top_picks, record_macd_cross_signals, record_smart_money_signals,
+        get_signal_report, MIN_SCORE_TO_RECORD,
+    )
+
+    tp_items = [_fake_confidence_item("ZZTRIPLE", MIN_SCORE_TO_RECORD + 10, macd_bullish_cross=True)]
+    sm_items = [_fake_sm_item("ZZTRIPLE", "Akumulasi Agresif")]
+
+    saved_tp = asyncio.run(record_top_picks(tp_items))
+    saved_macd = asyncio.run(record_macd_cross_signals(tp_items))
+    saved_sm = asyncio.run(record_smart_money_signals(sm_items))
+    assert len(saved_tp) == 1 and len(saved_macd) == 1 and len(saved_sm) == 1
+
+    report = get_signal_report()
+    rows = [s for s in report["signals"] if s["kode"] == "ZZTRIPLE"]
+    assert len(rows) == 3
+    assert {r["source"] for r in rows} == {"TOP_PICK", "MACD_CROSS", "SMART_MONEY"}
+
+
+def test_record_smart_money_signals_skips_on_weekend(clean_signal_db, monkeypatch):
+    """Regresi: konsisten dgn 2 source lain, Smart Money juga tidak boleh
+    mencatat sinyal baru di hari libur bursa (lihat _is_bursa_weekend)."""
+    import asyncio
+
+    import core.signal_history as sh
+
+    monkeypatch.setattr(sh, "_is_bursa_weekend", lambda: True)
+    items = [_fake_sm_item("ZZWEEKEND", "Akumulasi Agresif")]
+    assert asyncio.run(sh.record_smart_money_signals(items)) == []
+
+
+def test_record_smart_money_cycle_enriches_with_scored_confidence_items(monkeypatch):
+    """Regresi bug NYATA ditemukan lewat verifikasi adversarial saat audit:
+    desain awal yg diusulkan mengambil TP/SL/confidence_score dari
+    _confidence_raw_signals() (cache PRE-scoring) -- field confidence_score
+    baru dihitung belakangan di loop kedua confidence() sendiri, TIDAK
+    pernah ada di cache raw, jadi akan SELALU None kalau diambil dari
+    situ. _record_smart_money_cycle() HARUS reuse confidence_items (hasil
+    confidence(), SUDAH computed), bukan panggil ulang cache raw."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def fake_scan(kode):
+        if kode == "SMHIT":
+            return {"kode": "SMHIT", "harga": 1000.0, "chg1": 5.0, "chg5": 5.0,
+                    "vol_ratio": 3.0, "rsi": 70.0, "pola": "Akumulasi Agresif",
+                    "hari_lalu": 0, "tanggal": "2026-07-06", "grup": "Independen"}
+        return None
+
+    monkeypatch.setattr(app_module, "_scan_one_sm", fake_scan)
+    monkeypatch.setattr(app_module, "_SM_UNIVERSE", ["SMHIT", "SMMISS"])
+
+    captured = {}
+
+    async def fake_record(enriched_items, price_lookup=None):
+        captured["items"] = enriched_items
+        return []
+
+    # _record_smart_money_cycle mengimpor record_smart_money_signals SECARA
+    # LOKAL (`from core.signal_history import ...` di dalam fungsi) -- jadi
+    # yang perlu di-patch adalah atribut modul core.signal_history, bukan
+    # web.app (import lokal me-resolve ulang tiap panggilan).
+    import core.signal_history as sh
+    monkeypatch.setattr(sh, "record_smart_money_signals", fake_record)
+
+    confidence_items = [
+        {"kode": "SMHIT", "potensi_naik_pct": 4.0, "risiko_turun_pct": 2.0,
+         "likuiditas": "Sangat Likuid", "confidence_score": 72.5, "ai_score": 68.0, "ai_rating": "BAGUS"},
+    ]
+    asyncio.run(app_module._record_smart_money_cycle(confidence_items))
+
+    assert len(captured["items"]) == 1
+    enriched = captured["items"][0]
+    assert enriched["kode"] == "SMHIT"
+    assert enriched["confidence_score"] == 72.5, "confidence_score harus ikut terbawa dari confidence_items, bukan None"
+    assert enriched["potensi_naik_pct"] == 4.0
+    assert enriched["risiko_turun_pct"] == 2.0
+    assert enriched["likuiditas"] == "Sangat Likuid"
+
+
+def test_record_smart_money_cycle_skips_when_confidence_items_empty():
+    """Regresi: kalau confidence() barusan gagal (confidence_items kosong),
+    _record_smart_money_cycle HARUS skip total -- tanpa TP/SL/likuiditas
+    dari situ, tidak ada dasar wajar utk mencatat entry apa pun."""
+    import asyncio
+
+    import web.app as app_module
+
+    # Tidak monkeypatch _scan_one_sm/_SM_UNIVERSE sama sekali -- kalau
+    # fungsi ini TIDAK skip lebih awal, ini akan mencoba scan network
+    # sungguhan dan test akan lambat/gagal, membuktikan early-return
+    # bekerja.
+    asyncio.run(app_module._record_smart_money_cycle([]))
 
 
 def test_get_signal_report_computes_stats_by_source(clean_signal_db):

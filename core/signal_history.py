@@ -91,6 +91,17 @@ def _is_bursa_weekend() -> bool:
     return datetime.now().weekday() >= 5  # 5=Sabtu, 6=Minggu
 
 
+# CATATAN TIMEZONE PENTING: semua SQL di modul ini yang butuh "tanggal hari
+# ini" HARUS pakai `datetime('now', 'localtime')`/`date('now', 'localtime')`,
+# BUKAN `datetime('now')`/`date('now')` polos. SQLite's `datetime('now')`
+# SELALU UTC, sedangkan BEI beroperasi WIB (UTC+7) dan _is_bursa_weekend()
+# di atas pakai Python `datetime.now()` (local/WIB). BUG NYATA ditemukan
+# lewat inspeksi live: jam 00:00-06:59 WIB, tanggal UTC MASIH "kemarin" --
+# tanpa 'localtime', satu hari bursa WIB yang sama bisa terbagi jadi 2
+# "tanggal UTC" berbeda, membuat dedup check (`date(recorded_at) =
+# date('now')`) gagal mendeteksi duplikat yang sebenarnya sama hari bursa
+# -- kelas bug yang SAMA dengan race condition/weekend duplication di atas,
+# lewat celah timezone yang berbeda.
 _ensured = False
 
 
@@ -103,7 +114,7 @@ def _ensure_table():
             CREATE TABLE IF NOT EXISTS signal_history (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 kode             TEXT NOT NULL,
-                recorded_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                recorded_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
                 entry_price      REAL NOT NULL,
                 tp_pct           REAL NOT NULL,
                 sl_pct           REAL NOT NULL,
@@ -232,7 +243,7 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         with get_db() as conn:
             already = conn.execute('''
                 SELECT 1 FROM signal_history
-                WHERE kode = ? AND date(recorded_at) = date('now') AND source = 'TOP_PICK'
+                WHERE kode = ? AND date(recorded_at) = date('now', 'localtime') AND source = 'TOP_PICK'
                 LIMIT 1
             ''', (it["kode"],)).fetchone()
         if already:
@@ -252,8 +263,8 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK')
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'))
             ''', (
                 it["kode"], entry_price, tp_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
@@ -320,7 +331,7 @@ async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> lis
         with get_db() as conn:
             already = conn.execute('''
                 SELECT 1 FROM signal_history
-                WHERE kode = ? AND date(recorded_at) = date('now') AND source = 'MACD_CROSS'
+                WHERE kode = ? AND date(recorded_at) = date('now', 'localtime') AND source = 'MACD_CROSS'
                 LIMIT 1
             ''', (it["kode"],)).fetchone()
         if already:
@@ -339,8 +350,8 @@ async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> lis
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'MACD HISTOGRAM BULLISH CROSS', 'MACD_CROSS')
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'MACD HISTOGRAM BULLISH CROSS', 'MACD_CROSS', datetime('now', 'localtime'))
             ''', (
                 it["kode"], entry_price, tp_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
@@ -358,6 +369,106 @@ async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> lis
             "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
             "confidence_score": it.get("confidence_score"), "pattern": "MACD HISTOGRAM BULLISH CROSS",
             "source": "MACD_CROSS",
+        })
+    return saved
+
+
+# Maksimum berapa anomali volume "Smart Money" per hari yang dicatat --
+# alasan sama dengan MACD_CROSS_MAX_PER_DAY (jangan bising).
+SMART_MONEY_MAX_PER_DAY = 10
+
+# Kategori _sm_classify() (web/app.py) yang dipetakan ke arah BUY --
+# audit_open_signals()/get_signal_report() baru mendukung matematika
+# long-only (TP di atas entry, SL di bawah), jadi Distribusi/Distribusi
+# Agresif SENGAJA TIDAK dipetakan dulu (butuh kolom `direction` + logic
+# bidirectional baru utk direkam sbg sinyal SELL/short -- keputusan
+# terbuka utk fase 2, lihat memory smart_money_scanner_audit_fix.md).
+SMART_MONEY_BUY_POLA = {"Akumulasi", "Akumulasi Agresif", "Siluman (quiet buy)", "Breakout Volume"}
+
+
+async def record_smart_money_signals(items: list[dict], price_lookup=None) -> list[dict]:
+    """Catat entry point dari anomali volume Smart Money (_process_sm_df,
+    web/app.py) sebagai source ketiga yang independen -- HANYA kategori
+    akumulasi (lihat SMART_MONEY_BUY_POLA) karena signal_history/
+    audit_open_signals belum mendukung arah SELL/short.
+
+    Beda dari record_top_picks()/record_macd_cross_signals(): item di
+    sini adalah hasil SCAN VOLUME (kode, pola, chg1/chg5/vol_ratio/rsi),
+    BUKAN item confidence() -- caller (web/app.py) WAJIB sudah meng-
+    enrich tiap item dgn potensi_naik_pct/risiko_turun_pct/likuiditas/
+    confidence_score/ai_score dari hasil confidence() yang SAMA (join by
+    kode), supaya TP/SL yang dicatat identik dgn yang sudah dihitung utk
+    Top Pick -- BUKAN dihitung ulang terpisah.
+
+    Kriteria PENAPISAN sama filosofinya dgn record_macd_cross_signals:
+    saham likuid & TP/SL valid supaya sinyal bisa dieksekusi secara wajar.
+
+    Dedup HANYA per source='SMART_MONEY' -- boleh mencatat kode yang sama
+    di hari yang sama dgn TOP_PICK/MACD_CROSS, tiga teori entry berbeda
+    yang sengaja diaudit terpisah.
+
+    price_lookup/pattern/return: lihat docstring record_top_picks(), pola
+    yang sama persis dipakai di sini."""
+    _ensure_table()
+    if _is_bursa_weekend():
+        return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
+    candidates = [
+        it for it in items
+        if it.get("pola") in SMART_MONEY_BUY_POLA
+        and it.get("likuiditas") in ("Sangat Likuid", "Likuid")
+        and it.get("potensi_naik_pct") is not None
+        and it.get("risiko_turun_pct") is not None
+        and it.get("risiko_turun_pct") > 0
+        and it.get("harga")
+    ][:SMART_MONEY_MAX_PER_DAY]
+
+    if not candidates:
+        return []
+
+    saved = []
+    for it in candidates:
+        with get_db() as conn:
+            already = conn.execute('''
+                SELECT 1 FROM signal_history
+                WHERE kode = ? AND date(recorded_at) = date('now', 'localtime') AND source = 'SMART_MONEY'
+                LIMIT 1
+            ''', (it["kode"],)).fetchone()
+        if already:
+            continue
+
+        entry_price = it["harga"]
+        if price_lookup is not None:
+            try:
+                live_price = await price_lookup(it["kode"])
+                if live_price:
+                    entry_price = live_price
+            except Exception:
+                pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
+
+        tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        pattern = it.get("pola")
+        with get_db() as conn:
+            cur = conn.execute('''
+                INSERT OR IGNORE INTO signal_history
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'))
+            ''', (
+                it["kode"], entry_price, tp_pct, sl_pct,
+                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
+            ))
+            # Lihat catatan sama di record_top_picks(): OR IGNORE + index
+            # unique adalah pengaman ATOMIC terakhir terhadap race antara
+            # SELECT dedup di atas dan INSERT ini.
+            if cur.rowcount == 0:
+                continue
+            new_id = cur.lastrowid
+        saved.append({
+            "id": new_id, "kode": it["kode"], "entry_price": entry_price,
+            "tp_pct": tp_pct, "sl_pct": sl_pct,
+            "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
+            "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
+            "confidence_score": it.get("confidence_score"), "pattern": pattern,
+            "source": "SMART_MONEY",
         })
     return saved
 
@@ -413,7 +524,7 @@ async def audit_open_signals(price_lookup) -> list[dict]:
         with get_db() as conn:
             conn.execute('''
                 UPDATE signal_history
-                SET status = ?, resolved_at = datetime('now'), resolved_price = ?,
+                SET status = ?, resolved_at = datetime('now', 'localtime'), resolved_price = ?,
                     return_pct = ?, days_to_resolve = ?
                 WHERE id = ?
             ''', (status, price, return_pct, age_days, row["id"]))

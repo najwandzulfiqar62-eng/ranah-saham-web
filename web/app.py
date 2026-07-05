@@ -1335,14 +1335,23 @@ async def _run_signal_auto_cycle():
     """Satu putaran auto-audit: (1) refresh Top Pick -- otomatis mencatat
     sinyal baru & mengirim notifikasi Telegram utk itu (logic ada di
     dalam confidence(), dipanggil LANGSUNG sebagai fungsi biasa, pola yang
-    sama dipakai /api/insight/{kode} memanggil ihsg()); (2) audit semua
-    sinyal OPEN + notifikasi utk yang baru selesai. Dipisah dari loop-nya
-    sendiri (bukan langsung di dalam while True) supaya SATU putaran bisa
-    dipanggil & ditest langsung tanpa perlu menunggu interval sungguhan."""
+    sama dipakai /api/insight/{kode} memanggil ihsg()); (2) scan & catat
+    anomali Smart Money (source ketiga, reuse items confidence() yang
+    SAMA utk TP/SL/likuiditas -- lihat _record_smart_money_cycle); (3)
+    audit semua sinyal OPEN + notifikasi utk yang baru selesai. Dipisah
+    dari loop-nya sendiri (bukan langsung di dalam while True) supaya
+    SATU putaran bisa dipanggil & ditest langsung tanpa perlu menunggu
+    interval sungguhan."""
+    confidence_items = []
     try:
-        await confidence()
+        confidence_result = await confidence()
+        confidence_items = confidence_result.get("items", [])
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal refresh Top Pick: {type(e).__name__}: {e}")
+    try:
+        await _record_smart_money_cycle(confidence_items)
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal catat Smart Money: {type(e).__name__}: {e}")
     try:
         await _run_signal_audit_and_notify()
     except Exception as e:
@@ -3122,6 +3131,53 @@ def _build_sm_payload(items: list, total: int, scope: str) -> dict:
         "sumber": "Volume analysis (yfinance)",
         "scope": scope,
     })
+
+
+async def _record_smart_money_cycle(confidence_items: list[dict]):
+    """Scan anomali volume Smart Money (universe scope='core', 45 saham --
+    _SM_UNIVERSE == SCREENER_UNIVERSE sbg SET, jadi join by kode di bawah
+    valid tanpa perlu hitung ulang TP/SL) dan catat sbg source ketiga di
+    signal_history ('SMART_MONEY'), reuse pola yang sama dgn Top Pick/MACD
+    Cross di confidence().
+
+    confidence_items: HARUS berasal dari return value confidence() (yang
+    SUDAH dihitung confidence_score-nya), BUKAN _confidence_raw_signals()
+    -- field itu belum ada di cache raw (pre-scoring), cuma dihitung di
+    loop kedua confidence() sendiri. Kalau confidence_items kosong (mis.
+    confidence() barusan gagal), skip seluruhnya -- tanpa TP/SL/likuiditas
+    dari situ, tidak ada dasar wajar utk mencatat entry apa pun."""
+    if not confidence_items:
+        return
+    from core.signal_history import record_smart_money_signals
+    from core.telegram_notify import send_message, format_signal_new
+
+    tasks = [_scan_one_sm(k) for k in _SM_UNIVERSE]
+    sm_items = [r for r in await asyncio.gather(*tasks, return_exceptions=False) if r]
+    if not sm_items:
+        return
+
+    conf_by_kode = {it["kode"]: it for it in confidence_items}
+    enriched = []
+    for sm in sm_items:
+        conf = conf_by_kode.get(sm["kode"])
+        if not conf:
+            continue
+        enriched.append({
+            **sm,
+            "potensi_naik_pct": conf.get("potensi_naik_pct"),
+            "risiko_turun_pct": conf.get("risiko_turun_pct"),
+            "likuiditas": conf.get("likuiditas"),
+            "confidence_score": conf.get("confidence_score"),
+            "ai_score": conf.get("ai_score"),
+            "ai_rating": conf.get("ai_rating"),
+        })
+
+    newly = await record_smart_money_signals(enriched, price_lookup=_signal_entry_price_lookup)
+    for sig in newly:
+        try:
+            await send_message(format_signal_new(sig))
+        except Exception as e:
+            print(f"⚠️ Gagal kirim notifikasi sinyal Smart Money: {type(e).__name__}: {e}")
 
 
 @app.get("/api/foreign-flow")

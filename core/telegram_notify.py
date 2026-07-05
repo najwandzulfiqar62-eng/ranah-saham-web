@@ -26,12 +26,13 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 _ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 _TIMEOUT = 10.0
 
-# signal_history punya 2 sumber entry point independen (lihat core/
+# signal_history punya 3 sumber entry point independen (lihat core/
 # signal_history.py) -- label ini dipakai di pesan notifikasi supaya user
 # selalu tahu teori entry mana yang dimaksud, tidak tercampur.
 _SOURCE_LABEL = {
     "TOP_PICK": "Top Pick (skor gabungan)",
     "MACD_CROSS": "MACD Histogram Cross (momentum)",
+    "SMART_MONEY": "Smart Money (anomali volume)",
 }
 
 
