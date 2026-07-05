@@ -143,6 +143,16 @@ def _ensure_table():
         # dari Top Pick sebelum fitur MACD Cross ada), aman tanpa migrasi data manual.
         if "source" not in cols:
             conn.execute("ALTER TABLE signal_history ADD COLUMN source TEXT NOT NULL DEFAULT 'TOP_PICK'")
+        # Migrasi keempat: kolom 'direction' (BUY/SELL) -- SEMUA sinyal
+        # lama (TOP_PICK/MACD_CROSS, dan SMART_MONEY kategori akumulasi)
+        # murni long-only, default 'BUY' aman tanpa migrasi data manual.
+        # Ditambahkan supaya kategori Distribusi/Distribusi Agresif Smart
+        # Money bisa direkam sbg entry SELL (untung kalau harga TURUN
+        # sejumlah tp_pct, rugi kalau NAIK sejumlah sl_pct) -- lihat
+        # audit_open_signals()/get_signal_report() utk matematika
+        # bidirectional-nya.
+        if "direction" not in cols:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN direction TEXT NOT NULL DEFAULT 'BUY'")
         # Migrasi ketiga: BUG NYATA ditemukan lewat inspeksi data produksi --
         # record_top_picks()/record_macd_cross_signals() dulu cek duplikat
         # via SELECT lalu INSERT terpisah (bukan atomic), dengan sebuah
@@ -284,7 +294,7 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
             "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
             "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
-            "source": "TOP_PICK",
+            "source": "TOP_PICK", "direction": "BUY",
         })
     return saved
 
@@ -368,7 +378,7 @@ async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> lis
             "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
             "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
             "confidence_score": it.get("confidence_score"), "pattern": "MACD HISTOGRAM BULLISH CROSS",
-            "source": "MACD_CROSS",
+            "source": "MACD_CROSS", "direction": "BUY",
         })
     return saved
 
@@ -385,12 +395,18 @@ SMART_MONEY_MAX_PER_DAY = 10
 # terbuka utk fase 2, lihat memory smart_money_scanner_audit_fix.md).
 SMART_MONEY_BUY_POLA = {"Akumulasi", "Akumulasi Agresif", "Siluman (quiet buy)", "Breakout Volume"}
 
+# Kategori Distribusi SEKARANG direkam sbg entry SELL (untung kalau harga
+# TURUN) -- audit_open_signals()/get_signal_report() sudah mendukung
+# matematika bidirectional lewat kolom `direction`.
+SMART_MONEY_SELL_POLA = {"Distribusi", "Distribusi Agresif"}
+
 
 async def record_smart_money_signals(items: list[dict], price_lookup=None) -> list[dict]:
     """Catat entry point dari anomali volume Smart Money (_process_sm_df,
-    web/app.py) sebagai source ketiga yang independen -- HANYA kategori
-    akumulasi (lihat SMART_MONEY_BUY_POLA) karena signal_history/
-    audit_open_signals belum mendukung arah SELL/short.
+    web/app.py) sebagai source ketiga yang independen. Kategori akumulasi
+    (SMART_MONEY_BUY_POLA) direkam sbg direction='BUY'; kategori distribusi
+    (SMART_MONEY_SELL_POLA) direkam sbg direction='SELL' (untung kalau
+    harga TURUN -- lihat audit_open_signals utk matematika bidirectional).
 
     Beda dari record_top_picks()/record_macd_cross_signals(): item di
     sini adalah hasil SCAN VOLUME (kode, pola, chg1/chg5/vol_ratio/rsi),
@@ -399,6 +415,15 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
     confidence_score/ai_score dari hasil confidence() yang SAMA (join by
     kode), supaya TP/SL yang dicatat identik dgn yang sudah dihitung utk
     Top Pick -- BUKAN dihitung ulang terpisah.
+
+    PENTING soal arah tp_pct/sl_pct: potensi_naik_pct/risiko_turun_pct dari
+    confidence() dihitung dgn asumsi POSISI BUY (target=R1/naik, stop=
+    S1/turun) -- level S1/R1-nya sendiri OBJEKTIF (tidak tergantung arah
+    posisi), tapi makna "target" vs "stop" HARUS ditukar utk SELL: target
+    profit SELL = harga turun ke S1 (=risiko_turun_pct BUY), stop loss
+    SELL = harga naik ke R1 (=potensi_naik_pct BUY). Salah tukar di sini
+    akan membuat SELL "untung" ketika harga naik -- kebalikan dari makna
+    Distribusi itu sendiri.
 
     Kriteria PENAPISAN sama filosofinya dgn record_macd_cross_signals:
     saham likuid & TP/SL valid supaya sinyal bisa dieksekusi secara wajar.
@@ -414,7 +439,7 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
         return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
     candidates = [
         it for it in items
-        if it.get("pola") in SMART_MONEY_BUY_POLA
+        if it.get("pola") in SMART_MONEY_BUY_POLA | SMART_MONEY_SELL_POLA
         and it.get("likuiditas") in ("Sangat Likuid", "Likuid")
         and it.get("potensi_naik_pct") is not None
         and it.get("risiko_turun_pct") is not None
@@ -445,16 +470,23 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
             except Exception:
                 pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
 
-        tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        is_sell = it.get("pola") in SMART_MONEY_SELL_POLA
+        direction = "SELL" if is_sell else "BUY"
+        # Lihat catatan di docstring: utk SELL, tp_pct/sl_pct DITUKAR dari
+        # potensi_naik_pct/risiko_turun_pct (yang dihitung dgn asumsi BUY).
+        if is_sell:
+            tp_pct, sl_pct = it["risiko_turun_pct"], it["potensi_naik_pct"]
+        else:
+            tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
         pattern = it.get("pola")
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'))
+                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, direction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'), ?)
             ''', (
                 it["kode"], entry_price, tp_pct, sl_pct,
-                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
+                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern, direction,
             ))
             # Lihat catatan sama di record_top_picks(): OR IGNORE + index
             # unique adalah pengaman ATOMIC terakhir terhadap race antara
@@ -462,13 +494,18 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
             if cur.rowcount == 0:
                 continue
             new_id = cur.lastrowid
+        if is_sell:
+            tp_price = round(entry_price * (1 - tp_pct / 100), 2)
+            sl_price = round(entry_price * (1 + sl_pct / 100), 2)
+        else:
+            tp_price = round(entry_price * (1 + tp_pct / 100), 2)
+            sl_price = round(entry_price * (1 - sl_pct / 100), 2)
         saved.append({
             "id": new_id, "kode": it["kode"], "entry_price": entry_price,
             "tp_pct": tp_pct, "sl_pct": sl_pct,
-            "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
-            "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
+            "tp_price": tp_price, "sl_price": sl_price,
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
-            "source": "SMART_MONEY",
+            "source": "SMART_MONEY", "direction": direction,
         })
     return saved
 
@@ -481,11 +518,22 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     terakhir yang sudah ada, supaya modul ini TIDAK melakukan I/O jaringan
     sendiri dan tetap mudah ditest tanpa mock network).
 
-    Status akhir:
+    Status akhir (BUY, arah default/mayoritas -- harga diharapkan NAIK):
     - TP_HIT: harga >= entry x (1 + tp_pct/100)
     - SL_HIT: harga <= entry x (1 - sl_pct/100)
+
+    Utk SELL (arah baru -- Distribusi/Distribusi Agresif Smart Money,
+    harga diharapkan TURUN, "untung" berarti harga jatuh sejumlah tp_pct):
+    - TP_HIT: harga <= entry x (1 - tp_pct/100)
+    - SL_HIT: harga >= entry x (1 + sl_pct/100)
+
     - EXPIRED: belum kena TP/SL tapi sudah lewat MAX_HOLD_DAYS sejak dicatat
     - OPEN: belum satupun kondisi di atas terpenuhi, tetap dibiarkan terbuka
+
+    return_pct SELALU direpresentasikan sbg untung(+)/rugi(-), BUKAN
+    sekadar arah pergerakan harga -- utk SELL yang untung (harga turun),
+    return_pct tetap POSITIF, konsisten makna dgn BUY (supaya stats_by_
+    source/win-rate bisa digabung apa adanya tanpa perlu tahu direction).
 
     Returns LIST sinyal yang BARU SAJA berpindah status di pemanggilan ini
     (bukan sinyal yang sudah lama closed) -- caller pakai ini utk kirim
@@ -494,7 +542,7 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     _ensure_table()
     with get_db() as conn:
         open_rows = conn.execute(
-            "SELECT id, kode, recorded_at, entry_price, tp_pct, sl_pct, source, pattern "
+            "SELECT id, kode, recorded_at, entry_price, tp_pct, sl_pct, source, pattern, direction "
             "FROM signal_history WHERE status = 'OPEN'"
         ).fetchall()
 
@@ -505,18 +553,31 @@ async def audit_open_signals(price_lookup) -> list[dict]:
             continue
 
         entry = row["entry_price"]
-        tp_price = entry * (1 + row["tp_pct"] / 100)
-        sl_price = entry * (1 - row["sl_pct"] / 100)
+        is_sell = row["direction"] == "SELL"
+        if is_sell:
+            tp_price = entry * (1 - row["tp_pct"] / 100)
+            sl_price = entry * (1 + row["sl_pct"] / 100)
+        else:
+            tp_price = entry * (1 + row["tp_pct"] / 100)
+            sl_price = entry * (1 - row["sl_pct"] / 100)
         recorded_at = datetime.fromisoformat(row["recorded_at"])
         age_days = (datetime.now() - recorded_at).days
 
         status, return_pct = None, None
-        if price >= tp_price:
-            status, return_pct = "TP_HIT", row["tp_pct"]
-        elif price <= sl_price:
-            status, return_pct = "SL_HIT", -row["sl_pct"]
-        elif age_days >= MAX_HOLD_DAYS:
-            status, return_pct = "EXPIRED", round((price / entry - 1) * 100, 2)
+        if is_sell:
+            if price <= tp_price:
+                status, return_pct = "TP_HIT", row["tp_pct"]
+            elif price >= sl_price:
+                status, return_pct = "SL_HIT", -row["sl_pct"]
+            elif age_days >= MAX_HOLD_DAYS:
+                status, return_pct = "EXPIRED", round((entry / price - 1) * 100, 2)
+        else:
+            if price >= tp_price:
+                status, return_pct = "TP_HIT", row["tp_pct"]
+            elif price <= sl_price:
+                status, return_pct = "SL_HIT", -row["sl_pct"]
+            elif age_days >= MAX_HOLD_DAYS:
+                status, return_pct = "EXPIRED", round((price / entry - 1) * 100, 2)
 
         if status is None:
             continue  # tetap OPEN, tidak ada perubahan
@@ -533,7 +594,7 @@ async def audit_open_signals(price_lookup) -> list[dict]:
             "id": row["id"], "kode": row["kode"], "entry_price": entry,
             "status": status, "resolved_price": price, "return_pct": return_pct,
             "days_to_resolve": age_days, "recorded_at": row["recorded_at"],
-            "source": row["source"], "pattern": row["pattern"],
+            "source": row["source"], "pattern": row["pattern"], "direction": row["direction"],
         })
 
     return just_resolved
@@ -589,8 +650,14 @@ def get_signal_report() -> dict:
     # SATU sumber kebenaran: kalau formulanya berubah, tidak ada risiko
     # nilai tersimpan jadi basi/tidak sinkron dengan logic audit.
     for s in signals:
-        s["tp_price"] = round(s["entry_price"] * (1 + s["tp_pct"] / 100), 2)
-        s["sl_price"] = round(s["entry_price"] * (1 - s["sl_pct"] / 100), 2)
+        if s.get("direction") == "SELL":
+            # SELL (Distribusi Smart Money): untung kalau harga TURUN --
+            # TP di BAWAH entry, SL di ATAS entry, kebalikan dari BUY.
+            s["tp_price"] = round(s["entry_price"] * (1 - s["tp_pct"] / 100), 2)
+            s["sl_price"] = round(s["entry_price"] * (1 + s["sl_pct"] / 100), 2)
+        else:
+            s["tp_price"] = round(s["entry_price"] * (1 + s["tp_pct"] / 100), 2)
+            s["sl_price"] = round(s["entry_price"] * (1 - s["sl_pct"] / 100), 2)
 
     closed = [s for s in signals if s["status"] in ("TP_HIT", "SL_HIT", "EXPIRED")]
     stats = _compute_stats(closed)

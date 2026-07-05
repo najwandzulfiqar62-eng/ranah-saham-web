@@ -1216,6 +1216,93 @@ def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):
     assert rows["ZZOPEN"]["resolved_at"] is None
 
 
+def test_audit_open_signals_sell_direction_bidirectional_math(clean_signal_db):
+    """Regresi fitur baru: sinyal SELL (Distribusi Smart Money) untung
+    kalau harga TURUN -- matematika TP/SL/return_pct HARUS dibalik dari
+    BUY, bukan cuma label kosmetik. entry=1000, tp_pct=5 (target turun ke
+    Rp950), sl_pct=3 (stop naik ke Rp1030)."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        # TP: harga turun ke 940 (<=950) -> untung, return_pct HARUS +5 (positif)
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, direction) VALUES ('ZZSELLTP', 1000, 5, 3, 'SELL')")
+        # SL: harga naik ke 1040 (>=1030) -> rugi, return_pct HARUS -3
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, direction) VALUES ('ZZSELLSL', 1000, 5, 3, 'SELL')")
+        # EXPIRED: harga turun sedikit ke 980 (belum capai target/stop), lewat MAX_HOLD_DAYS
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, direction, recorded_at) "
+            "VALUES ('ZZSELLOLD', 1000, 5, 3, 'SELL', datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 1} days',),
+        )
+
+    prices = {"ZZSELLTP": 940.0, "ZZSELLSL": 1040.0, "ZZSELLOLD": 980.0}
+
+    async def fake_lookup(kode):
+        return prices.get(kode)
+
+    asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        rows = {r["kode"]: dict(r) for r in conn.execute("SELECT * FROM signal_history").fetchall()}
+
+    assert rows["ZZSELLTP"]["status"] == "TP_HIT"
+    assert rows["ZZSELLTP"]["return_pct"] == 5  # untung POSITIF walau harga turun
+    assert rows["ZZSELLSL"]["status"] == "SL_HIT"
+    assert rows["ZZSELLSL"]["return_pct"] == -3
+    assert rows["ZZSELLOLD"]["status"] == "EXPIRED"
+    assert rows["ZZSELLOLD"]["return_pct"] == 2.04  # (1000/980 - 1) * 100, BUKAN (980/1000-1)*100
+
+
+def test_get_signal_report_tp_sl_price_bidirectional(clean_signal_db):
+    """Regresi: get_signal_report() harus menghitung tp_price/sl_price
+    yang DIBALIK utk sinyal SELL (TP di bawah entry, SL di atas entry),
+    konsisten dgn audit_open_signals()."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, direction) VALUES ('ZZSELLREPORT', 1000, 5, 3, 'SELL')")
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, direction) VALUES ('ZZBUYREPORT', 1000, 5, 3, 'BUY')")
+
+    report = get_signal_report()
+    by_kode = {s["kode"]: s for s in report["signals"]}
+    assert by_kode["ZZSELLREPORT"]["tp_price"] == 950.0  # entry*(1-5%) -- di BAWAH entry
+    assert by_kode["ZZSELLREPORT"]["sl_price"] == 1030.0  # entry*(1+3%) -- di ATAS entry
+    assert by_kode["ZZBUYREPORT"]["tp_price"] == 1050.0  # entry*(1+5%) -- tetap seperti sebelumnya
+    assert by_kode["ZZBUYREPORT"]["sl_price"] == 970.0
+
+
+def test_record_smart_money_signals_records_distribusi_as_sell_with_swapped_tp_sl(clean_signal_db):
+    """Regresi fitur baru: kategori Distribusi/Distribusi Agresif SEKARANG
+    direkam sbg direction='SELL', DENGAN tp_pct/sl_pct DITUKAR dari
+    potensi_naik_pct/risiko_turun_pct (yang dihitung asumsi posisi BUY) --
+    target profit SELL = harga turun ke S1 (risiko_turun_pct BUY), stop
+    loss SELL = harga naik ke R1 (potensi_naik_pct BUY)."""
+    import asyncio
+
+    from core.signal_history import record_smart_money_signals
+
+    items = [
+        _fake_sm_item("ZZSELLREC", "Distribusi Agresif", naik=4.0, turun=6.0),
+        _fake_sm_item("ZZBUYREC", "Akumulasi Agresif", naik=4.0, turun=6.0),
+    ]
+    saved = asyncio.run(record_smart_money_signals(items))
+    by_kode = {s["kode"]: s for s in saved}
+
+    assert by_kode["ZZSELLREC"]["direction"] == "SELL"
+    assert by_kode["ZZSELLREC"]["tp_pct"] == 6.0  # = risiko_turun_pct (BUKAN potensi_naik_pct)
+    assert by_kode["ZZSELLREC"]["sl_pct"] == 4.0  # = potensi_naik_pct (BUKAN risiko_turun_pct)
+
+    assert by_kode["ZZBUYREC"]["direction"] == "BUY"
+    assert by_kode["ZZBUYREC"]["tp_pct"] == 4.0  # = potensi_naik_pct, TIDAK ditukar
+    assert by_kode["ZZBUYREC"]["sl_pct"] == 6.0  # = risiko_turun_pct, TIDAK ditukar
+
+
 def test_signal_report_stats_none_without_closed_signals(clean_signal_db):
     """Regresi KRUSIAL untuk kejujuran fitur: kalau belum ada satupun
     sinyal yang selesai diaudit, 'stats' HARUS None -- bukan 0% atau angka
@@ -1566,12 +1653,13 @@ def _fake_sm_item(kode, pola, harga=1000.0, likuiditas="Sangat Likuid",
     }
 
 
-def test_record_smart_money_signals_only_records_buy_categories(clean_signal_db):
-    """Regresi inti fitur integrasi: signal_history/audit_open_signals baru
-    mendukung matematika long-only, jadi HANYA kategori yg dipetakan ke BUY
-    (Akumulasi/Akumulasi Agresif/Siluman/Breakout Volume) boleh dicatat --
-    Distribusi/Distribusi Agresif (arah SELL, belum ada infra bidirectional)
-    sengaja TIDAK dicatat sama sekali di source ini."""
+def test_record_smart_money_signals_records_both_buy_and_sell_categories(clean_signal_db):
+    """Regresi inti fitur integrasi: signal_history/audit_open_signals
+    SEKARANG mendukung matematika bidirectional (kolom `direction`), jadi
+    SEMUA kategori Smart Money direkam -- Akumulasi/Siluman/Breakout Volume
+    sbg direction='BUY', Distribusi/Distribusi Agresif sbg direction=
+    'SELL' (lihat test_record_smart_money_signals_records_distribusi_as_
+    sell_with_swapped_tp_sl utk detail penukaran tp_pct/sl_pct-nya)."""
     import asyncio
 
     from core.signal_history import record_smart_money_signals
@@ -1583,9 +1671,12 @@ def test_record_smart_money_signals_only_records_buy_categories(clean_signal_db)
         _fake_sm_item("ZZDIS", "Distribusi Agresif"),
     ]
     saved = asyncio.run(record_smart_money_signals(items))
-    saved_kodes = {s["kode"] for s in saved}
-    assert saved_kodes == {"ZZAKU", "ZZSIL", "ZZBRK"}
-    assert "ZZDIS" not in saved_kodes
+    by_kode = {s["kode"]: s for s in saved}
+    assert set(by_kode.keys()) == {"ZZAKU", "ZZSIL", "ZZBRK", "ZZDIS"}
+    assert by_kode["ZZAKU"]["direction"] == "BUY"
+    assert by_kode["ZZSIL"]["direction"] == "BUY"
+    assert by_kode["ZZBRK"]["direction"] == "BUY"
+    assert by_kode["ZZDIS"]["direction"] == "SELL"
     assert all(s["source"] == "SMART_MONEY" for s in saved)
 
 
@@ -2469,3 +2560,110 @@ def test_sm_process_df_exposes_freshness_metadata():
     assert result is not None
     assert result["hari_lalu"] == 0
     assert "tanggal" in result and result["tanggal"]
+
+
+def test_get_ara_arb_bands_per_price_tier():
+    """Unit test _get_ara_arb_bands: ARA tetap bertingkat per tier harga,
+    ARB flat 15% di semua tier (per revisi BEI/OJK 8 April 2025,
+    diverifikasi via web search -- lihat docstring fungsi)."""
+    import web.app as app_module
+
+    assert app_module._get_ara_arb_bands(100) == (0.35, 0.15)
+    assert app_module._get_ara_arb_bands(2000) == (0.25, 0.15)
+    assert app_module._get_ara_arb_bands(6000) == (0.20, 0.15)
+
+
+def test_add_cross_sectional_rank_computes_percentile_per_liquidity_group():
+    """Regresi gap metodologi (temuan audit): threshold vol_ratio absolut
+    flat ke semua saham bias terhadap heteroskedastisitas volume (blue
+    chip varians rendah vs saham tidur varians tinggi). Percentile HARUS
+    dihitung PER GRUP LIKUIDITAS -- saham dgn vol_ratio absolut tinggi di
+    satu grup TIDAK BOLEH mempengaruhi percentile saham di grup lain."""
+    import web.app as app_module
+
+    items = [
+        {"kode": "A", "vol_ratio": 2.0, "likuiditas": "Sangat Likuid"},
+        {"kode": "B", "vol_ratio": 3.0, "likuiditas": "Sangat Likuid"},
+        {"kode": "C", "vol_ratio": 10.0, "likuiditas": "Likuid"},
+        {"kode": "D", "vol_ratio": 12.0, "likuiditas": "Likuid"},
+    ]
+    result = app_module._add_cross_sectional_rank(items)
+    by_kode = {x["kode"]: x for x in result}
+    assert by_kode["B"]["vol_ratio_percentile"] == 100.0
+    assert by_kode["A"]["vol_ratio_percentile"] == 50.0
+    assert by_kode["D"]["vol_ratio_percentile"] == 100.0
+    assert by_kode["C"]["vol_ratio_percentile"] == 50.0
+
+
+def test_build_sm_payload_sorts_akumulasi_by_percentile_not_raw_vol_ratio():
+    """Regresi: sorting akumulasi/distribusi sekarang berdasar percentile
+    per grup likuiditas, BUKAN vol_ratio mentah -- saham dgn vol_ratio
+    absolut lebih tinggi tapi 'biasa saja' dibanding peer-nya (semua peer
+    di grupnya SAMA-SAMA rame) harus kalah urutan dari saham dgn vol_ratio
+    absolut lebih rendah tapi PALING menonjol di grup likuiditasnya
+    sendiri (populasi peer yang tenang)."""
+    import web.app as app_module
+
+    items = [
+        {"kode": "E", "vol_ratio": 9.0, "pola": "Akumulasi", "likuiditas": "Sangat Likuid"},
+        {"kode": "PEER1", "vol_ratio": 8.0, "pola": "Akumulasi", "likuiditas": "Sangat Likuid"},
+        {"kode": "PEER2", "vol_ratio": 10.0, "pola": "Akumulasi", "likuiditas": "Sangat Likuid"},
+        {"kode": "F", "vol_ratio": 2.0, "pola": "Akumulasi", "likuiditas": "Likuid"},
+        {"kode": "PEER3", "vol_ratio": 1.0, "pola": "Akumulasi", "likuiditas": "Likuid"},
+    ]
+    payload = app_module._build_sm_payload(items, total=10, scope="core")
+    akumulasi_kodes = [x["kode"] for x in payload["akumulasi"]]
+    assert akumulasi_kodes.index("F") < akumulasi_kodes.index("E"), (
+        f"F (percentile 100% di grupnya) harus di atas E (percentile 66.7% di grupnya) "
+        f"walau vol_ratio absolut F (2.0) jauh lebih rendah dari E (9.0), dapat urutan {akumulasi_kodes}"
+    )
+
+
+def test_sm_process_df_skips_ara_locked_day():
+    """Regresi gap metodologi: harga yang mendekati/kena batas ARA (harga
+    tier Rp200-5.000 -> batas 25%) harus di-skip -- volume saat limit
+    biasanya cuma order matching tipis di harga cap, bukan indikasi minat
+    institusional genuine, dan chg1 jadi ekstrem murni krn mentok batas."""
+    import web.app as app_module
+
+    n = 65
+    closes = [2000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 2000.0 * 1.24  # +24%, >= 25%-2% margin
+    volumes[-1] = 20_000_000.0
+
+    df = _sm_df(closes, volumes)
+    assert app_module._process_sm_df("TESTARA", df) is None
+
+
+def test_sm_process_df_skips_arb_locked_day():
+    """Regresi gap metodologi: harga yang mendekati/kena batas ARB (flat
+    15% semua tier) harus di-skip, sama alasannya dgn ARA."""
+    import web.app as app_module
+
+    n = 65
+    closes = [2000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 2000.0 * 0.86  # -14%, <= -15%+2% margin
+    volumes[-1] = 20_000_000.0
+
+    df = _sm_df(closes, volumes)
+    assert app_module._process_sm_df("TESTARB", df) is None
+
+
+def test_sm_process_df_allows_normal_move_within_ara_arb_bounds():
+    """Regresi: pergerakan wajar (jauh dari batas ARA/ARB) TIDAK boleh
+    ikut ke-skip oleh guard baru ini -- pastikan guard ARA/ARB tidak
+    overreach ke pergerakan normal."""
+    import web.app as app_module
+
+    n = 65
+    closes = [2000.0] * n
+    volumes = [8_000_000.0] * n
+    closes[-1] = 2000.0 * 1.06  # +6%, jauh dari batas ARA (25%) maupun ARB
+    volumes[-1] = 20_000_000.0
+
+    df = _sm_df(closes, volumes)
+    result = app_module._process_sm_df("TESTNORMALMOVE", df)
+    assert result is not None
+    assert result["chg1"] == 6.0

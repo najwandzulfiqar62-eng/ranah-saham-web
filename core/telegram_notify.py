@@ -61,15 +61,24 @@ async def send_message(text: str) -> bool:
 
 
 def format_signal_new(sig: dict) -> str:
-    """Format pesan utk sinyal yang baru dicatat (BUY watchlist), meniru
-    struktur info kompetitor (entry/TP/SL) TAPI tanpa klaim broker-flow/
-    asing yang datanya tidak kita punya secara legal/gratis."""
+    """Format pesan utk sinyal yang baru dicatat (BUY atau SELL -- lihat
+    sig['direction'], default 'BUY' utk source lama yang murni long-only),
+    meniru struktur info kompetitor (entry/TP/SL) TAPI tanpa klaim broker-
+    flow/asing yang datanya tidak kita punya secara legal/gratis.
+
+    Tanda +/- pada TP/SL mengikuti ARAH HARGA (bukan untung/rugi): BUY
+    untung kalau harga naik (TP="+", SL="-"), SELL untung kalau harga
+    turun (TP="-", SL="+") -- supaya user paham APA yang akan terjadi
+    pada harga, bukan cuma label "Target/Stop Loss" yang ambigu arahnya."""
+    direction = sig.get("direction", "BUY")
+    is_sell = direction == "SELL"
+    tp_sign, sl_sign = ("-", "+") if is_sell else ("+", "-")
     lines = [
-        f"🆕 <b>{sig['kode']}</b> — sinyal baru dicatat",
+        f"🆕 <b>{sig['kode']}</b> — sinyal {direction} baru dicatat",
         f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
         f"Entry: Rp{sig['entry_price']:,.0f}",
-        f"Target TP: Rp{sig['tp_price']:,.0f} (+{sig['tp_pct']:.1f}%)",
-        f"Stop Loss: Rp{sig['sl_price']:,.0f} (-{sig['sl_pct']:.1f}%)",
+        f"Target TP: Rp{sig['tp_price']:,.0f} ({tp_sign}{sig['tp_pct']:.1f}%)",
+        f"Stop Loss: Rp{sig['sl_price']:,.0f} ({sl_sign}{sig['sl_pct']:.1f}%)",
     ]
     if sig.get("pattern"):
         lines.append(f"Pola chart: {sig['pattern']}")

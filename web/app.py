@@ -2999,6 +2999,42 @@ _SM_MIN_TRADING_DAYS = 45
 # tren 5 hari yang sungguhan (temuan audit, dikonfirmasi lewat trace kode).
 _SM_MAX_GAP_DAYS = 10
 
+# Toleransi (poin persentase) di bawah batas ARA/ARB resmi supaya tetap
+# terdeteksi "kemungkinan ARA/ARB" walau harga penutupan tidak PERSIS di
+# batas float (tick size/round-lot bikin harga jarang mendarat pas di
+# angka batas, tapi mendekati batas itu sendiri sudah indikasi kuat hari
+# itu limit-locked -- volume yg terjadi saat limit biasanya cuma order
+# matching tipis di harga cap, BUKAN indikasi minat institusional genuine,
+# temuan audit).
+_ARA_ARB_MARGIN_PCT = 2.0
+
+
+def _get_ara_arb_bands(price: float) -> tuple[float, float]:
+    """Batas auto-reject BEI (ARA=batas atas, ARB=batas bawah) berdasar
+    tier harga, sbg fraksi (0.20 = 20%).
+
+    SUMBER (diverifikasi via web search Juli 2026, bukan diasumsikan dari
+    training data lama): per revisi BEI/OJK 8 April 2025 --
+    - ARA tetap bertingkat: 35% (Rp50-200), 25% (Rp200-5.000), 20% (>Rp5.000)
+    - ARB SEKARANG FLAT 15% utk SEMUA tier harga (asimetris terhadap ARA;
+      sebelumnya ARB juga bertingkat sama seperti ARA)
+    (Kompas, CNBC Indonesia, Metro TV News, idx.co.id resmi -- konsisten
+    lintas sumber utk detail ini.)
+
+    KETERBATASAN YANG JUJUR DICATAT: BEI SERING merevisi ambang ini
+    (ARB pernah 7%->10%->15% dalam periode singkat, ARA juga pernah
+    direvisi di masa lalu) -- angka ini SNAPSHOT per pengamatan sesi ini,
+    BUKAN jaminan berlaku selamanya. Kalau ternyata sudah berubah lagi,
+    cukup update konstanta di fungsi ini, tidak perlu ubah logic lain."""
+    if price < 200:
+        ara = 0.35
+    elif price < 5000:
+        ara = 0.25
+    else:
+        ara = 0.20
+    arb = 0.15  # flat semua tier, per revisi 8 April 2025
+    return ara, arb
+
 
 def _process_sm_df(kode: str, df_tr) -> dict | None:
     """Proses DataFrame hari-trading untuk deteksi anomali volume SM."""
@@ -3043,6 +3079,16 @@ def _process_sm_df(kode: str, df_tr) -> dict | None:
         chg1 = round((price / prev - 1) * 100, 2) if prev else 0.0
         end_close = len(close) + valid_idx
         chg5 = round((price / float(close.iloc[max(0, end_close - 5)]) - 1) * 100, 2) if end_close >= 5 else 0.0
+
+        # Deteksi ARA/ARB (lihat _get_ara_arb_bands) -- hari yang harganya
+        # mendekati/kena batas auto-reject SENGAJA di-skip: volume yang
+        # terjadi saat limit biasanya cuma order matching tipis di harga
+        # cap (kadang malah sangat kecil, terutama saat ARB gorengan float
+        # kecil), bukan indikasi minat institusional genuine, dan chg1/chg5
+        # jadi ekstrem murni krn mentok batas, bukan momentum sungguhan.
+        ara_frac, arb_frac = _get_ara_arb_bands(price)
+        if chg1 >= (ara_frac * 100) - _ARA_ARB_MARGIN_PCT or chg1 <= -(arb_frac * 100) + _ARA_ARB_MARGIN_PCT:
+            return None
 
         # Filter likuiditas (reuse _liquidity_label -- field yang SAMA
         # dipakai record_macd_cross_signals utk memastikan sinyal "bisa
@@ -3093,6 +3139,7 @@ def _process_sm_df(kode: str, df_tr) -> dict | None:
         return {"kode": kode, "harga": int(price), "chg1": chg1, "chg5": chg5,
                 "vol_ratio": vol_ratio, "rsi": rsi, "pola": pattern,
                 "hari_lalu": hari_lalu, "tanggal": tanggal,
+                "likuiditas": likuiditas,
                 "grup": GRUP_KONGLOMERASI.get(kode, "Independen")}
     except Exception:
         return None
@@ -3113,14 +3160,49 @@ async def _scan_one_sm(kode: str) -> dict | None:
         return None
 
 
+def _add_cross_sectional_rank(items: list) -> list:
+    """Tambahkan percentile rank vol_ratio SETIAP saham RELATIF terhadap
+    peer-nya DALAM GRUP LIKUIDITAS YANG SAMA -- BUKAN threshold absolut
+    flat ke semua saham. Temuan audit: varians volume itu heteroskedastik,
+    blue chip (varians harian rendah) vol_ratio 1.8x sudah cukup berarti,
+    sementara saham tidur bisa lompat 3-5x hanya dari SATU transaksi
+    ganjil. Percentile menjawab "seberapa menonjol saham ini DIBANDING
+    saham setara likuiditasnya", bukan angka absolut yang bias tier.
+
+    KETERBATASAN YANG JUJUR DICATAT: percentile dihitung HANYA di antara
+    saham yang SUDAH LOLOS threshold absolut _sm_classify (di `items`),
+    BUKAN terhadap SELURUH universe yang di-scan (termasuk yang gagal
+    threshold) -- percentile "penuh" butuh restrukturisasi scan jadi 2
+    tahap (kumpulkan semua metrik mentah dulu, baru klasifikasi setelah
+    tahu distribusi seluruh batch), perubahan arsitektur besar yang di
+    luar cakupan perbaikan ini. Field ini SENGAJA cuma menambah KONTEKS/
+    URUTAN tampilan, TIDAK mengubah kriteria kategori Akumulasi/
+    Distribusi/dst yang sudah ada -- supaya tidak mengubah semantik
+    sinyal yang sudah tercatat di signal_history via source SMART_MONEY."""
+    by_group = defaultdict(list)
+    for it in items:
+        by_group[it.get("likuiditas", "Kurang Likuid")].append(it)
+    for group_items in by_group.values():
+        vol_ratios = sorted(x["vol_ratio"] for x in group_items)
+        n = len(vol_ratios)
+        for it in group_items:
+            if n <= 1:
+                it["vol_ratio_percentile"] = 100.0
+                continue
+            rank = sum(1 for v in vol_ratios if v <= it["vol_ratio"])
+            it["vol_ratio_percentile"] = round(rank / n * 100, 1)
+    return items
+
+
 def _build_sm_payload(items: list, total: int, scope: str) -> dict:
+    items = _add_cross_sectional_rank(items)
     akumulasi = sorted(
         [x for x in items if any(p in x["pola"] for p in ("Akumulasi", "Breakout", "Siluman"))],
-        key=lambda x: x["vol_ratio"], reverse=True,
+        key=lambda x: x["vol_ratio_percentile"], reverse=True,
     )
     distribusi = sorted(
         [x for x in items if "Distribusi" in x["pola"]],
-        key=lambda x: x["vol_ratio"], reverse=True,
+        key=lambda x: x["vol_ratio_percentile"], reverse=True,
     )
     return _py({
         "akumulasi": akumulasi[:20],

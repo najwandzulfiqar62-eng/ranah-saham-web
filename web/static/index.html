@@ -2859,12 +2859,19 @@ async function loadSignalAudit(){
     const tanggal=(s.recorded_at||'').slice(0,10);
     const retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
     const retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
+    // direction (BUY/SELL): tanda +/- pada TP/SL mengikuti ARAH HARGA,
+    // bukan untung/rugi -- BUY untung kalau harga naik (TP="+", SL="-"),
+    // SELL untung kalau harga turun (TP="-", SL="+"). Default 'BUY' utk
+    // baris lama/source yang murni long-only (TOP_PICK/MACD_CROSS).
+    const isSell=s.direction==='SELL';
+    const dirBadge=isSell?`<span style="font-size:9.5px;font-weight:700;color:var(--bear);border:1px solid var(--bear)55;border-radius:4px;padding:1px 5px;margin-left:5px">SELL</span>`:'';
+    const tpSign=isSell?'-':'+', slSign=isSell?'+':'-';
     return `<tr data-k="${s.kode}" style="cursor:pointer">
-      <td class="tk">${tickerTag(s.kode)}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
+      <td class="tk">${tickerTag(s.kode)}${dirBadge}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
       <td>${_sourceLabel(s.source)}</td>
       <td>Rp${fmt(s.entry_price)}</td>
-      <td style="color:var(--bull)">Rp${fmt(s.tp_price)}<div class="muted" style="font-size:10.5px">+${fmt(s.tp_pct,1)}%</div></td>
-      <td style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">-${fmt(s.sl_pct,1)}%</div></td>
+      <td style="color:var(--bull)">Rp${fmt(s.tp_price)}<div class="muted" style="font-size:10.5px">${tpSign}${fmt(s.tp_pct,1)}%</div></td>
+      <td style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">${slSign}${fmt(s.sl_pct,1)}%</div></td>
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
       <td style="color:${retColor}">${retTxt}</td></tr>`;
   }).join('');
@@ -3796,7 +3803,7 @@ function _renderForeignFlow(d){
       <div class="sm-chg" style="color:${cc}">${s.chg1>0?'+':''}${s.chg1.toFixed(2)}%</div>
       <div class="sm-bar-wrap">
         <div class="sm-bar-bg"><div class="sm-bar-fill" style="width:${volBarW}%;background:${side==='akum'?'var(--green)':'var(--bear)'}"></div></div>
-        <div class="sm-vol-lbl">${s.vol_ratio.toFixed(2)}x avg</div>
+        <div class="sm-vol-lbl">${s.vol_ratio.toFixed(2)}x avg${s.vol_ratio_percentile!=null?` · Top ${(100-s.vol_ratio_percentile).toFixed(0)}% di kelas likuiditasnya`:''}</div>
       </div>
       <span class="sm-badge" style="background:${pc}22;color:${pc}">${s.pola}</span>${staleBadge}
     </div>`;
