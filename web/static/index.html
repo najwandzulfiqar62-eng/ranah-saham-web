@@ -24,6 +24,14 @@
     --gold:#C8A24B; --gold-soft:rgba(200,162,75,.12); --gold-dim:rgba(200,162,75,.55);
     --text:#E7EDF5; --muted:#8492A6; --faint:#5A6678;
     --bull:#3FB07E; --bear:#DB5A56; --neutral:#5A6B86; --radius:12px;
+    /* sistem shadow berlapis (ambient jauh + contact dekat) supaya elemen
+       terasa "terangkat" dari background, bukan cuma garis 1px flat */
+    --shadow-inset-top:0 1px 0 rgba(255,255,255,.035) inset;
+    --shadow-xs:0 1px 2px rgba(0,0,0,.3);
+    --shadow-sm:0 2px 8px -2px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+    --shadow-md:0 10px 24px -8px rgba(0,0,0,.5), 0 3px 8px -3px rgba(0,0,0,.35);
+    --shadow-lg:0 22px 46px -14px rgba(0,0,0,.6), 0 8px 18px -8px rgba(0,0,0,.4);
+    --ease-premium:cubic-bezier(.2,.7,.2,1);
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
@@ -36,7 +44,8 @@
 
   /* nav */
   header{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--line);
-    background:rgba(10,14,21,.82);backdrop-filter:blur(12px) saturate(120%)}
+    background:rgba(10,14,21,.82);backdrop-filter:blur(12px) saturate(120%);
+    box-shadow:0 8px 24px -12px rgba(0,0,0,.6)}
   .nav{display:flex;align-items:center;gap:8px;padding:13px 0}
   .brand{font-family:"Space Grotesk";font-weight:700;letter-spacing:.04em;font-size:16px;
     color:var(--text);margin-right:18px;white-space:nowrap;display:inline-flex;align-items:center}
@@ -95,7 +104,7 @@
   .view{display:none}.view.on{display:block;animation:fadeUp .35s ease}
 
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;
-    box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 1px 2px rgba(0,0,0,.25)}
+    box-shadow:var(--shadow-inset-top), var(--shadow-sm)}
   section{margin:14px 0}
   .eyebrow{display:flex;align-items:center;gap:9px;font-size:11px;letter-spacing:.16em;text-transform:uppercase;
     color:var(--muted);margin:0 0 15px;font-weight:600}
@@ -133,14 +142,16 @@
     font-size:12px;font-family:"JetBrains Mono"}
 
   #chart,#ihsgChart{width:100%;height:380px;border-radius:12px;overflow:hidden;
-    border:1px solid var(--line);background:var(--panel)}
+    border:1px solid var(--line);background:var(--panel);box-shadow:var(--shadow-inset-top), var(--shadow-md)}
 
   .btn{background:var(--gold);color:#15100A;border:0;padding:11px 18px;border-radius:8px;
-    font-weight:600;cursor:pointer;font-size:14px;font-family:inherit;transition:.15s;display:inline-block;letter-spacing:.01em}
-  .btn:hover{filter:brightness(1.07);transform:translateY(-1px)}
-  .btn:active{transform:translateY(0)}
-  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:500}
-  .btn.ghost:hover{border-color:var(--gold-dim);background:var(--panel2)}
+    font-weight:600;cursor:pointer;font-size:14px;font-family:inherit;transition:transform .18s var(--ease-premium),box-shadow .18s var(--ease-premium),filter .15s;display:inline-block;letter-spacing:.01em;
+    box-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .btn:hover{filter:brightness(1.07);transform:translateY(-2px);box-shadow:0 10px 22px -8px rgba(200,162,75,.4), 0 2px 6px rgba(0,0,0,.3)}
+  .btn:active{transform:translateY(0) scale(.98);box-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:500;box-shadow:none}
+  .btn.ghost:hover{border-color:var(--gold-dim);background:var(--panel2);box-shadow:var(--shadow-sm)}
+  .btn.ghost:active{transform:translateY(0) scale(.98)}
 
   /* news (legacy, kept for stock-specific inline news) */
   .news a.item{display:block;padding:14px 0;border-bottom:1px solid var(--line);color:var(--text)}
@@ -158,7 +169,7 @@
   .news-src-chip.on{background:rgba(200,162,75,.13);border-color:var(--gold);color:var(--gold)}
   .news-headline-card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;
     padding:22px 24px;margin-bottom:12px;color:var(--text);text-decoration:none;transition:.18s;position:relative;overflow:hidden}
-  .news-headline-card:hover{border-color:var(--gold);box-shadow:0 6px 30px rgba(0,0,0,.35);transform:translateY(-1px)}
+  .news-headline-card:hover{border-color:var(--gold);box-shadow:0 6px 30px rgba(0,0,0,.35)}
   .news-headline-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--news-src-color,var(--gold))}
   .news-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px;margin-bottom:12px}
   .news-card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -186,7 +197,7 @@
   .ctable{width:100%;border-collapse:collapse;font-size:14px}
   .ctable th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;
     padding:10px 12px;border-bottom:1px solid var(--line)}
-  .ctable td{padding:10px 12px;border-bottom:1px solid var(--line);font-family:"JetBrains Mono"}
+  .ctable td{padding:10px 12px;border-bottom:1px solid var(--line);font-family:"JetBrains Mono";transition:background .15s var(--ease-premium), box-shadow .15s var(--ease-premium)}
   .ctable tbody tr:nth-child(even) td{background:rgba(255,255,255,.018)}
   .ctable tr:hover td{background:var(--panel2)}
   .ctable .tk{font-family:"Space Grotesk";font-weight:700;font-size:16px}
@@ -215,15 +226,17 @@
     background:rgba(5,10,18,.6);backdrop-filter:blur(4px);padding-top:14vh}
   .cmdk.on{display:flex;animation:fadeUp .2s ease}
   .cmdbox{width:min(560px,92vw);background:var(--panel);border:1px solid var(--gold-dim);
-    border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+    border-radius:16px;overflow:hidden;box-shadow:var(--shadow-lg), 0 30px 80px rgba(0,0,0,.5)}
   .cmdbox input{width:100%;background:transparent;border:0;color:var(--text);padding:20px 22px;
     font-size:18px;font-family:"JetBrains Mono";text-transform:uppercase;letter-spacing:.06em;outline:none}
   .cmdhint{padding:10px 22px 16px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
   .cmdhint b{color:var(--gold)}
   .quick{display:flex;flex-wrap:wrap;gap:8px;padding:0 22px 18px}
   .quick button{background:var(--panel2);border:1px solid var(--line);color:var(--text);
-    border-radius:8px;padding:7px 12px;cursor:pointer;font-family:"JetBrains Mono";font-size:13px}
-  .quick button:hover{border-color:var(--gold)}
+    border-radius:8px;padding:7px 12px;cursor:pointer;font-family:"JetBrains Mono";font-size:13px;
+    transition:transform .15s var(--ease-premium),box-shadow .15s var(--ease-premium),border-color .15s}
+  .quick button:hover{border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+  .quick button:active{transform:translateY(0)}
 
   footer{border-top:1px solid var(--line);color:var(--muted);font-size:12px;padding:24px 0}
   @media(max-width:560px){.hero{grid-template-columns:1fr}.score{font-size:54px}#chart,#ihsgChart{height:300px}}
@@ -313,9 +326,14 @@
     display:flex;justify-content:space-between;font-family:"JetBrains Mono"}
   .hmgrid{display:flex;flex-wrap:wrap;gap:4px}
   .tile{border-radius:6px;padding:8px 10px;min-width:74px;flex:1 1 auto;cursor:pointer;
-    border:1px solid rgba(255,255,255,.05);transition:transform .12s}
-  .tile:hover{transform:scale(1.04);border-color:var(--gold)}
-  .tile .tk{font-family:"Space Grotesk";font-weight:700;font-size:14px;color:#fff}
+    border:1px solid rgba(255,255,255,.05);transition:transform .12s var(--ease-premium),box-shadow .12s var(--ease-premium),border-color .12s}
+  /* transform di-hover TIDAK diset di sini -- elemen .tile ikut dikelola oleh
+     modul tilt-3d (lihat script di bawah) yang menulis transform lengkap
+     (tilt+scale) langsung lewat inline style; kalau transform juga diset di
+     sini, keduanya akan rebutan/flicker karena sama-sama menimpa 1 properti */
+  .tile:hover{border-color:var(--gold);box-shadow:var(--shadow-md)}
+  .tile .tk{font-family:"Space Grotesk";font-weight:700;font-size:14px;color:#fff;display:flex;align-items:center;gap:5px}
+  .tile .tk img{box-shadow:0 0 0 1.5px rgba(255,255,255,.5)}
   .tile .ch{font-family:"JetBrains Mono";font-size:12px;color:rgba(255,255,255,.85)}
   .hmscale{display:flex;align-items:center;gap:2px;margin:6px 0 18px;font-family:"JetBrains Mono";font-size:11px;color:var(--muted)}
   .hmscale i{height:8px;width:34px;display:inline-block}
@@ -333,8 +351,10 @@
 .home-quick button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:5px 13px;font-size:12px;font-family:'JetBrains Mono',monospace;cursor:pointer;transition:.15s}
 .home-quick button:hover{color:var(--gold);border-color:var(--gold)}
 .home-pulse{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
-.pulse-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;min-height:120px;transition:.15s}
-.pulse-card:hover{border-color:var(--gold)55}
+.pulse-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;min-height:120px;
+  transition:transform .2s var(--ease-premium), box-shadow .2s var(--ease-premium), border-color .15s;box-shadow:var(--shadow-xs)}
+/* transform di-hover dikelola modul tilt-3d (JS), bukan di sini -- lihat .tile utk alasan sama */
+.pulse-card:hover{border-color:var(--gold-dim);box-shadow:var(--shadow-md)}
 .pc-label{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
 .pc-big{font-family:'Space Grotesk',sans-serif;font-size:24px;font-weight:700;line-height:1.1}
 .pc-tag{display:inline-block;margin-top:10px;font-size:11px;border:1px solid;border-radius:20px;padding:2px 10px;font-weight:600}
@@ -371,9 +391,9 @@
 /* Makro card grid — 1 kolom di layar sangat sempit */
 @media(max-width:400px){.macro-grid{grid-template-columns:1fr 1fr!important}}
 @media(max-width:480px){.sm-home-grid{grid-template-columns:1fr!important}}
-.sm-row{display:flex;align-items:center;padding:10px 2px;border-bottom:1px solid var(--line);gap:8px;cursor:pointer;transition:.12s}
+.sm-row{display:flex;align-items:center;padding:10px 2px;border-bottom:1px solid var(--line);gap:8px;cursor:pointer;transition:background .12s var(--ease-premium)}
 .sm-row:last-child{border-bottom:none}
-.sm-row:active{background:var(--panel2);border-radius:8px}
+.sm-row:hover,.sm-row:active{background:var(--panel2);border-radius:8px}
 .sm-ticker{font-weight:700;font-family:'Space Grotesk',sans-serif;font-size:14px;width:80px;flex:none;color:var(--text)}
 .sm-grup{font-size:9px;font-weight:500;color:var(--muted);font-family:'Inter',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:78px;margin-top:1px}
 .sm-chg{font-family:'JetBrains Mono',monospace;font-size:12px;width:54px;text-align:right;flex:none}
@@ -448,10 +468,11 @@
 .home-search{position:relative}
 .home-sug{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;max-height:340px;overflow-y:auto;z-index:40;text-align:left;box-shadow:0 12px 40px rgba(0,0,0,.4)}
 .home-sug:empty{display:none}
-.sugrow{display:flex;align-items:baseline;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--line)}
+.sugrow{display:flex;align-items:baseline;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--line);
+  transition:background .12s var(--ease-premium),box-shadow .12s var(--ease-premium)}
 .sugrow img{align-self:center}
 .sugrow:last-child{border-bottom:none}
-.sugrow:hover,.sugrow.sel{background:var(--panel2)}
+.sugrow:hover,.sugrow.sel{background:var(--panel2);box-shadow:inset 3px 0 0 var(--gold)}
 .sugrow b{font-family:'JetBrains Mono',monospace;color:var(--gold);font-size:14px;min-width:62px}
 .sugrow span{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sugnone{padding:12px 14px;color:var(--muted);font-size:13px}
@@ -461,14 +482,17 @@
 .edu-chip:hover{color:var(--text)}
 .edu-chip.on{background:var(--gold);color:#1a1205;border-color:var(--gold);font-weight:600}
 .edu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
-.edu-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+.edu-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:15px 16px;
+  box-shadow:var(--shadow-xs);transition:transform .18s var(--ease-premium),box-shadow .18s var(--ease-premium),border-color .15s}
+.edu-card:hover{border-color:var(--gold-dim);box-shadow:var(--shadow-sm);transform:translateY(-2px)}
 .edu-term{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15px;margin-bottom:7px}
 .edu-abbr{font-family:'Inter',sans-serif;font-weight:400;font-size:12px;color:var(--muted)}
 .edu-def{font-size:13.5px;line-height:1.6;color:var(--text)}
 .edu-note{margin-top:9px;font-size:12px;line-height:1.55;color:var(--gold);background:rgba(200,162,75,.08);border-left:2px solid var(--gold);padding:7px 10px;border-radius:0 6px 6px 0}
 .edu-note::before{content:"⚠️ "}
-.watch-btn{display:inline-block;margin:6px 0;background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:6px 14px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:.15s}
-.watch-btn:hover{border-color:var(--gold);color:var(--text)}
+.watch-btn{display:inline-block;margin:6px 0;background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:6px 14px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:transform .15s var(--ease-premium),box-shadow .15s var(--ease-premium),border-color .15s,color .15s}
+.watch-btn:hover{border-color:var(--gold);color:var(--text);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+.watch-btn:active{transform:translateY(0)}
 .watch-btn.on{background:rgba(200,162,75,.14);border-color:var(--gold);color:var(--gold);font-weight:600}
 .wl-rm{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:7px;width:26px;height:26px;cursor:pointer;font-size:12px;transition:.15s}
 .wl-rm:hover{border-color:var(--bear);color:var(--bear)}
@@ -518,10 +542,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
 ::-webkit-scrollbar-thumb{background:#26344b;border-radius:8px;border:2px solid transparent;background-clip:content-box}
 ::-webkit-scrollbar-thumb:hover{background:#3a4a63;background-clip:content-box}
 /* kedalaman halus pada panel */
-.panel{box-shadow:0 1px 2px rgba(0,0,0,.18)}
-/* baris tabel yang bisa diklik: kursor + sorot konsisten */
-.ctable tbody tr[data-k],.ctable tbody tr[data-kode]{cursor:pointer}
-.ctable tbody tr[data-k]:hover td,.ctable tbody tr[data-kode]:hover td{background:var(--panel2)}
+.panel{box-shadow:var(--shadow-inset-top), var(--shadow-sm)}
+/* baris tabel yang bisa diklik: kursor + sorot konsisten + aksen kiri emas
+   supaya baris terasa "terangkat" saat hover, bukan cuma ganti background flat.
+   Pakai inset box-shadow (bukan transform) karena transform pada <tr> di tabel
+   dengan border-collapse:collapse rawan bikin baris tumpang tindih. */
+.ctable tbody tr[data-k],.ctable tbody tr[data-kode]{cursor:pointer;transition:background .15s var(--ease-premium)}
+.ctable tbody tr[data-k]:hover td,.ctable tbody tr[data-kode]:hover td{background:var(--panel2);box-shadow:0 1px 8px -2px rgba(0,0,0,.4)}
+.ctable tbody tr[data-k]:hover td:first-child,.ctable tbody tr[data-kode]:hover td:first-child{box-shadow:inset 3px 0 0 var(--gold), 0 1px 8px -2px rgba(0,0,0,.4)}
 /* select konsisten saat fokus */
 .usel:focus{outline:none;border-color:var(--gold)}
 html{scroll-behavior:smooth}
@@ -761,8 +789,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .panel,.pulse-card,.news-headline-card,.news-card,.news-list-wrap,.port-sum-card,.alert-row{
   border-radius:8px;
 }
-.panel:hover{border-color:rgba(199,154,42,.22);box-shadow:0 8px 22px rgba(0,0,0,.22)}
-.cell:hover,.chip:hover{transform:none;box-shadow:none}
+.panel:hover{border-color:rgba(199,154,42,.22);box-shadow:var(--shadow-inset-top), var(--shadow-md);transform:translateY(-2px)}
 .tab{border-radius:6px}
 .btn{border-radius:7px}
 .btn:hover{filter:none;background:#D7A83A}
@@ -812,7 +839,8 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .analysis-head{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:18px;align-items:start}
 .analysis-title{font-family:"Space Grotesk";font-size:40px;line-height:1;font-weight:700;letter-spacing:0;margin:4px 0 8px}
 .analysis-sub{color:#B9C3BD;font-size:14px;max-width:720px}
-.analysis-score-card{border:1px solid var(--line);background:#07120F;border-radius:8px;padding:16px;text-align:center}
+.analysis-score-card{border:1px solid var(--line);background:#07120F;border-radius:8px;padding:16px;text-align:center;
+  box-shadow:var(--shadow-sm);transition:box-shadow .2s var(--ease-premium)}
 .analysis-score-card .score{font-size:54px;color:var(--text)}
 .analysis-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 .analysis-actions .watch-btn{border-radius:7px;margin:0}
@@ -863,7 +891,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 }
 
 /* ---------- FOOTER ---------- */
-.site-footer{border-top:1px solid var(--line);margin-top:36px;background:var(--panel)}
+.site-footer{border-top:1px solid var(--line);margin-top:36px;background:var(--panel);box-shadow:0 -12px 28px -20px rgba(0,0,0,.5)}
 .site-footer .footer-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.2fr;gap:28px;padding:36px 22px 26px}
 .footer-brand .footer-logo{display:flex;align-items:center;gap:9px;margin-bottom:12px}
 .footer-brand .footer-logo img{width:26px;height:26px}
@@ -871,8 +899,9 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .footer-brand p{color:var(--muted);font-size:13px;line-height:1.6;max-width:280px}
 .footer-social{display:flex;gap:9px;margin-top:14px}
 .footer-social a{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;
-  background:var(--panel2);border:1px solid var(--line);color:var(--muted);transition:.15s}
-.footer-social a:hover{color:var(--gold);border-color:var(--gold-dim)}
+  background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+  transition:transform .15s var(--ease-premium),box-shadow .15s var(--ease-premium),color .15s,border-color .15s}
+.footer-social a:hover{color:var(--gold);border-color:var(--gold-dim);transform:translateY(-2px);box-shadow:var(--shadow-sm)}
 .footer-col b{display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin-bottom:14px}
 .footer-col a,.footer-col .footer-note{display:block;color:var(--muted);font-size:13.5px;text-decoration:none;margin-bottom:11px;cursor:pointer;transition:.15s}
 .footer-col a:hover{color:var(--gold)}
@@ -1702,7 +1731,7 @@ function closeMobMenu(){
 $('#mobMenu').querySelectorAll('.tab[data-v]').forEach(t=>t.addEventListener('click',()=>{route(t.dataset.v);closeMobMenu()}));
 
 /* ---------- ROUTER ---------- */
-function route(v){
+function _applyRoute(v){
   const view=$('#v-'+v); if(!view)return;
   document.querySelectorAll('.tab[data-v]').forEach(t=>t.classList.toggle('active',t.dataset.v===v));
   document.querySelector(`.tabs .tab[data-v="${v}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
@@ -1725,7 +1754,45 @@ function route(v){
   if(v==='edukasi'&&!loaded.edukasi){loaded.edukasi=1;renderEdu()}
   // backtest: tidak auto-load, user klik run sendiri
 }
+// route() dipanggil dari puluhan tempat (klik tab, klik ticker, dsb) -- versi
+// lama tidak pernah menyentuh browser history, jadi seluruh SPA cuma 1 entry
+// history dari awal load. Akibatnya tombol back (browser/gesture Android)
+// langsung KELUAR dari web, bukan pindah ke tab sebelumnya di dalam app.
+// pushState di sini + listener popstate di bawah membuat setiap perpindahan
+// tab jadi 1 entry history yang bisa di-back seperti navigasi web normal.
+function route(v){
+  if(!$('#v-'+v))return;
+  if(!history.state||history.state.view!==v)history.pushState({view:v},'','#'+v);
+  _applyRoute(v);
+}
+window.addEventListener('popstate',e=>{_applyRoute((e.state&&e.state.view)||'beranda')});
+if(!history.state)history.replaceState({view:_currentView||'beranda'},'','#'+(_currentView||'beranda'));
 document.querySelectorAll('.tab[data-v]').forEach(t=>t.addEventListener('click',()=>route(t.dataset.v)));
+
+/* ---------- TILT 3D HALUS (kartu terpilih saja) ----------
+   Cuma dipasang di kartu besar/menonjol yang memang pantas dilihat satu-satu
+   (headline berita, pulse card Beranda, kartu skor Analisis) -- SENGAJA
+   tidak dipasang di elemen kecil/padat (tombol, baris tabel, tile heatmap)
+   karena tilt di elemen kecil/berulang cuma bikin berisik, bukan premium.
+   Delegasi event di document supaya tetap jalan walau kartu-kartu ini
+   dibuat ulang lewat innerHTML (banyak view di-render ulang setiap load). */
+(function(){
+  if(!matchMedia('(pointer:fine)').matches||matchMedia('(prefers-reduced-motion:reduce)').matches)return;
+  const SEL='.news-headline-card,.pulse-card,.analysis-score-card';
+  const MAX_DEG=3.5;
+  let active=null;
+  function clear(el){el.style.transform='';el.style.transition='transform .4s '+getComputedStyle(document.documentElement).getPropertyValue('--ease-premium')}
+  document.addEventListener('pointermove',e=>{
+    const el=e.target.closest(SEL);
+    if(el!==active){if(active)clear(active);active=el;if(el)el.style.transition='transform .06s linear'}
+    if(!el)return;
+    const r=el.getBoundingClientRect();
+    const px=(e.clientX-r.left)/r.width-0.5, py=(e.clientY-r.top)/r.height-0.5;
+    el.style.transform=`perspective(800px) rotateX(${(-py*MAX_DEG).toFixed(2)}deg) rotateY(${(px*MAX_DEG).toFixed(2)}deg) translateY(-2px)`;
+  });
+  document.addEventListener('scroll',()=>{if(active){clear(active);active=null}},{passive:true});
+  window.addEventListener('blur',()=>{if(active){clear(active);active=null}});
+})();
 
 /* ---------- COMMAND PALETTE ---------- */
 const cmdk=$('#cmdk'), cmdInput=$('#cmdInput');
@@ -2857,8 +2924,22 @@ async function loadSignalAudit(){
   }
   const rows=signals.map(s=>{
     const tanggal=(s.recorded_at||'').slice(0,10);
-    const retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
-    const retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
+    const isOpen=s.status==='OPEN';
+    let retTxt,retColor,retSub='';
+    if(isOpen){
+      // floating: hasil BELUM final, cuma mark-to-market harga sekarang --
+      // jangan pernah dicampur visual dgn return_pct yang sudah final.
+      if(s.floating_return_pct!=null){
+        retTxt=(s.floating_return_pct>=0?'+':'')+fmt(s.floating_return_pct,2)+'%';
+        retColor=s.floating_return_pct>=0?'var(--bull)':'var(--bear)';
+        retSub=`<div class="muted" style="font-size:10px;font-style:italic">mengambang · Rp${fmt(s.floating_price)}</div>`;
+      }else{
+        retTxt='–';retColor='var(--muted)';
+      }
+    }else{
+      retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
+      retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
+    }
     // direction (BUY/SELL): tanda +/- pada TP/SL mengikuti ARAH HARGA,
     // bukan untung/rugi -- BUY untung kalau harga naik (TP="+", SL="-"),
     // SELL untung kalau harga turun (TP="-", SL="+"). Default 'BUY' utk
@@ -2866,14 +2947,22 @@ async function loadSignalAudit(){
     const isSell=s.direction==='SELL';
     const dirBadge=isSell?`<span style="font-size:9.5px;font-weight:700;color:var(--bear);border:1px solid var(--bear)55;border-radius:4px;padding:1px 5px;margin-left:5px">SELL</span>`:'';
     const tpSign=isSell?'-':'+', slSign=isSell?'+':'-';
+    // Progres TP1/TP2/TP3: kena TP1/TP2 TIDAK menutup posisi (tetap OPEN),
+    // cuma naikkan tp_level_hit -- lihat core/signal_history.py::audit_open_signals.
+    const tpLevelFinal=s.status==='TP_HIT'?3:(s.tp_level_hit||0);
+    const tpRow=(n,price,pct)=>{
+      if(price==null||pct==null)return'';
+      const hit=tpLevelFinal>=n;
+      return `<div style="${hit?'':'opacity:.5'}">${hit?'✓ ':''}TP${n} Rp${fmt(price)} <span class="muted" style="font-size:9.5px">(${tpSign}${fmt(pct,1)}%)</span></div>`;
+    };
     return `<tr data-k="${s.kode}" style="cursor:pointer">
       <td class="tk">${tickerTag(s.kode)}${dirBadge}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
       <td>${_sourceLabel(s.source)}</td>
       <td>Rp${fmt(s.entry_price)}</td>
-      <td style="color:var(--bull)">Rp${fmt(s.tp_price)}<div class="muted" style="font-size:10.5px">${tpSign}${fmt(s.tp_pct,1)}%</div></td>
+      <td style="color:var(--bull)">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
       <td style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">${slSign}${fmt(s.sl_pct,1)}%</div></td>
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
-      <td style="color:${retColor}">${retTxt}</td></tr>`;
+      <td style="color:${retColor}">${retTxt}${retSub}</td></tr>`;
   }).join('');
   body.innerHTML=confirmedHtml+statsHtml+bySourceHtml+`<section class="panel">
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -2917,7 +3006,7 @@ async function loadHeatmap(force){
     const avg=arr.reduce((s,x)=>s+x.change_1d,0)/arr.length;
     const tiles=arr.map(r=>{const g=Math.max(1,Math.round(Math.sqrt((r.market_cap||1e9)/1e9)));
       return `<div class="tile" data-k="${r.kode}" style="background:${heatColor(r.change_1d)};flex-grow:${g}" title="${r.kode} · Rp${fmt(r.price)} · ${r.change_1d>=0?'+':''}${fmt(r.change_1d,2)}%">
-        <div class="tk">${r.kode}</div><div class="ch">${r.change_1d>=0?'+':''}${fmt(r.change_1d,2)}%</div></div>`}).join('');
+        <div class="tk">${tickerLogo(r.kode,16)}<span>${r.kode}</span></div><div class="ch">${r.change_1d>=0?'+':''}${fmt(r.change_1d,2)}%</div></div>`}).join('');
     html+=`<div class="hmsector"><div class="hmhead"><span>${secTag(sec)} <span style="color:var(--muted)">${arr.length}</span></span><span class="${avg>=0?'up':'down'}">${avg>=0?'+':''}${fmt(avg,2)}%</span></div><div class="hmgrid">${tiles}</div></div>`;
   });
   html+='</section>';
@@ -4040,17 +4129,36 @@ async function loadX15(hari=0){
   _renderTopPanels(d);
 }
 
+// Ambil beberapa hari X-15 SEKALIGUS tapi per-batch (bukan Promise.all utk
+// semua N hari) -- tiap hari = 1 scrape IDX + download/parse PDF per emiten
+// di backend (lihat _fetch_x15_today), jadi N=31 hari kalau ditembak
+// bersamaan bisa jadi ledakan puluhan request scraping sekaligus ke IDX.
+// Batch kecil menyebar bebannya; cache 24 jam di backend (utk hari>=1,
+// karena filing historis sudah final) bikin ini cuma berat sekali per hari.
+async function _fetchX15Batch(N,batchSize=6){
+  const out=[];
+  for(let i=0;i<N;i+=batchSize){
+    const chunk=[...Array(Math.min(batchSize,N-i)).keys()].map(j=>_fetchX15(i+j));
+    out.push(...await Promise.all(chunk));
+  }
+  return out;
+}
+
 async function loadBerulang(){
   const panel=$('#pnl-berulang');
   if(!panel)return;
   panel.innerHTML=`<div class="skel loadbar" style="height:220px;border-radius:8px"></div>`;
-  const N=7; // hari ke belakang
+  const N=31; // hari ke belakang (~sebulan kalender) -- dulu 7 (seminggu),
+  // diperpanjang supaya pola akumulasi insider/pemegang ≥5% yang terbentuk
+  // pelan-pelan selama sebulan tetap kelihatan, bukan cuma yang muncul
+  // dalam seminggu terakhir.
   let sessions=[];
-  try{sessions=await Promise.all([...Array(N).keys()].map(h=>_fetchX15(h)))}
+  try{sessions=await _fetchX15Batch(N)}
   catch(e){panel.innerHTML=errBox('Gagal: '+e.message);return}
 
-  // Build date tabs from the 5 most recent sessions
-  _buildDateTabs(sessions.slice(0,5));
+  // Tampilkan semua tab tanggal yang berhasil diambil (bukan cuma 5) --
+  // wrapper tab sudah scrollable horizontal, jadi aman walau ~31 tab.
+  _buildDateTabs(sessions);
 
   // Map: kode → {item, daysSet, pctByDay, namesSet}. SENGAJA dikunci per
   // SAHAM saja (bukan per kode+nama individu seperti sebelumnya) --

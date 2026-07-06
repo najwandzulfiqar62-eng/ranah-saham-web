@@ -230,6 +230,16 @@ async def health():
 
 # ---------- cache TTL sederhana (lindungi Yahoo Finance) ----------
 _CACHE_TTL = 300  # detik
+# Filing X-15 untuk hari>=1 (kemarin dst) sudah final dan TIDAK PERNAH
+# berubah lagi -- beda dengan data harga/skor yang terus bergerak. Re-scrape
+# tiap 5 menit (_CACHE_TTL biasa) untuk hari yang sama persis itu boros:
+# tiap request PDF KSEI per emiten di-download+parse ulang lewat cloudscraper
+# (lihat _fetch_x15_today), dan sejak jendela hari yang bisa diminta
+# diperpanjang jadi ~sebulan (lihat api_x15/api_insider), beban itu jauh
+# lebih terasa. TTL panjang di sini HANYA untuk hari>=1; hari=0 (hari ini)
+# tetap pakai _CACHE_TTL biasa karena filing baru bisa masuk kapan saja
+# selama jam bursa.
+_CACHE_TTL_HISTORICAL = 86400  # 24 jam
 
 
 def _cache_get(key):
@@ -243,10 +253,10 @@ def _cache_get(key):
         return None
 
 
-def _cache_set(key, val):
+def _cache_set(key, val, ttl=None):
     try:
         serialized = pickle.dumps(val)
-        _redis.setex(f"cache:{key}", _CACHE_TTL, serialized)
+        _redis.setex(f"cache:{key}", ttl or _CACHE_TTL, serialized)
     except Exception:
         # fallback: do nothing (cache miss next time)
         pass
@@ -1292,16 +1302,33 @@ async def _signal_entry_price_lookup(kode: str) -> float | None:
         return None
 
 
-async def _signal_audit_price_lookup(kode: str) -> float | None:
-    """Harga closing harian terakhir (via _clean, sudah cache 300 detik)
-    dipakai utk audit sinyal yang SUDAH tercatat -- horison audit historis
-    (hari/minggu) tidak butuh presisi real-time, dan reuse cache yang sama
-    dgn endpoint lain menghindari panggilan jaringan tambahan."""
+async def _signal_audit_price_lookup(kode: str):
+    """Harga REAL-TIME (reuse _realtime_price, SAMA sumber yang dipakai
+    _signal_entry_price_lookup saat entry BARU dicatat) dipakai utk audit
+    sinyal yang SUDAH tercatat, dibarengi tanggal "hari ini" (kutipan
+    real-time selalu berarti "sekarang" secara definisi).
+
+    REVISI (bug NYATA ditemukan live: TPIA/ARTO ter-'Kena SL' padahal user
+    melihat sendiri harganya NAIK hari itu): versi SEBELUMNYA pakai
+    closing harian dari _clean()/.download() -- SUMBER BEDA dari fast_info
+    yang dipakai merekam entry_price. Dua sumber yang tidak sinkron ini
+    ternyata bisa BEDA JAUH: bar harian yfinance utk hari terbaru kadang
+    masih NaN/belum terbit, jadi setelah dropna() harga yang kepakai bisa
+    closing BEBERAPA HARI sebelumnya -- lebih basi dari entry_price yang
+    justru direkam dari kutipan real-time yang lebih baru. Staleness guard
+    sempat ditambahkan di audit_open_signals() utk menahan resolusi palsu
+    semacam ini, TAPI itu jadi memblokir SEMUA progres TP/SL yang SAH juga
+    selama bar harian macet -- perbaikan yang lebih mendasar: pakai SUMBER
+    YANG SAMA dgn entry (fast_info), supaya tidak ada lagi mismatch antar
+    sumber sama sekali, staleness guard tetap ada sbg jaring pengaman
+    (selalu lolos kalau sumbernya konsisten begini, tidak pernah
+    memblokir progres yang genuinely terjadi)."""
     try:
-        df = await _clean(kode + ".JK")
-        if df is None or len(df) == 0:
+        from datetime import date as _date
+        rt = await _realtime_price(kode + ".JK")
+        if rt is None or not rt.get("price"):
             return None
-        return float(df["Close"].iloc[-1])
+        return float(rt["price"]), _date.today()
     except Exception:
         return None
 
@@ -1314,12 +1341,15 @@ async def _run_signal_audit_and_notify() -> list[dict]:
     berkala (_run_signal_auto_cycle) -- satu sumber logic, tidak ada
     duplikasi antara jalur manual dan jalur background."""
     from core.signal_history import audit_open_signals
-    from core.telegram_notify import send_message, format_signal_resolved
+    from core.telegram_notify import send_message, format_signal_resolved, format_signal_tp_progress
 
     resolved = await audit_open_signals(_signal_audit_price_lookup)
     for sig in resolved:
         try:
-            await send_message(format_signal_resolved(sig))
+            if sig.get("kind") == "tp_progress":
+                await send_message(format_signal_tp_progress(sig))
+            else:
+                await send_message(format_signal_resolved(sig))
         except Exception as e:
             print(f"⚠️ Gagal kirim notifikasi sinyal selesai: {type(e).__name__}: {e}")
     return resolved
@@ -1424,11 +1454,51 @@ async def _confidence_raw_signals() -> list[dict]:
             # pernah lebih ketat dari SL-nya sendiri. Ini logic yang SUDAH
             # ada & teruji (dipakai "Rencana Trading" di halaman Analisis),
             # bukan heuristik baru.
-            from core.trading_plan import calculate_fixed_entry_levels_from_df
+            # REVISI (permintaan user langsung): SEBELUM ini SELALU pakai
+            # skenario 'normal' (entry = harga sekarang) apa pun yang
+            # sungguhan terjadi hari itu -- kurang realistis kalau
+            # misalnya harga hari itu SEMPAT pullback ke S1 atau bahkan
+            # lebih dalam ke S2 (deep). Sekarang pakai get_hit_scenarios()
+            # (SUDAH ADA & teruji, dipakai fitur Watchlist/Alert Rencana
+            # Trading -- bukan heuristik baru) utk cek Low/High HARI ITU
+            # thd tiap level skenario, lalu pilih yang PALING DALAM/
+            # konservatif dari yang benar-benar kena: deep > pullback >
+            # normal > breakout. get_hit_scenarios sendiri SUDAH menangani
+            # "kalau low hari ini di bawah level deep juga, tetap dianggap
+            # deep" (deep_kena pakai `<=`, bukan `==`) -- tidak perlu
+            # skenario ke-5 yang lebih dalam lagi, "floating" dari area
+            # deep itu sendiri.
+            from core.trading_plan import calculate_fixed_entry_levels_from_df, get_hit_scenarios
             plan = calculate_fixed_entry_levels_from_df(df, "")
-            normal = (plan or {}).get("scenarios", {}).get("normal")
-            potensi_naik_pct = normal["tp1_pct"] if normal else None
-            risiko_turun_pct = normal["risk_pct"] if normal else None
+            scenarios = (plan or {}).get("scenarios") or {}
+            chosen = None
+            if scenarios:
+                low_today = float(df["Low"].iloc[-1])
+                high_today = float(df["High"].iloc[-1])
+                hit_keys = {h["key"] for h in get_hit_scenarios(scenarios, low_today, high_today)}
+                # Prioritas "paling bawah/konservatif" -- BEDA dari urutan
+                # append get_hit_scenarios sendiri (breakout sebelum normal)
+                # krn breakout levelnya di ATAS harga normal, bukan di bawah.
+                for key in ("deep", "pullback", "normal", "breakout"):
+                    if key in hit_keys:
+                        chosen = scenarios[key]
+                        break
+            if chosen is None:  # jaring pengaman -- normal_kena harusnya nyaris selalu True
+                chosen = scenarios.get("normal")
+            potensi_naik_pct = chosen["tp1_pct"] if chosen else None
+            risiko_turun_pct = chosen["risk_pct"] if chosen else None
+            # TP2/TP3 (permintaan user: "kena tp1 tandai, lanjut ke tp
+            # selanjutnya") -- SUDAH dihitung _calc_entry_levels sbg bagian
+            # dari skenario yang sama (tp2=tp1x2, tp3=tp1x3), cuma belum
+            # pernah diekstrak/disimpan sebelum ini.
+            tp2_pct_val = chosen["tp2_pct"] if chosen else None
+            tp3_pct_val = chosen["tp3_pct"] if chosen else None
+            # Entry level SKENARIO yang beneran kena hari ini (mis. level
+            # pullback/S1), dipakai belakangan utk pencatatan signal_history
+            # supaya entry_price konsisten dgn skenario tp_pct/sl_pct yang
+            # dipilih -- BEDA dari "harga" di bawah (harga pasar berjalan,
+            # tetap dipakai apa adanya utk tampilan tabel Top Pick).
+            entry_price_signal = chosen["entry"] if chosen else None
             rr_ratio = (potensi_naik_pct / risiko_turun_pct
                         if potensi_naik_pct and risiko_turun_pct and risiko_turun_pct > 0 else None)
             ad = calculate_ad_line(df, is_illiquid=likuiditas in ("Kurang Likuid", "Tidak Likuid"))
@@ -1442,24 +1512,16 @@ async def _confidence_raw_signals() -> list[dict]:
             first_pattern = pattern_result["patterns"][0] if pattern_result.get("patterns") else None
             pattern_name = first_pattern["nama"] if first_pattern else None
             pattern_bias = first_pattern["bias"] if first_pattern else None
-            # Dicek TERPISAH dari pattern_name/pattern_bias di atas (yang
-            # cuma menyimpan pola PERTAMA sebagai badge ringkas) -- kalau
-            # saham kebetulan punya pola struktur (mis. Double Top) DAN
-            # histogram MACD baru cross bullish di saat bersamaan,
-            # pattern_name hanya akan berisi yang pertama, tapi entry point
-            # MACD Cross (record_macd_cross_signals di core/signal_history.py)
-            # tetap harus terdeteksi apa adanya, tidak boleh "tertutup" pola lain.
-            macd_bullish_cross = any(
-                p["nama"] == "MACD HISTOGRAM BULLISH CROSS" for p in pattern_result.get("patterns", [])
-            )
 
             items.append({
                 "kode": kode,
                 "harga": price,
+                "entry_price": entry_price_signal,
                 "sektor": SECTOR_MAP_UNIVERSE.get(kode, "Lainnya"),
                 "market_cap": market_cap,
                 "ai_score": ai["score"],
                 "ai_rating": ai["rating"],
+                "ringkasan_teknikal": _ringkasan_sinyal_teknikal(ai),
                 "minervini_score": mv["skor"],
                 "minervini_criteria_met": mv["criteria_met"],
                 "confluence_bullish": cf["bullish"],
@@ -1468,11 +1530,12 @@ async def _confidence_raw_signals() -> list[dict]:
                 "avg_value_20": round(avg_value_20, 0),
                 "potensi_naik_pct": round(potensi_naik_pct, 2) if potensi_naik_pct is not None else None,
                 "risiko_turun_pct": round(risiko_turun_pct, 2) if risiko_turun_pct is not None else None,
+                "tp2_pct": round(tp2_pct_val, 2) if tp2_pct_val is not None else None,
+                "tp3_pct": round(tp3_pct_val, 2) if tp3_pct_val is not None else None,
                 "rr_ratio": round(rr_ratio, 2) if rr_ratio is not None else None,
                 "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"], "confidence": ad["confidence"]},
                 "pattern": pattern_name,
                 "pattern_bias": pattern_bias,
-                "macd_bullish_cross": macd_bullish_cross,
             })
         except Exception:
             continue
@@ -1611,23 +1674,13 @@ async def confidence():
     except Exception as e:
         print(f"⚠️ Gagal mencatat signal history (Top Pick): {type(e).__name__}: {e}")
 
-    # Entry point kedua yang independen: MACD Histogram Cross (permintaan
-    # eksplisit user -- lihat core/signal_history.py::record_macd_cross_
-    # signals). Dibungkus try/except TERPISAH dari Top Pick di atas supaya
-    # kegagalan salah satu tidak pernah menggagalkan yang lain maupun
-    # respons Top Pick itu sendiri.
-    try:
-        from core.signal_history import record_macd_cross_signals
-        from core.telegram_notify import send_message, format_signal_new
-
-        newly_macd = await record_macd_cross_signals(items, price_lookup=_signal_entry_price_lookup)
-        for sig in newly_macd:
-            try:
-                await send_message(format_signal_new(sig))
-            except Exception as e:
-                print(f"⚠️ Gagal kirim notifikasi sinyal MACD Cross: {type(e).__name__}: {e}")
-    except Exception as e:
-        print(f"⚠️ Gagal mencatat signal history (MACD Cross): {type(e).__name__}: {e}")
+    # Entry point MACD Histogram Cross DIHAPUS (permintaan user -- terlalu
+    # banyak entry yang tumpang tindih dengan Top Pick/Smart Money, bikin
+    # Audit Sinyal ramai tanpa menambah kejelasan). record_macd_cross_
+    # signals() masih ada di core/signal_history.py tapi sudah tidak
+    # dipanggil dari sini -- baris MACD_CROSS lama di riwayat tetap
+    # dibiarkan menyelesaikan siklusnya sendiri (TP_HIT/SL_HIT/EXPIRED),
+    # tidak dihapus paksa dari database.
 
     # Konteks regime pasar (IHSG) -- satu kali untuk semua, BUKAN per saham,
     # supaya user tahu skor individual di atas dibaca dalam kondisi pasar
@@ -1673,6 +1726,40 @@ async def signals():
         print(f"⚠️ Gagal audit signal history: {type(e).__name__}: {e}")
 
     report = await asyncio.to_thread(get_signal_report)
+
+    # Floating P&L utk sinyal yang MASIH OPEN (permintaan user: "liatkan
+    # floatingnya juga", lalu dikoreksi lagi: "maksudnya ga harga real
+    # time" -- floating HARUS mencerminkan harga SEKARANG, bukan closing
+    # harian yang bisa basi) -- get_signal_report() sendiri murni baca DB
+    # (sengaja tanpa I/O jaringan supaya gampang ditest), jadi pengayaan
+    # harga live dilakukan DI SINI (lapisan endpoint), bukan di dalam
+    # get_signal_report().
+    #
+    # SENGAJA pakai _signal_entry_price_lookup (fast_info/real-time quote,
+    # SAMA yang dipakai saat entry BARU dicatat), BUKAN _signal_audit_
+    # price_lookup (basis closing harian dgn staleness guard, dipakai
+    # audit_open_signals() utk keputusan TP/SL) -- keduanya punya tujuan
+    # BEDA: audit butuh bar harian yang SUDAH final (hindari noise
+    # intraday/lookahead), floating P&L justru harus "kalau ditutup
+    # SEKARANG nilainya berapa", jadi butuh kutipan SEPALING BARU yang ada
+    # (ditemukan nyata: bar harian yfinance utk hari terbaru kadang masih
+    # NaN/belum terbit, sementara fast_info.last_price tetap mencerminkan
+    # kutipan terkini walau bar harian belum final).
+    open_signals = [s for s in report.get("signals", []) if s.get("status") == "OPEN"]
+    if open_signals:
+        prices = await asyncio.gather(
+            *[_signal_entry_price_lookup(s["kode"]) for s in open_signals],
+            return_exceptions=True,
+        )
+        for sig, price in zip(open_signals, prices):
+            if isinstance(price, Exception) or not price:
+                continue
+            entry = sig["entry_price"]
+            is_sell = sig.get("direction") == "SELL"
+            floating_pct = (entry / price - 1) * 100 if is_sell else (price / entry - 1) * 100
+            sig["floating_price"] = round(price, 2)
+            sig["floating_return_pct"] = round(floating_pct, 2)
+
     return _py(report)
 
 
@@ -2587,8 +2674,8 @@ _MACRO_TICKERS = {
     "CL=F":     {"label": "Minyak WTI",   "cat": "komoditas", "unit": "USD/bbl",   "icon": "🛢"},
     "BZ=F":     {"label": "Minyak Brent", "cat": "komoditas", "unit": "USD/bbl",   "icon": "🛢"},
     "NG=F":     {"label": "Gas Alam",     "cat": "komoditas", "unit": "USD/MMBtu", "icon": "🔥"},
-    # Nikel, CPO, Batu Bara — gunakan ETC London sebagai proxy (ICE/LME futures tidak tersedia di Yahoo)
-    "NICL.L":   {"label": "Nikel",        "cat": "komoditas", "unit": "GBX/unit",  "icon": "⚙"},
+    # Nickel, CPO, Batu Bara — gunakan ETC London sebagai proxy (ICE/LME futures tidak tersedia di Yahoo)
+    "NICL.L":   {"label": "Nickel",       "cat": "komoditas", "unit": "GBX/unit",  "icon": "⚙"},
     "PALM.L":   {"label": "CPO",          "cat": "komoditas", "unit": "GBX/unit",  "icon": "🌴"},
     # Agri & Bahan Pokok — ICE/CBOT (KC=F/CC=F diambil individual karena batch gagal)
     "KC=F":     {"label": "Kopi Arabika", "cat": "agri",      "unit": "¢/lb",      "icon": "☕", "individual": True},
@@ -2617,7 +2704,7 @@ _MACRO_SECTOR_IMPACT = {
                 "turun": ["BRPT", "TPIA"],                         "sektor": "Minyak Brent / Petrokimia"},
     "NG=F":    {"naik": ["PGAS", "MEDC", "ELSA"],
                 "turun": ["AGII", "INDF"],                         "sektor": "Gas Alam"},
-    "NICL.L":  {"naik": ["ANTM", "INCO", "MDKA"],                 "sektor": "Nikel / Mineral (proxy ETC)"},
+    "NICL.L":  {"naik": ["ANTM", "INCO", "MDKA"],                 "sektor": "Nickel / Mineral (proxy ETC)"},
     "PALM.L":  {"naik": ["AALI", "SIMP", "LSIP", "TAPG"],        "sektor": "Perkebunan CPO (proxy ETC)"},
     "KC=F":    {"naik": ["MYOR", "DLTA", "AISA"],                 "sektor": "Kopi / Minuman"},
     "SB=F":    {"turun": ["MYOR", "ICBP", "ULTJ", "DLTA"],        "sektor": "Industri Makanan & Minuman (biaya gula naik)"},
@@ -3091,7 +3178,7 @@ def _process_sm_df(kode: str, df_tr) -> dict | None:
             return None
 
         # Filter likuiditas (reuse _liquidity_label -- field yang SAMA
-        # dipakai record_macd_cross_signals utk memastikan sinyal "bisa
+        # dipakai record_smart_money_signals utk memastikan sinyal "bisa
         # dieksekusi secara wajar"). BUG NYATA ditemukan lewat audit: dulu
         # TIDAK ADA filter likuiditas sama sekali di scanner ini, padahal
         # saham illikuid paling rentan vol_ratio palsu (satu transaksi
@@ -3215,12 +3302,98 @@ def _build_sm_payload(items: list, total: int, scope: str) -> dict:
     })
 
 
+def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
+    """Replika SERVER-SIDE dari _buildTechSummary() di web/static/index.html
+    (panel "Ringkasan Sinyal Teknikal" pada halaman Analisis -- 6 indikator
+    RSI/MACD/Volume/AI Score/%1 Hari/%5 Hari, masing-masing "beli"/"netral"
+    /"jual", diringkas jadi satu verdict BELI KUAT/BELI/CENDERUNG BELI/
+    NETRAL/CENDERUNG JUAL/JUAL/JUAL KUAT).
+
+    Permintaan eksplisit user: gerbang konfirmasi Smart Money SEBELUMNYA
+    pakai ai_rating (calculate_ai_score_from_df, cuma 1 dimensi skor) --
+    user menunjuk panel Ringkasan Sinyal Teknikal ini secara spesifik
+    ("smart money itu di combo ama ini") sbg maksud "teknikal" yang
+    dipakai utk konfirmasi, bukan ai_rating.
+
+    PENTING -- RISIKO DRIFT: ini PORTING MANUAL dari JS ke Python, bukan
+    satu sumber logic yang di-share. Kalau _buildTechSummary() di
+    index.html diubah (threshold RSI/volume/dst berubah), fungsi ini
+    HARUS ikut diperbarui -- persis kelas risiko yang sama dgn "2
+    implementasi ticker-matching yang divergen" yang pernah jadi bug
+    nyata di core/news.py (lihat memory news_ticker_matching_accuracy).
+    Field input (rsi/macd_bullish/vol_ratio/score/change_1d/change_5d)
+    SEMUA sudah dihitung calculate_ai_score_from_df (core/ai_score.py),
+    persis field yang sama dipakai /api/analyze utk render panel JS-nya --
+    jadi verdict di sini dijamin sama persis dgn yang user lihat di
+    Analisis, bukan angka baru yang beda."""
+    rsi = ai.get("rsi") if ai.get("rsi") is not None else 50
+    macd_bullish = bool(ai.get("macd_bullish"))
+    vol_ratio = ai.get("vol_ratio") or 0
+    score = ai.get("score") or 0
+    c1 = ai.get("change_1d") or 0
+    c5 = ai.get("change_5d") or 0
+
+    def _sig(cond_beli, cond_jual):
+        return "beli" if cond_beli else ("jual" if cond_jual else "netral")
+
+    signals = [
+        _sig(rsi < 45, rsi >= 70),
+        "beli" if macd_bullish else "jual",
+        _sig(vol_ratio >= 1.2, vol_ratio < 0.5),
+        _sig(score >= 65, score < 40),
+        _sig(c1 >= 1, c1 <= -1),
+        _sig(c5 >= 3, c5 <= -3),
+    ]
+    beli, jual = signals.count("beli"), signals.count("jual")
+    netral = signals.count("netral")
+
+    if beli >= 5:
+        overall = "BELI KUAT"
+    elif beli >= 4:
+        overall = "BELI"
+    elif jual >= 5:
+        overall = "JUAL KUAT"
+    elif jual >= 4:
+        overall = "JUAL"
+    elif beli > jual:
+        overall = "CENDERUNG BELI"
+    elif jual > beli:
+        overall = "CENDERUNG JUAL"
+    else:
+        overall = "NETRAL"
+    return {"overall": overall, "beli": beli, "netral": netral, "jual": jual}
+
+
+# Verdict "Ringkasan Sinyal Teknikal" yang dianggap cukup meyakinkan sbg
+# gerbang konfirmasi kedua utk Smart Money -- sengaja HANYA 2 tingkat
+# teratas (BELI KUAT/BELI, setara >=4 dari 6 indikator searah beli),
+# BUKAN termasuk "CENDERUNG BELI" (cuma menang tipis, beli>jual tanpa
+# ambang) -- konsisten dgn skop ai_rating lama yang juga cuma 2 tingkat
+# teratas dari 5 (SANGAT BAGUS/BAGUS).
+_RINGKASAN_TEKNIKAL_BUY = ("BELI KUAT", "BELI")
+
+
 async def _record_smart_money_cycle(confidence_items: list[dict]):
     """Scan anomali volume Smart Money (universe scope='core', 45 saham --
     _SM_UNIVERSE == SCREENER_UNIVERSE sbg SET, jadi join by kode di bawah
-    valid tanpa perlu hitung ulang TP/SL) dan catat sbg source ketiga di
-    signal_history ('SMART_MONEY'), reuse pola yang sama dgn Top Pick/MACD
-    Cross di confidence().
+    valid tanpa perlu hitung ulang TP/SL) dan catat sbg source kedua di
+    signal_history ('SMART_MONEY'), reuse pola yang sama dgn Top Pick di
+    confidence().
+
+    HANYA pola akumulasi (SMART_MONEY_BUY_POLA) yang direkam, dan HANYA
+    kalau "Ringkasan Sinyal Teknikal" (panel yang sama persis dgn di
+    halaman Analisis -- lihat _ringkasan_sinyal_teknikal) JUGA bilang
+    BELI/BELI KUAT -- permintaan eksplisit user: "smart money itu di
+    combo ama ini" (menunjuk panel Ringkasan Sinyal Teknikal, BUKAN
+    ai_rating yang dipakai versi sebelumnya -- ai_rating cuma 1 dimensi
+    skor komposit, Ringkasan Sinyal Teknikal gabungan 6 indikator RSI/
+    MACD/Volume/AI Score/%1H/%5H yang SAMA PERSIS dgn yang user lihat di
+    Analisis, jadi user bisa langsung verifikasi silang). Supaya Smart
+    Money jadi KONFIRMASI tambahan di atas sinyal teknikal yang sudah
+    bagus, bukan sumber sinyal berdiri sendiri yang bisa bertentangan
+    arah dgn teknikal (dulu Distribusi direkam sbg SELL independen --
+    dihentikan, terlalu sering menambah entry yang membingungkan saat
+    dibandingkan dgn Top Pick di panel yang sama).
 
     confidence_items: HARUS berasal dari return value confidence() (yang
     SUDAH dihitung confidence_score-nya), BUKAN _confidence_raw_signals()
@@ -3230,7 +3403,7 @@ async def _record_smart_money_cycle(confidence_items: list[dict]):
     dari situ, tidak ada dasar wajar utk mencatat entry apa pun."""
     if not confidence_items:
         return
-    from core.signal_history import record_smart_money_signals
+    from core.signal_history import record_smart_money_signals, SMART_MONEY_BUY_POLA
     from core.telegram_notify import send_message, format_signal_new
 
     tasks = [_scan_one_sm(k) for k in _SM_UNIVERSE]
@@ -3241,17 +3414,32 @@ async def _record_smart_money_cycle(confidence_items: list[dict]):
     conf_by_kode = {it["kode"]: it for it in confidence_items}
     enriched = []
     for sm in sm_items:
+        if sm.get("pola") not in SMART_MONEY_BUY_POLA:
+            continue  # buang pola Distribusi/Distribusi Agresif sepenuhnya
         conf = conf_by_kode.get(sm["kode"])
         if not conf:
             continue
+        ringkasan = conf.get("ringkasan_teknikal") or {}
+        if ringkasan.get("overall") not in _RINGKASAN_TEKNIKAL_BUY:
+            continue  # Ringkasan Sinyal Teknikal belum bilang BELI -- jangan catat dulu
         enriched.append({
             **sm,
             "potensi_naik_pct": conf.get("potensi_naik_pct"),
             "risiko_turun_pct": conf.get("risiko_turun_pct"),
+            "entry_price": conf.get("entry_price"),
+            "tp2_pct": conf.get("tp2_pct"),
+            "tp3_pct": conf.get("tp3_pct"),
             "likuiditas": conf.get("likuiditas"),
             "confidence_score": conf.get("confidence_score"),
             "ai_score": conf.get("ai_score"),
-            "ai_rating": conf.get("ai_rating"),
+            # Kolom `recommendation` di signal_history (diisi dari key
+            # "ai_rating" ini oleh record_smart_money_signals) SEKARANG
+            # menyimpan verdict Ringkasan Sinyal Teknikal (BELI KUAT/BELI),
+            # BUKAN ai_rating lagi -- itu yang SUNGGUHAN menggerbangkan
+            # entry ini (lihat pengecekan di atas), jadi itu yang harus
+            # tercatat sbg alasan konfirmasinya, bukan metrik lain yang
+            # kebetulan juga ada di conf.
+            "ai_rating": ringkasan.get("overall"),
         })
 
     newly = await record_smart_money_signals(enriched, price_lookup=_signal_entry_price_lookup)
@@ -3497,8 +3685,10 @@ def _split_x15_items(items: list[dict]) -> tuple[list[dict], list[dict], list[di
 @app.get("/api/x15")
 async def api_x15(hari: int = 0):
     """Ringkasan harian transaksi kepemilikan ≥5% dari IDX X-15 filings.
-    hari=0 → hari ini, hari=1 → kemarin, dst (max 7)."""
-    hari = max(0, min(7, hari))
+    hari=0 → hari ini, hari=1 → kemarin, dst (max 31, ~sebulan kalender agar
+    cukup untuk melacak pola akumulasi/distribusi jangka lebih panjang,
+    bukan cuma seminggu)."""
+    hari = max(0, min(31, hari))
     cache_key = f"x15:{hari}"
     cached = _cache_get(cache_key)
     if cached:
@@ -3526,7 +3716,9 @@ async def api_x15(hari: int = 0):
         "tanggal": tgl_str,
         "hari": hari,
     })
-    _cache_set(cache_key, payload)
+    # hari>=1 = filing historis yang sudah final (lihat _CACHE_TTL_HISTORICAL) --
+    # hari=0 tetap TTL pendek karena filing hari ini masih bisa nambah.
+    _cache_set(cache_key, payload, ttl=_CACHE_TTL if hari == 0 else _CACHE_TTL_HISTORICAL)
     return payload
 
 
@@ -3536,8 +3728,8 @@ async def api_insider(hari: int = 0):
     saham perusahaannya sendiri) dari filing IDX X-15/POJK 4-2024 yang sama
     dengan /api/x15 -- bedanya difilter dari field 'jabatan', bukan ≥5%
     kepemilikan (transaksi insider biasanya persentasenya kecil).
-    hari=0 → hari ini, hari=1 → kemarin, dst (max 7)."""
-    hari = max(0, min(7, hari))
+    hari=0 → hari ini, hari=1 → kemarin, dst (max 31, ~sebulan kalender)."""
+    hari = max(0, min(31, hari))
     cache_key = f"insider:{hari}"
     cached = _cache_get(cache_key)
     if cached:
@@ -3562,7 +3754,7 @@ async def api_insider(hari: int = 0):
         "tanggal": tgl_str,
         "hari": hari,
     })
-    _cache_set(cache_key, payload)
+    _cache_set(cache_key, payload, ttl=_CACHE_TTL if hari == 0 else _CACHE_TTL_HISTORICAL)
     return payload
 
 

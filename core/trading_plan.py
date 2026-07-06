@@ -17,16 +17,65 @@
 from core.indicators import calculate_atr, calculate_support_resistance_deep, calculate_confidence, calculate_rsi
 
 
+# Floor minimum jarak SL ke entry -- permintaan eksplisit user: SL yang
+# cuma mengikuti support TERDEKAT (S1) apa adanya kadang jatuh SANGAT DEKAT
+# dari entry (pernah kelihatan senyata -0.4% di JPFA/UNTR) kalau kebetulan
+# harga sedang duduk persis di atas S1 -- itu nyaris pasti kena cuma dari
+# noise harian biasa (bid-ask, candle intraday), BUKAN risiko sungguhan
+# yang berarti tren teknikalnya sudah rusak. Padahal kalau tren teknikal
+# masih bagus, posisi semestinya masih layak di-hold. Floor ini memberi SL
+# jarak minimum yang wajar, SAMA dgn floor TP1 (max(3.0, risk_pct)) yang
+# sudah ada -- konsisten, bukan angka baru yang asal pilih.
+MIN_SL_PCT = 3.0
+
+
 def _calc_entry_levels(entry: float, atr: float, sr: dict) -> dict:
     """Hitung SL dan 3 level TP untuk satu titik entry. Dipakai bersama
-    oleh calculate_fixed_entry_levels (4 skenario watchlist)."""
+    oleh calculate_fixed_entry_levels (4 skenario watchlist).
+
+    SL dipilih dari level SUPPORT SUNGGUHAN (S1..S4, pivot Fibonacci --
+    lihat calculate_support_resistance_deep -- S1 PALING DEKAT dari entry,
+    S4 PALING JAUH), bukan cuma S1 apa adanya: kalau S1 (atau S2, S3)
+    ternyata terlalu dekat (jaraknya di bawah floor MIN_SL_PCT), turun ke
+    level BERIKUTNYA yang lebih dalam (S2/S3/S4) -- diambil yang PERTAMA
+    kali cukup jauh, bukan langsung lompat ke floor persentase generik yg
+    tidak berdasar level harga sungguhan apa pun. Permintaan user
+    eksplisit: "sl nya kedeketan, kalo bisa sl nya di support" -- SL harus
+    tetap berarti sebagai level teknikal (support asli), bukan angka %
+    yang dikarang begitu S1 kebetulan dekat. Floor persentase (entry x
+    (1 - MIN_SL_PCT%)) HANYA dipakai sbg jaring pengaman terakhir kalau
+    SEMUA level S1..S4 di bawah entry sudah dicoba dan tetap tidak ada
+    yang cukup jauh (atau tidak ada support yang berada di bawah entry
+    sama sekali)."""
+    # S1..S4 sudah terurut dari calculate_support_resistance_deep sbg
+    # terdekat->terjauh (S1 > S2 > S3 > S4 dari sisi harga) -- urutan itu
+    # dipertahankan di sini (bukan di-sort ulang) supaya "coba S1 dulu,
+    # baru S2, dst" sesuai definisi levelnya sendiri.
     support_levels = [sr["S1"], sr["S2"], sr["S3"], sr["S4"]]
     supports_below = [s for s in support_levels if s < entry]
-    nearest_support = max(supports_below) if supports_below else entry * 0.97
-    stop_loss = nearest_support - (atr * 0.2)
+
+    stop_loss = None
+    for support in supports_below:
+        candidate_sl = support - (atr * 0.2)
+        candidate_risk_pct = ((entry - candidate_sl) / entry) * 100 if entry > 0 else 0
+        if candidate_risk_pct >= MIN_SL_PCT:
+            stop_loss = candidate_sl
+            break
+
+    if stop_loss is None:
+        # Tidak ada level S1..S4 (di bawah entry) yang cukup jauh, atau
+        # tidak ada support di bawah entry sama sekali -- fallback floor
+        # persentase generik (jaring pengaman lama).
+        stop_loss = entry * (1 - MIN_SL_PCT / 100)
 
     risk_abs = entry - stop_loss
     risk_pct = (risk_abs / entry) * 100 if entry > 0 else 5
+    if risk_pct < MIN_SL_PCT:
+        # Jaring pengaman terakhir (harusnya jarang/tidak pernah kena
+        # kalau loop di atas benar) -- hitung ULANG stop_loss dari floor
+        # supaya risk_pct dan sl (Rp) tetap konsisten satu sama lain.
+        risk_pct = MIN_SL_PCT
+        stop_loss = entry * (1 - MIN_SL_PCT / 100)
     tp1_pct = max(3.0, risk_pct)
     tp2_pct = tp1_pct * 2
     tp3_pct = tp1_pct * 3

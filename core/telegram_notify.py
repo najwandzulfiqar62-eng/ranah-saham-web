@@ -88,6 +88,23 @@ def format_signal_new(sig: dict) -> str:
     return "\n".join(lines)
 
 
+def format_signal_tp_progress(sig: dict) -> str:
+    """Format pesan utk TP1/TP2 tercapai TAPI posisi BELUM ditutup (lihat
+    tp_level_hit di core/signal_history.py::audit_open_signals) -- beda
+    dgn format_signal_resolved yang HANYA dipakai utk status akhir
+    (TP_HIT/SL_HIT/EXPIRED). Permintaan user: "kena tp1 tandai, lanjut ke
+    tp selanjutnya" -- jadi ini notifikasi progres, bukan penutupan."""
+    level = sig.get("tp_level_hit")
+    lines = [
+        f"🎯 <b>{sig['kode']}</b> — Target TP{level} tercapai (masih OPEN)",
+        f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
+        f"Entry Rp{sig['entry_price']:,.0f} → harga sekarang Rp{sig['price']:,.0f}",
+        "Posisi tetap dipantau menuju target berikutnya, belum ditutup.",
+        "Analisis teknikal otomatis (rule-based) untuk edukasi — bukan rekomendasi investasi. DYOR.",
+    ]
+    return "\n".join(lines)
+
+
 def format_signal_resolved(sig: dict) -> str:
     """Format pesan utk sinyal yang baru SELESAI diaudit (TP_HIT/SL_HIT/
     EXPIRED). Bahasa jujur apa adanya -- SL_HIT ditampilkan sama terus

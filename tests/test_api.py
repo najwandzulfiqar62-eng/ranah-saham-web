@@ -897,8 +897,11 @@ def test_confidence_targets_are_never_too_tight(client):
     risiko sungguhan). Sekarang pakai logic yang sama dengan fitur
     Rencana Trading (calculate_fixed_entry_levels_from_df, skenario
     'normal'): TP1 = MAKSIMUM(3%, risk%), jadi TP tidak pernah lebih
-    ketat dari SL-nya sendiri (RR >= 1:1 selalu), dan SL selalu punya
-    buffer 0.2xATR di luar support asli."""
+    ketat dari SL-nya sendiri (RR >= 1:1 selalu), dan risiko_turun_pct
+    (SL) tidak pernah di bawah MIN_SL_PCT (permintaan user: SL jangan
+    kedekatan, biar posisi masih bisa di-hold kalau teknikal masih bagus)."""
+    from core.trading_plan import MIN_SL_PCT
+
     r = client.get("/api/confidence")
     assert r.status_code == 200
     items = r.json()["items"]
@@ -908,12 +911,70 @@ def test_confidence_targets_are_never_too_tight(client):
         if naik is None or turun is None:
             continue
         checked += 1
+        assert turun >= MIN_SL_PCT - 1e-6, f"{it['kode']}: risiko_turun_pct ({turun}) di bawah floor {MIN_SL_PCT}%"
         assert naik >= 3.0 - 1e-6 or naik >= turun - 1e-6, (
             f"{it['kode']}: potensi_naik_pct ({naik}) di bawah floor 3% DAN di bawah risiko_turun_pct ({turun})"
         )
         if it.get("rr_ratio") is not None:
             assert it["rr_ratio"] >= 1.0 - 1e-6, f"{it['kode']}: rr_ratio ({it['rr_ratio']}) di bawah 1:1"
     assert checked > 0, "tidak ada item dengan potensi_naik_pct/risiko_turun_pct valid untuk dicek"
+
+
+def test_calc_entry_levels_walks_down_to_deeper_support_when_nearest_too_close():
+    """Regresi langsung (unit, tanpa network) -- permintaan user eksplisit
+    ('sl nya kedeketan, kalo bisa sl nya di support'): kalau S1 SANGAT
+    dekat dari entry (risk_pct alami <1%), SL TIDAK BOLEH langsung lompat
+    ke floor persentase generik -- harus turun dulu ke S2 (support
+    SUNGGUHAN berikutnya yang lebih dalam) selama S2 itu sendiri sudah
+    cukup jauh (>= floor). SL yang dihasilkan harus level S2 (dikurangi
+    buffer ATR), BUKAN entry x (1 - floor%)."""
+    from core.trading_plan import _calc_entry_levels, MIN_SL_PCT
+
+    entry = 1000.0
+    atr = 10.0  # ATR kecil -- buffer 0.2xATR cuma 2 (0.2% dari entry)
+    sr = {"S1": 996.0, "S2": 950.0, "S3": 900.0, "S4": 850.0}  # S1 cuma 0.4%, S2 5% di bawah entry
+
+    levels = _calc_entry_levels(entry, atr, sr)
+
+    expected_sl = round(950.0 - (atr * 0.2), 0)  # dari S2, BUKAN dari floor persentase
+    assert levels["sl"] == pytest.approx(expected_sl, abs=1)
+    assert levels["risk_pct"] > MIN_SL_PCT, "harus lebih lebar dari floor krn S2 dipakai, bukan cuma disamakan ke floor"
+
+
+def test_calc_entry_levels_falls_back_to_percentage_floor_when_all_supports_too_close():
+    """Kontrol: floor persentase generik TETAP jadi jaring pengaman
+    terakhir -- kalau SEMUA level S1..S4 sama-sama terlalu dekat dari
+    entry (tidak ada satu pun support sungguhan yang cukup jauh), baru
+    fallback ke entry x (1 - floor%)."""
+    from core.trading_plan import _calc_entry_levels, MIN_SL_PCT
+
+    entry = 1000.0
+    atr = 10.0
+    sr = {"S1": 996.0, "S2": 992.0, "S3": 988.0, "S4": 984.0}  # semua < 2% di bawah entry
+
+    levels = _calc_entry_levels(entry, atr, sr)
+
+    assert levels["risk_pct"] == pytest.approx(MIN_SL_PCT, abs=0.05)
+    expected_sl = round(entry * (1 - MIN_SL_PCT / 100), 0)
+    assert levels["sl"] == pytest.approx(expected_sl, abs=1)
+
+
+def test_calc_entry_levels_keeps_wider_natural_sl_unchanged():
+    """Kontrol utk test di atas: kalau risk_pct alami SUDAH lebih lebar
+    dari floor, floor TIDAK BOLEH mengutak-atik apa pun -- ini jaring
+    pengaman kasus ekstrem, bukan pengganti level support asli yang
+    memang sudah wajar."""
+    from core.trading_plan import _calc_entry_levels, MIN_SL_PCT
+
+    entry = 1000.0
+    atr = 10.0
+    sr = {"S1": 950.0, "S2": 900.0, "S3": 850.0, "S4": 800.0}  # S1 5% di bawah entry -- sudah lebar
+
+    levels = _calc_entry_levels(entry, atr, sr)
+
+    assert levels["risk_pct"] > MIN_SL_PCT
+    expected_sl = round(950.0 - (atr * 0.2), 0)
+    assert levels["sl"] == pytest.approx(expected_sl, abs=1)
 
 
 def _fake_confidence_item(kode, score, naik=3.0, turun=2.0, harga=1000.0,
@@ -955,6 +1016,137 @@ def test_record_top_picks_respects_threshold_and_dedup(clean_signal_db):
     assert "ZZNODATA" not in kodes
 
 
+def test_record_top_picks_blocks_new_entry_while_still_open_multi_day(clean_signal_db):
+    """Regresi UTAMA (permintaan user langsung: 'entrynya jangan kebanyakan
+    banyak yg double jadi pusing') -- dedup yang LAMA cuma berbasis
+    tanggal, jadi kalau satu saham tetap jadi Top Pick 4-5 hari berturut-
+    turut, tiap hari tetap dicatat sbg entry BARU yang terpisah (menumpuk
+    banyak posisi 'open' utk saham yang sama, membingungkan). Dedup
+    SEKARANG berbasis status OPEN (_has_open_signal) -- entry baru utk
+    kode+source yang sama harus TETAP diblokir walau recorded_at-nya
+    sudah beberapa hari lalu, selama statusnya masih OPEN."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZSTILLOPEN", MIN_SCORE_TO_RECORD + 10)]
+    saved = asyncio.run(record_top_picks(items))
+    assert len(saved) == 1
+
+    # Simulasikan waktu berlalu (recorded_at mundur 3 hari) TANPA mengubah
+    # status -- masih OPEN, dedup lama (berbasis tanggal) akan LOLOS di
+    # sini, tapi dedup baru (berbasis status) harus tetap memblokir.
+    with get_db() as conn:
+        conn.execute("UPDATE signal_history SET recorded_at = datetime('now', '-3 days') WHERE kode='ZZSTILLOPEN'")
+
+    saved_again = asyncio.run(record_top_picks(items))
+    assert saved_again == [], "masih OPEN -- tidak boleh dicatat ulang walau recorded_at sudah beda hari"
+
+
+def test_record_top_picks_allows_new_entry_next_day_after_resolved(clean_signal_db):
+    """Sisi lain dari _has_open_signal: begitu sinyal sebelumnya SUDAH
+    resolved (TP_HIT/SL_HIT/EXPIRED, apa pun hasilnya) DI HARI SEBELUMNYA,
+    kode yang sama harus tetap boleh dicatat sbg entry baru esok harinya --
+    dedup ini mencegah entry DOBEL yang konkuren/di hari yang sama, bukan
+    melarang kode itu direkam lagi selamanya. (recorded_at sengaja
+    dimundurkan ke kemarin -- kalau resolve di HARI YANG SAMA, lihat
+    test_record_top_picks_blocked_same_day_even_after_resolved: itu
+    sengaja TETAP diblokir, permintaan user soal kasus ANTM 'kena tp lalu
+    kena sl hari yang sama'.)"""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZRESOLVED", MIN_SCORE_TO_RECORD + 10)]
+    saved = asyncio.run(record_top_picks(items))
+    assert len(saved) == 1
+
+    with get_db() as conn:
+        conn.execute('''
+            UPDATE signal_history
+            SET status='TP_HIT',
+                recorded_at = datetime('now', 'localtime', '-1 day'),
+                resolved_at = datetime('now', 'localtime', '-1 day')
+            WHERE kode='ZZRESOLVED'
+        ''')
+
+    saved_again = asyncio.run(record_top_picks(items))
+    assert len(saved_again) == 1, "sinyal lama sudah resolved KEMARIN -- entry baru hari ini harus tetap boleh dicatat"
+
+
+def test_record_top_picks_blocked_same_day_even_after_resolved(clean_signal_db):
+    """Regresi (permintaan user langsung setelah melihat UI produksi:
+    kasus ANTM -- terlihat 'kena TP lalu kena SL' di HARI YANG SAMA,
+    padahal itu 2 baris terpisah dari source berbeda; audit_open_signals
+    sendiri TIDAK bermasalah, baris yang sudah resolve tidak pernah
+    dievaluasi ulang). Begitu SATU sinyal utk kode itu resolve (menang
+    ATAU kalah) HARI INI, sinyal BARU utk kode yang sama TIDAK BOLEH
+    dicatat sampai besok -- mencegah kesan 'flip-flop' TP/SL dalam
+    sehari, walau dari source yang berbeda.
+
+    resolved_at DIISI EKSPLISIT di sini (bukan cuma status) -- versi awal
+    test ini tidak mengisinya, jadi kebetulan LOLOS walau _has_open_signal
+    masih pakai bug recorded_at (BUKAN resolved_at): dgn resolved_at NULL,
+    klausul lama (recorded_at=hari ini) TETAP true krn baris ini memang
+    direkam hari ini juga -- test itu jadi tidak benar-benar menguji
+    klausul yang dimaksud. audit_open_signals() SUNGGUHAN SELALU mengisi
+    resolved_at bersamaan dgn status (lihat UPDATE di audit_open_signals),
+    jadi ini yang representatif thd kondisi nyata (lihat juga kasus AKRA/
+    RAJA di produksi: direkam beberapa hari lalu, resolved_at HARI INI)."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZSAMEDAY", MIN_SCORE_TO_RECORD + 10)]
+    saved = asyncio.run(record_top_picks(items))
+    assert len(saved) == 1
+
+    with get_db() as conn:
+        conn.execute('''
+            UPDATE signal_history SET status='TP_HIT', resolved_at=datetime('now','localtime')
+            WHERE kode='ZZSAMEDAY'
+        ''')
+
+    saved_again = asyncio.run(record_top_picks(items))
+    assert saved_again == [], "sudah resolve HARI INI -- entry baru tidak boleh dicatat sampai besok"
+
+
+def test_record_top_picks_blocked_same_day_even_if_recorded_days_ago(clean_signal_db):
+    """Regresi UTAMA (BUG NYATA ditemukan lewat verifikasi adversarial,
+    live di produksi: AKRA & RAJA) -- klausul (b) yang lama salah pakai
+    date(recorded_at), bukan date(resolved_at). Skenario paling REALISTIS:
+    sinyal direkam BEBERAPA HARI lalu (butuh waktu multi-hari utk kena TP/
+    SL, bukan hari yang sama seperti test di atas), lalu resolve HARI INI
+    -- _has_open_signal HARUS tetap mendeteksi ini sbg 'baru resolve hari
+    ini' dan memblokir entry baru, TERLEPAS dari kapan awalnya direkam."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    items = [_fake_confidence_item("ZZOLDRECORD", MIN_SCORE_TO_RECORD + 10)]
+    saved = asyncio.run(record_top_picks(items))
+    assert len(saved) == 1
+
+    with get_db() as conn:
+        conn.execute('''
+            UPDATE signal_history
+            SET status='TP_HIT',
+                recorded_at = datetime('now', 'localtime', '-3 days'),
+                resolved_at = datetime('now', 'localtime')
+            WHERE kode='ZZOLDRECORD'
+        ''')
+
+    saved_again = asyncio.run(record_top_picks(items))
+    assert saved_again == [], (
+        "direkam 3 hari lalu tapi resolve HARI INI -- tetap harus diblokir sampai besok, "
+        "bukan cuma kalau direkam DAN resolve di hari yang sama"
+    )
+
+
 def test_record_top_picks_caps_per_day(clean_signal_db):
     import asyncio
 
@@ -993,6 +1185,58 @@ def test_record_top_picks_uses_realtime_price_with_fallback(clean_signal_db):
     by_kode = {s["kode"]: s for s in report["signals"]}
     assert by_kode["ZZLIVE"]["entry_price"] == 1015.0  # pakai harga real-time
     assert by_kode["ZZFAIL"]["entry_price"] == 2000.0  # fallback ke closing harian
+
+
+def test_record_top_picks_uses_scenario_entry_price_not_live_quote(clean_signal_db):
+    """Regresi BUG NYATA (laporan user: RAJA low-nya kena area pullback tapi
+    entry yang tersimpan malah harga real-time yang sudah naik lagi --
+    'udh kena area tp' padahal baru dicatat): confidence() (web/app.py)
+    sekarang mengirim 'entry_price' = level SKENARIO Trading Plan yang
+    BENERAN kena hari itu (mis. pullback/S1), dan itu adalah FAKTA harga
+    yang sudah terjadi -- HARUS menang atas 'harga' (closing) MAUPUN harga
+    real-time dari price_lookup, supaya entry_price tetap konsisten dengan
+    tp_pct/sl_pct yang dihitung dari skenario yang sama."""
+    import asyncio
+
+    from core.signal_history import record_top_picks, get_signal_report, MIN_SCORE_TO_RECORD
+
+    item = {
+        **_fake_confidence_item("ZZSCENENTRY", MIN_SCORE_TO_RECORD + 5, harga=1000.0),
+        "entry_price": 960.0,  # level pullback yg beneran kena -- beda dari harga & live
+    }
+
+    async def fake_lookup(kode):
+        return 1015.0  # harga real-time, beda lagi dari keduanya
+
+    saved = asyncio.run(record_top_picks([item], price_lookup=fake_lookup))
+    assert len(saved) == 1
+
+    report = get_signal_report()
+    by_kode = {s["kode"]: s for s in report["signals"]}
+    assert by_kode["ZZSCENENTRY"]["entry_price"] == 960.0  # skenario menang, bukan harga/live
+
+
+def test_record_top_picks_falls_back_to_live_price_when_no_scenario_entry(clean_signal_db):
+    """Kontrol utk test di atas: kalau caller TIDAK menyediakan 'entry_price'
+    skenario sama sekali (mis. item lama/pemanggil lain), fallback ke harga
+    real-time (price_lookup) HARUS tetap jalan seperti sebelumnya -- fitur
+    baru ini tidak boleh menghapus perilaku fallback yang sudah ada."""
+    import asyncio
+
+    from core.signal_history import record_top_picks, get_signal_report, MIN_SCORE_TO_RECORD
+
+    item = _fake_confidence_item("ZZNOENTRYSCEN", MIN_SCORE_TO_RECORD + 5, harga=1000.0)
+    assert "entry_price" not in item  # item lama, tanpa entry_price skenario
+
+    async def fake_lookup(kode):
+        return 1042.0
+
+    saved = asyncio.run(record_top_picks([item], price_lookup=fake_lookup))
+    assert len(saved) == 1
+
+    report = get_signal_report()
+    by_kode = {s["kode"]: s for s in report["signals"]}
+    assert by_kode["ZZNOENTRYSCEN"]["entry_price"] == 1042.0  # fallback ke harga real-time
 
 
 def test_record_top_picks_concurrent_calls_never_duplicate(clean_signal_db):
@@ -1066,7 +1310,7 @@ def test_is_bursa_weekend_detects_saturday_and_sunday():
         importlib.reload(sh)  # kembalikan `datetime` asli di modul
 
 
-def test_record_top_picks_and_macd_skip_on_weekend(clean_signal_db, monkeypatch):
+def test_record_top_picks_skip_on_weekend(clean_signal_db, monkeypatch):
     """Regresi BUG NYATA ditemukan lewat inspeksi data produksi: siklus
     auto-audit jalan 24/7 (tiap 600 detik) TIDAK PEDULI akhir pekan, dan
     dulu tetap mencatat 'sinyal Top Pick baru' di hari Sabtu/Minggu dengan
@@ -1075,19 +1319,18 @@ def test_record_top_picks_and_macd_skip_on_weekend(clean_signal_db, monkeypatch)
     (Jumat) jadi tercatat sebagai 2-3 sinyal terpisah (Jumat+Sabtu+Minggu),
     yang MENGGANDAKAN statistik win-rate secara palsu kalau nanti kena TP/SL.
 
-    record_top_picks()/record_macd_cross_signals() HARUS return [] (skip
-    total, tidak mencatat apa pun) kalau _is_bursa_weekend() True -- di-mock
-    langsung (bukan datetime) supaya tidak tercampur dgn clean_signal_db
-    yang sudah mem-patch _is_bursa_weekend ke False secara default."""
+    record_top_picks() HARUS return [] (skip total, tidak mencatat apa pun)
+    kalau _is_bursa_weekend() True -- di-mock langsung (bukan datetime)
+    supaya tidak tercampur dgn clean_signal_db yang sudah mem-patch
+    _is_bursa_weekend ke False secara default."""
     import asyncio
 
     import core.signal_history as sh
 
     monkeypatch.setattr(sh, "_is_bursa_weekend", lambda: True)
 
-    items = [_fake_confidence_item("ZZWEEKEND", sh.MIN_SCORE_TO_RECORD + 5, macd_bullish_cross=True)]
+    items = [_fake_confidence_item("ZZWEEKEND", sh.MIN_SCORE_TO_RECORD + 5)]
     assert asyncio.run(sh.record_top_picks(items)) == []
-    assert asyncio.run(sh.record_macd_cross_signals(items)) == []
 
     report = sh.get_signal_report()
     assert "ZZWEEKEND" not in [s["kode"] for s in report["signals"]]
@@ -1134,28 +1377,37 @@ def test_ensure_table_migration_collapses_identical_weekend_duplicates(clean_sig
     index unique (kode,tanggal,source) karena tanggalnya beda. Migrasi
     _ensure_table() harus membersihkan baris yang PERSIS sama (kode+
     source+entry_price+tp_pct+sl_pct), menyisakan yang id-nya PALING KECIL
-    (paling awal tercatat)."""
+    (paling awal tercatat).
+
+    Semua baris di sini dibuat berstatus TP_HIT (bukan default OPEN) --
+    index unique PARTIAL idx_signal_unique_open (migrasi kelima, lihat
+    _ensure_table) cuma mengizinkan SATU baris OPEN per (kode,source),
+    jadi simulasi "beberapa baris utk kode+source yang sama" di test ini
+    HARUS berstatus resolved supaya tidak melanggar constraint itu sendiri
+    saat di-insert -- migrasi cleanup yang diuji di sini (dedup numerik
+    kode+source+entry_price+tp_pct+sl_pct) tidak peduli status sama sekali,
+    jadi ini tidak mengurangi apa yang sebenarnya diuji."""
     from core.database import get_db
     import core.signal_history as sh
 
     with get_db() as conn:
         conn.execute('''
-            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
-            VALUES ('ZZDUP', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-04 06:00:00')
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at, status)
+            VALUES ('ZZDUP', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-04 06:00:00', 'TP_HIT')
         ''')
         conn.execute('''
-            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
-            VALUES ('ZZDUP', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-05 00:06:00')
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at, status)
+            VALUES ('ZZDUP', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-05 00:06:00', 'TP_HIT')
         ''')
         # Kontrol: kode+source SAMA tapi entry_price BEDA (perubahan pasar
         # sungguhan) -- harus TETAP keduanya, bukan ikut kehapus.
         conn.execute('''
-            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
-            VALUES ('ZZREAL', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-04 06:00:00')
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at, status)
+            VALUES ('ZZREAL', 1000, 3.0, 1.9, 'TOP_PICK', '2026-07-04 06:00:00', 'TP_HIT')
         ''')
         conn.execute('''
-            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at)
-            VALUES ('ZZREAL', 1010, 3.0, 1.9, 'TOP_PICK', '2026-07-06 06:00:00')
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, recorded_at, status)
+            VALUES ('ZZREAL', 1010, 3.0, 1.9, 'TOP_PICK', '2026-07-06 06:00:00', 'SL_HIT')
         ''')
 
     sh._ensured = False  # paksa migrasi jalan ulang meski sudah pernah _ensure_table()
@@ -1168,6 +1420,568 @@ def test_ensure_table_migration_collapses_identical_weekend_duplicates(clean_sig
     assert len(dup_rows) == 1
     assert dup_rows[0]["recorded_at"] == "2026-07-04 06:00:00"  # yang dipertahankan = paling awal
     assert [r["entry_price"] for r in real_rows] == [1000.0, 1010.0]  # keduanya tetap ada
+
+
+def test_ensure_table_migration_purges_all_macd_cross_rows(clean_signal_db):
+    """Regresi (permintaan user langsung setelah melihat UI produksi:
+    'itu macd cross masih ada loh'): MACD_CROSS sudah dihapus dari
+    confidence() (tidak ada baris baru lagi), TAPI baris LAMA yang kadung
+    tercatat sebelumnya masih nongol di laporan. Migrasi ketujuh di
+    _ensure_table() harus menghapusnya TOTAL (bukan menunggu resolve
+    sendiri) -- apa pun statusnya (OPEN maupun sudah resolved), source ini
+    sudah sepenuhnya nonaktif."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status)
+            VALUES ('ZZMCOLD1', 1000, 3.0, 2.0, 'MACD_CROSS', 'OPEN')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status)
+            VALUES ('ZZMCOLD2', 1000, 3.0, 2.0, 'MACD_CROSS', 'SL_HIT')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status)
+            VALUES ('ZZKEEPTP', 1000, 3.0, 2.0, 'TOP_PICK', 'OPEN')
+        ''')
+
+    sh._ensured = False  # paksa migrasi jalan ulang
+    sh._ensure_table()
+
+    with get_db() as conn:
+        remaining_macd = conn.execute("SELECT 1 FROM signal_history WHERE source = 'MACD_CROSS'").fetchall()
+        remaining_tp = conn.execute("SELECT 1 FROM signal_history WHERE kode = 'ZZKEEPTP'").fetchall()
+
+    assert remaining_macd == [], "semua baris MACD_CROSS (apa pun statusnya) harus terhapus"
+    assert len(remaining_tp) == 1, "source lain (TOP_PICK) tidak boleh ikut kehapus"
+
+
+def test_ensure_table_migration_purges_smart_money_without_buy_confirmation(clean_signal_db):
+    """Regresi (permintaan user langsung: 'yg di smart money saya mau nya
+    yg secara teknikal dia nyuruh buy aja biar lebih valid'):
+    _record_smart_money_cycle() SUDAH menyaring kandidat BARU supaya cuma
+    direkam kalau ai_rating juga BUY/STRONG BUY (SANGAT BAGUS/BAGUS) --
+    tapi baris SMART_MONEY yang kadung tercatat SEBELUM filter itu ada
+    masih nongol dgn recommendation NETRAL/CUKUP/BURUK/NULL. Migrasi
+    kesembilan harus membersihkan riwayat lama itu juga (apa pun
+    statusnya), supaya track record Smart Money benar-benar cuma
+    mencerminkan sinyal yang teknikalnya juga BUY -- TANPA ikut menghapus
+    source lain (TOP_PICK tidak disyaratkan ai_rating BUY sama sekali)."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        for kode, rec in [
+            ("ZZSMNETRAL", "NETRAL"), ("ZZSMCUKUP", "CUKUP"),
+            ("ZZSMBURUK", "BURUK"), ("ZZSMNULL", None),
+        ]:
+            conn.execute('''
+                INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recommendation)
+                VALUES (?, 1000, 3.0, 2.0, 'SMART_MONEY', 'OPEN', ?)
+            ''', (kode, rec))
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recommendation)
+            VALUES ('ZZSMBAGUS', 1000, 3.0, 2.0, 'SMART_MONEY', 'OPEN', 'BAGUS')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recommendation)
+            VALUES ('ZZSMSTRONG', 1000, 3.0, 2.0, 'SMART_MONEY', 'OPEN', 'SANGAT BAGUS')
+        ''')
+        # Kontrol: TOP_PICK dgn recommendation NETRAL harus TETAP ada --
+        # kriteria ai_rating BUY cuma berlaku utk source SMART_MONEY.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recommendation)
+            VALUES ('ZZTPNETRAL', 1000, 3.0, 2.0, 'TOP_PICK', 'OPEN', 'NETRAL')
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        remaining_sm = {r["kode"] for r in conn.execute(
+            "SELECT kode FROM signal_history WHERE source = 'SMART_MONEY'"
+        ).fetchall()}
+        remaining_tp = conn.execute("SELECT 1 FROM signal_history WHERE kode = 'ZZTPNETRAL'").fetchall()
+
+    assert remaining_sm == {"ZZSMBAGUS", "ZZSMSTRONG"}, (
+        f"cuma SMART_MONEY dgn recommendation BAGUS/SANGAT BAGUS yang boleh tetap ada, dapat {remaining_sm}"
+    )
+    assert len(remaining_tp) == 1, "TOP_PICK tidak boleh ikut disyaratkan ai_rating BUY"
+
+
+def test_ensure_table_migration_collapses_cross_source_same_day_prefers_open(clean_signal_db):
+    """Regresi BUG NYATA (permintaan user langsung -- kasus ANTM & RAJA):
+    kode yang sama bisa dapat >1 baris di tanggal yang SAMA dari source
+    berbeda (mis. SMART_MONEY sudah resolve TP_HIT, TOP_PICK baru dicatat
+    hari yang sama & resolve SL_HIT) -- dari sudut pandang user yang cuma
+    lihat nama tiker, itu kelihatan seperti 'ANTM kena TP lalu kena SL'.
+    Migrasi kesepuluh harus membersihkan ini: dalam satu grup (kode,
+    tanggal), PRIORITASKAN baris yang masih OPEN (itu cerita aktif saat
+    ini); kalau tidak ada yang OPEN, sisakan id TERKECIL."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        # ANTM: SMART_MONEY resolve TP_HIT, TOP_PICK resolve SL_HIT, SAMA
+        # tanggal, TIDAK ada yang OPEN -- harus sisakan id terkecil (yang
+        # SMART_MONEY, direkam lebih dulu).
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, recommendation)
+            VALUES ('ZZANTM', 2930, 3.0, 2.0, 'SMART_MONEY', 'TP_HIT', '2026-07-06 02:49:00', 'BAGUS')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at)
+            VALUES ('ZZANTM', 3010, 3.0, 1.4, 'TOP_PICK', 'SL_HIT', '2026-07-06 09:14:00')
+        ''')
+        # RAJA: TOP_PICK masih OPEN, SMART_MONEY sudah resolve TP_HIT,
+        # SAMA tanggal -- harus sisakan yang OPEN (TOP_PICK), buang yang
+        # resolved (SMART_MONEY) walau id-nya lebih kecil/lebih awal.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, recommendation)
+            VALUES ('ZZRAJA', 3940, 3.0, 2.3, 'SMART_MONEY', 'TP_HIT', '2026-07-06 02:49:00', 'BAGUS')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at)
+            VALUES ('ZZRAJA', 4050, 3.2, 3.2, 'TOP_PICK', 'OPEN', '2026-07-06 14:41:00')
+        ''')
+        # Kontrol: kode+tanggal beda -- harus TETAP keduanya. recommendation
+        # 'BAGUS' eksplisit di baris SMART_MONEY supaya tidak ikut kehapus
+        # migrasi kesembilan (recommendation NULL/non-BUY) -- tidak relevan
+        # dgn yang diuji di test ini.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at)
+            VALUES ('ZZCTRL', 1000, 3.0, 2.0, 'TOP_PICK', 'TP_HIT', '2026-07-04 06:00:00')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, recommendation)
+            VALUES ('ZZCTRL', 1010, 3.0, 2.0, 'SMART_MONEY', 'OPEN', '2026-07-06 06:00:00', 'BAGUS')
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        antm_rows = conn.execute("SELECT source, status FROM signal_history WHERE kode='ZZANTM'").fetchall()
+        raja_rows = conn.execute("SELECT source, status FROM signal_history WHERE kode='ZZRAJA'").fetchall()
+        ctrl_rows = conn.execute("SELECT source, status FROM signal_history WHERE kode='ZZCTRL'").fetchall()
+
+    assert len(antm_rows) == 1
+    assert antm_rows[0]["source"] == "SMART_MONEY", "tidak ada yg OPEN -- sisakan id terkecil (paling awal direkam)"
+
+    assert len(raja_rows) == 1
+    assert raja_rows[0]["status"] == "OPEN", "ada yg OPEN -- itu yang harus dipertahankan, bukan yg sudah resolved"
+    assert raja_rows[0]["source"] == "TOP_PICK"
+
+    assert len(ctrl_rows) == 2, "kode+tanggal beda -- keduanya harus tetap ada, tidak boleh ikut kehapus"
+
+
+def test_ensure_table_migration_widens_open_sl_below_floor(clean_signal_db):
+    """Regresi (permintaan user langsung, menunjuk ANTM/ACES kena SL:
+    'sl nya jgn kedeketan selagi masih oke bisa di hold'): MIN_SL_PCT
+    floor di _calc_entry_levels() cuma berlaku utk sinyal yang DIHITUNG
+    setelah floor itu ada -- baris yang SUDAH kadung tercatat sebelumnya
+    (sl_pct asli, kadang <1%) tidak ikut lebar. Migrasi kesebelas harus
+    melebarkan sl_pct baris OPEN yang masih di bawah floor ke floor itu,
+    TAPI TIDAK menyentuh baris yang SUDAH resolved (hasilnya sudah
+    terjadi apa adanya di bawah aturan lama, mengubahnya sekarang sama
+    dgn mengarang ulang track record) maupun tp_pct (floor TP1 sudah ada
+    duluan, baris lama sudah benar utk itu)."""
+    from core.database import get_db
+    import core.signal_history as sh
+    from core.trading_plan import MIN_SL_PCT
+
+    with get_db() as conn:
+        # OPEN, sl_pct jauh di bawah floor -- harus dilebarkan ke floor.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status)
+            VALUES ('ZZTIGHTOPEN', 1000, 3.0, 0.4, 'TOP_PICK', 'OPEN')
+        ''')
+        # SUDAH resolved (SL_HIT) dgn sl_pct ketat -- TIDAK BOLEH disentuh,
+        # itu hasil asli yang sudah terjadi.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status)
+            VALUES ('ZZTIGHTRESOLVED', 1000, 3.0, 1.4, 'TOP_PICK', 'SL_HIT')
+        ''')
+        # OPEN, sl_pct SUDAH >= floor -- tidak boleh ikut diubah.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status)
+            VALUES ('ZZWIDEOPEN', 1000, 3.0, 4.5, 'TOP_PICK', 'OPEN')
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        row_tight_open = conn.execute("SELECT sl_pct, tp_pct FROM signal_history WHERE kode='ZZTIGHTOPEN'").fetchone()
+        row_tight_resolved = conn.execute("SELECT sl_pct FROM signal_history WHERE kode='ZZTIGHTRESOLVED'").fetchone()
+        row_wide_open = conn.execute("SELECT sl_pct FROM signal_history WHERE kode='ZZWIDEOPEN'").fetchone()
+
+    assert row_tight_open["sl_pct"] == MIN_SL_PCT, "OPEN + sl_pct di bawah floor harus dilebarkan ke floor"
+    assert row_tight_open["tp_pct"] == 3.0, "tp_pct tidak boleh ikut diubah oleh migrasi ini"
+    assert row_tight_resolved["sl_pct"] == 1.4, "baris yang SUDAH resolved tidak boleh diubah sama sekali"
+    assert row_wide_open["sl_pct"] == 4.5, "OPEN dgn sl_pct sudah >= floor tidak boleh ikut diubah"
+
+
+def test_ensure_table_migration_reopens_sl_hit_that_was_only_wrong_due_to_tight_floor(clean_signal_db):
+    """Regresi UTAMA (permintaan user langsung, menunjuk ANTM & ACES:
+    'masih sama belom berubah sl masih kedeketan tolong perbaiki semua').
+    ANTM asli: entry=3010, sl_pct=1.4 (SL SEBELUM floor 3.0% ada),
+    resolved_price=2960 -- TAPI 2960 > 3010*(1-3.0/100)=2919.7, artinya
+    kalau floor 3.0% sudah benar SAAT ITU, harga 2960 TIDAK PERNAH
+    menembus SL yang benar -- SL_HIT itu ARTEFAK dari bug, bukan hasil
+    pasar yang sah. Migrasi ketiga belas harus mengembalikannya ke OPEN
+    dgn sl_pct dilebarkan ke floor, resolved_at/resolved_price/return_pct/
+    days_to_resolve dikosongkan lagi -- entry_price & tp_pct TIDAK BOLEH
+    disentuh sama sekali (permintaan user: 'entrynya jgn diubah-ubah')."""
+    from core.database import get_db
+    import core.signal_history as sh
+    from core.trading_plan import MIN_SL_PCT
+
+    with get_db() as conn:
+        # ANTM-style: resolved_price MASIH DI ATAS floor yang benar --
+        # SL_HIT itu salah, harus dikembalikan ke OPEN.
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZANTMSTYLE', 3010, 3.0, 1.4, 'TOP_PICK', 'SL_HIT',
+                    '2026-07-06 09:14:24', '2026-07-06 10:05:59', 2960, -1.4, 0)
+        ''')
+        # Kontrol A: sl_pct SUDAH >= floor (bukan bug ini) -- TIDAK boleh disentuh.
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZWIDEALREADY', 1000, 3.0, 4.0, 'TOP_PICK', 'SL_HIT',
+                    '2026-07-04 09:00:00', '2026-07-05 09:00:00', 960, -4.0, 1)
+        ''')
+        # Kontrol B: sl_pct sempit, TAPI resolved_price SUNGGUHAN sudah di
+        # bawah floor yang benar juga -- SL_HIT tetap SAH, tidak boleh disentuh.
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZREALLYDROPPED', 1000, 3.0, 1.0, 'TOP_PICK', 'SL_HIT',
+                    '2026-07-04 09:00:00', '2026-07-05 09:00:00', 900, -10.0, 1)
+        ''')
+        # Kontrol C: TP_HIT dgn sl_pct sempit -- TIDAK PERNAH disentuh (SL
+        # lebih lebar tidak pernah membatalkan TP yang sudah tercapai).
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZTPHITSTYLE', 1000, 3.0, 1.4, 'TOP_PICK', 'TP_HIT',
+                    '2026-07-04 09:00:00', '2026-07-05 09:00:00', 1030, 3.0, 1)
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        antm = conn.execute('''
+            SELECT status, sl_pct, entry_price, tp_pct, resolved_at, resolved_price, return_pct, days_to_resolve
+            FROM signal_history WHERE kode='ZZANTMSTYLE'
+        ''').fetchone()
+        wide_already = conn.execute("SELECT status, sl_pct FROM signal_history WHERE kode='ZZWIDEALREADY'").fetchone()
+        really_dropped = conn.execute("SELECT status, sl_pct FROM signal_history WHERE kode='ZZREALLYDROPPED'").fetchone()
+        tp_hit = conn.execute("SELECT status, sl_pct FROM signal_history WHERE kode='ZZTPHITSTYLE'").fetchone()
+
+    assert antm["status"] == "OPEN", "SL_HIT yang cuma artefak SL kelewat ketat harus dikembalikan ke OPEN"
+    assert antm["sl_pct"] == MIN_SL_PCT
+    assert antm["entry_price"] == 3010.0, "entry_price TIDAK BOLEH berubah"
+    assert antm["tp_pct"] == 3.0, "tp_pct TIDAK BOLEH berubah"
+    assert antm["resolved_at"] is None and antm["resolved_price"] is None
+    assert antm["return_pct"] is None and antm["days_to_resolve"] is None
+
+    assert wide_already["status"] == "SL_HIT", "sl_pct sudah >= floor -- bukan kasus bug ini, jangan disentuh"
+    assert wide_already["sl_pct"] == 4.0
+
+    assert really_dropped["status"] == "SL_HIT", "harga sungguhan sudah di bawah floor yang benar -- SL_HIT tetap sah"
+    assert really_dropped["sl_pct"] == 1.0, "sl_pct baris resolved TIDAK diubah, cuma statusnya yang dievaluasi ulang"
+
+    assert tp_hit["status"] == "TP_HIT", "TP_HIT tidak pernah kena kriteria migrasi ini (cuma menyasar SL_HIT)"
+
+
+def test_ensure_table_migration_collapses_resolved_today_conflicts(clean_signal_db):
+    """Regresi UTAMA (BUG NYATA ditemukan lewat verifikasi adversarial,
+    live di produksi: AKRA & RAJA) -- SEBELUM _has_open_signal diperbaiki
+    (klausul (b) salah pakai recorded_at, bukan resolved_at), kedua kode
+    itu masing-masing direkam beberapa hari lalu, resolve TP_HIT HARI INI,
+    lalu tetap dapat baris OPEN baru di HARI YANG SAMA -- migrasi
+    kesepuluh (grouping per date(recorded_at)) tidak menangkap ini krn
+    baris lama & baru py recorded_at BEDA tanggal. Migrasi kedua belas
+    membersihkan pola ini secara retroaktif: grouping per (kode, date(
+    resolved_at)), OPEN menang kalau ada (pola sama dgn migrasi
+    kesepuluh), kalau tidak ada yang OPEN sisakan id TERKECIL."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        # AKRA-style: resolved TP_HIT beberapa hari setelah direkam, LALU
+        # dapat baris OPEN baru resolved_at-nya masih NULL (belum selesai)
+        # -- OPEN harus menang, baris resolved lama dihapus.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at)
+            VALUES ('ZZAKRA', 1255, 3.0, 3.0, 'TOP_PICK', 'TP_HIT', '2026-07-04 06:00:18', '2026-07-06 14:18:17')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at)
+            VALUES ('ZZAKRA', 1300, 3.0, 3.0, 'TOP_PICK', 'OPEN', '2026-07-06 15:29:05', NULL)
+        ''')
+        # Tidak ada yang OPEN, tapi 2 baris beda source resolve di TANGGAL
+        # resolved_at yang SAMA (walau recorded_at beda tanggal) -- sisakan
+        # id terkecil (paling awal direkam). recommendation='BAGUS' eksplisit
+        # di baris SMART_MONEY supaya tidak ikut kehapus migrasi kesembilan
+        # (recommendation NULL/non-BUY) -- tidak relevan dgn yang diuji di sini.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, recommendation)
+            VALUES ('ZZNODUP', 2930, 3.0, 3.0, 'SMART_MONEY', 'TP_HIT', '2026-07-01 06:00:00', '2026-07-06 09:00:00', 'BAGUS')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at)
+            VALUES ('ZZNODUP', 3010, 3.0, 3.0, 'TOP_PICK', 'SL_HIT', '2026-07-05 06:00:00', '2026-07-06 10:00:00')
+        ''')
+        # Kontrol: resolved_at beda tanggal -- harus TETAP keduanya.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at)
+            VALUES ('ZZCTRL2', 1000, 3.0, 2.0, 'TOP_PICK', 'TP_HIT', '2026-07-01 06:00:00', '2026-07-02 06:00:00')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, recommendation)
+            VALUES ('ZZCTRL2', 1010, 3.0, 2.0, 'SMART_MONEY', 'SL_HIT', '2026-07-03 06:00:00', '2026-07-05 06:00:00', 'BAGUS')
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        akra_rows = conn.execute("SELECT status, entry_price FROM signal_history WHERE kode='ZZAKRA'").fetchall()
+        nodup_rows = conn.execute("SELECT source FROM signal_history WHERE kode='ZZNODUP'").fetchall()
+        ctrl_rows = conn.execute("SELECT entry_price FROM signal_history WHERE kode='ZZCTRL2'").fetchall()
+
+    assert len(akra_rows) == 1
+    assert akra_rows[0]["status"] == "OPEN", "OPEN harus menang drpd baris resolved-hari-ini"
+    assert akra_rows[0]["entry_price"] == 1300.0
+
+    assert len(nodup_rows) == 1
+    assert nodup_rows[0]["source"] == "SMART_MONEY", "tidak ada yg OPEN -- sisakan id terkecil (paling awal direkam)"
+
+    assert len(ctrl_rows) == 2, "resolved_at beda tanggal -- keduanya harus tetap ada"
+
+
+def test_ensure_table_migration_collapses_cross_source_resolved_duplicates(clean_signal_db):
+    """Regresi BUG NYATA ditemukan lewat screenshot user: MDKA tercatat 2x
+    di tanggal yang SAMA (dulu satu dari SMART_MONEY, satu dari sumber
+    lain) dgn entry/TP/SL IDENTIK -- keduanya KEBETULAN sudah sama-sama
+    resolved sebelum migrasi per-kode-OPEN (migrasi keenam) sempat jalan,
+    jadi lolos dari cleanup itu (yang cuma menyentuh baris status='OPEN').
+    Migrasi kedelapan harus tetap membersihkan ini: kode+tanggal+
+    entry_price+tp_pct+sl_pct sama persis, SOURCE TIDAK HARUS SAMA (beda
+    dari migrasi ke-4 yang mensyaratkan source sama)."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    # recommendation='BAGUS' eksplisit di baris SMART_MONEY -- migrasi
+    # kesembilan (di bawah migrasi ini) menghapus baris SMART_MONEY yang
+    # recommendation-nya bukan BUY/STRONG BUY, jadi baris test ini harus
+    # memenuhi kriteria itu supaya yang diuji di sini (dedup silang-source)
+    # tidak ikut kehapus oleh migrasi LAIN yang tidak relevan dgn test ini.
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, recommendation)
+            VALUES ('ZZCROSSDUP', 2740, 3.0, 2.0, 'SMART_MONEY', 'SL_HIT', '2026-07-06 09:00:00', 'BAGUS')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at)
+            VALUES ('ZZCROSSDUP', 2740, 3.0, 2.0, 'MACD_CROSS', 'SL_HIT', '2026-07-06 10:00:00')
+        ''')
+        # Kontrol: kode SAMA tapi entry_price BEDA (hari/harga sungguhan
+        # berbeda) -- harus TETAP keduanya, bukan ikut kehapus.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at)
+            VALUES ('ZZCROSSREAL', 2740, 3.0, 2.0, 'TOP_PICK', 'TP_HIT', '2026-07-04 09:00:00')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, recommendation)
+            VALUES ('ZZCROSSREAL', 2800, 3.0, 2.0, 'SMART_MONEY', 'TP_HIT', '2026-07-06 09:00:00', 'BAGUS')
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        dup_rows = conn.execute("SELECT source FROM signal_history WHERE kode='ZZCROSSDUP'").fetchall()
+        real_rows = conn.execute(
+            "SELECT entry_price FROM signal_history WHERE kode='ZZCROSSREAL' ORDER BY entry_price"
+        ).fetchall()
+
+    assert len(dup_rows) == 1
+    assert dup_rows[0]["source"] == "SMART_MONEY"  # yang dipertahankan = id terkecil (paling awal direkam)
+    assert [r["entry_price"] for r in real_rows] == [2740.0, 2800.0]  # keduanya tetap ada, harga beda
+
+
+def test_ensure_table_migration_backfills_tp2_tp3_and_tp_level_hit(clean_signal_db):
+    """Regresi migrasi ke-14 (skema TP multi-level, permintaan user: 'kena
+    tp1 tandai, lanjut ke tp selanjutnya'): baris LAMA (direkam sebelum
+    kolom tp2_pct/tp3_pct/tp_level_hit ada) harus di-backfill otomatis --
+    tp2_pct=tp_pct*2, tp3_pct=tp_pct*3 (konvensi SAMA dgn core/trading_
+    plan.py::_calc_entry_levels), dan tp_level_hit=1 utk baris yang SUDAH
+    TP_HIT (jujur merepresentasikan bahwa sistem lama cuma pernah capai
+    'level 1 setara', tidak pernah punya kesempatan capai TP2/TP3)."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at)
+            VALUES ('ZZOLDOPEN', 1000, 5, 3, 'TOP_PICK', 'OPEN', '2026-07-01 09:00:00')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, sl_pct, source, status, recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZOLDTPHIT', 1000, 5, 3, 'TOP_PICK', 'TP_HIT', '2026-07-01 09:00:00', '2026-07-02 09:00:00', 1050, 5.0, 1)
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        open_row = conn.execute(
+            "SELECT tp2_pct, tp3_pct, tp_level_hit FROM signal_history WHERE kode='ZZOLDOPEN'"
+        ).fetchone()
+        tphit_row = conn.execute(
+            "SELECT tp2_pct, tp3_pct, tp_level_hit FROM signal_history WHERE kode='ZZOLDTPHIT'"
+        ).fetchone()
+
+    assert open_row["tp2_pct"] == 10.0  # tp_pct * 2
+    assert open_row["tp3_pct"] == 15.0  # tp_pct * 3
+    assert open_row["tp_level_hit"] == 0
+
+    assert tphit_row["tp2_pct"] == 10.0
+    assert tphit_row["tp3_pct"] == 15.0
+    assert tphit_row["tp_level_hit"] == 1, "baris TP_HIT lama harus dianggap sudah capai level 1"
+
+
+def test_record_top_picks_persists_scenario_derived_tp2_tp3(clean_signal_db):
+    """Regresi naming-mismatch yang sempat ada: confidence() (web/app.py)
+    sekarang menghitung tp2_pct/tp3_pct dari skenario Trading Plan yang
+    BENERAN kena (bukan cuma tp_pct*2/*3 generik) dan mengirimkannya lewat
+    key 'tp2_pct'/'tp3_pct' -- record_top_picks() HARUS menyimpan nilai
+    itu APA ADANYA kalau item menyediakannya, bukan selalu jatuh ke
+    fallback tp_pct*N (bug yg sempat terjadi krn key salah nama)."""
+    import asyncio
+
+    from core.signal_history import record_top_picks
+
+    item = {**_fake_confidence_item("ZZSCEN", 80, naik=4.0, turun=2.0), "tp2_pct": 9.5, "tp3_pct": 15.5}
+    saved = asyncio.run(record_top_picks([item]))
+    assert saved[0]["tp2_pct"] == 9.5
+    assert saved[0]["tp3_pct"] == 15.5
+
+    # Kontrol: item TANPA tp2_pct/tp3_pct eksplisit -- fallback tp_pct*2/*3.
+    item2 = _fake_confidence_item("ZZNOSCEN", 80, naik=4.0, turun=2.0)
+    saved2 = asyncio.run(record_top_picks([item2]))
+    assert saved2[0]["tp2_pct"] == 8.0  # 4.0 * 2
+    assert saved2[0]["tp3_pct"] == 12.0  # 4.0 * 3
+
+
+def test_audit_open_signals_tp1_tp2_progress_then_tp3_closes(clean_signal_db):
+    """Regresi inti fitur baru (permintaan user: 'misalkan kena area tp1
+    tandai juga lanjut ke area tp selanjutnya'): TP1/TP2 tercapai HANYA
+    menaikkan tp_level_hit, posisi TETAP OPEN -- cuma TP3 yang menutup
+    posisi (status TP_HIT). Disimulasikan sbg 3 audit berurutan (harga
+    naik bertahap), bukan 1 lompatan, supaya progres per-level teruji."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        # entry=1000, tp1=5% (1050), tp2=10% (1100), tp3=15% (1150), sl=3% (970)
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct)
+            VALUES ('ZZTPPROG', 1000, 5, 10, 15, 3)
+        ''')
+
+    from datetime import date
+
+    async def _audit_at(price):
+        async def fake_lookup(kode):
+            return price, date.today()
+        return await audit_open_signals(fake_lookup)
+
+    # Audit 1: harga 1060 -- TP1 tercapai, posisi harus TETAP OPEN.
+    events1 = asyncio.run(_audit_at(1060.0))
+    with get_db() as conn:
+        row1 = conn.execute("SELECT status, tp_level_hit FROM signal_history WHERE kode='ZZTPPROG'").fetchone()
+    assert row1["status"] == "OPEN", "TP1 tercapai TIDAK BOLEH menutup posisi"
+    assert row1["tp_level_hit"] == 1
+    assert len(events1) == 1 and events1[0]["kind"] == "tp_progress" and events1[0]["tp_level_hit"] == 1
+
+    # Audit 2: harga sama msh di atas TP1 tapi belum TP2 -- TIDAK ADA event baru (idempotent).
+    events2 = asyncio.run(_audit_at(1060.0))
+    assert events2 == []
+
+    # Audit 3: harga naik ke 1110 -- TP2 tercapai, posisi MASIH HARUS OPEN.
+    events3 = asyncio.run(_audit_at(1110.0))
+    with get_db() as conn:
+        row3 = conn.execute("SELECT status, tp_level_hit FROM signal_history WHERE kode='ZZTPPROG'").fetchone()
+    assert row3["status"] == "OPEN", "TP2 tercapai TIDAK BOLEH menutup posisi"
+    assert row3["tp_level_hit"] == 2
+    assert len(events3) == 1 and events3[0]["kind"] == "tp_progress" and events3[0]["tp_level_hit"] == 2
+
+    # Audit 4: harga naik ke 1160 -- TP3 tercapai, BARU sekarang ditutup.
+    events4 = asyncio.run(_audit_at(1160.0))
+    with get_db() as conn:
+        row4 = conn.execute(
+            "SELECT status, tp_level_hit, return_pct, resolved_price FROM signal_history WHERE kode='ZZTPPROG'"
+        ).fetchone()
+    assert row4["status"] == "TP_HIT"
+    assert row4["tp_level_hit"] == 3
+    assert row4["return_pct"] == 15  # tp3_pct
+    assert row4["resolved_price"] == 1160.0
+    assert len(events4) == 1 and events4[0]["kind"] == "resolved" and events4[0]["status"] == "TP_HIT"
+
+
+def test_audit_open_signals_sl_still_terminal_after_tp_progress(clean_signal_db):
+    """Regresi: SL HARUS tetap final TERLEPAS dari tp_level_hit sudah
+    berapa -- user tidak minta stop-loss dipindah ke breakeven setelah
+    TP1/TP2 kena, jadi risiko awal (sl_pct dari entry) tetap berlaku
+    penuh selama posisi masih terbuka. Simulasi: TP1 kena dulu (harga
+    naik), LALU harga jatuh tembus SL awal -> harus tetap SL_HIT, dan
+    tp_level_hit HISTORIS (1) tetap tercatat, bukan direset ke 0."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        # entry=1000, tp1=5% (1050), sl=3% (970)
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct)
+            VALUES ('ZZTPTHENSL', 1000, 5, 10, 15, 3)
+        ''')
+
+    from datetime import date
+
+    async def _audit_at(price):
+        async def fake_lookup(kode):
+            return price, date.today()
+        return await audit_open_signals(fake_lookup)
+
+    asyncio.run(_audit_at(1060.0))  # TP1 tercapai dulu
+    with get_db() as conn:
+        mid = conn.execute("SELECT status, tp_level_hit FROM signal_history WHERE kode='ZZTPTHENSL'").fetchone()
+    assert mid["status"] == "OPEN" and mid["tp_level_hit"] == 1
+
+    asyncio.run(_audit_at(960.0))  # lalu jatuh tembus SL
+    with get_db() as conn:
+        final = conn.execute(
+            "SELECT status, tp_level_hit, return_pct FROM signal_history WHERE kode='ZZTPTHENSL'"
+        ).fetchone()
+    assert final["status"] == "SL_HIT", "SL harus tetap final walau TP1 sudah pernah tercapai"
+    assert final["return_pct"] == -3
+    assert final["tp_level_hit"] == 1, "tp_level_hit historis (TP1 pernah tercapai) tidak boleh direset ke 0"
 
 
 def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):
@@ -1196,10 +2010,13 @@ def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):
         # OPEN: baru direkam, harga masih di tengah -- harus tetap OPEN
         conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct) VALUES ('ZZOPEN', 1000, 5, 3)")
 
+    from datetime import date
+
     prices = {"ZZTP": 1060.0, "ZZSL": 960.0, "ZZOLD": 1010.0, "ZZOPEN": 1010.0}
 
     async def fake_lookup(kode):
-        return prices.get(kode)
+        price = prices.get(kode)
+        return None if price is None else (price, date.today())
 
     asyncio.run(audit_open_signals(fake_lookup))
 
@@ -1239,10 +2056,13 @@ def test_audit_open_signals_sell_direction_bidirectional_math(clean_signal_db):
             (f'-{MAX_HOLD_DAYS + 1} days',),
         )
 
+    from datetime import date
+
     prices = {"ZZSELLTP": 940.0, "ZZSELLSL": 1040.0, "ZZSELLOLD": 980.0}
 
     async def fake_lookup(kode):
-        return prices.get(kode)
+        price = prices.get(kode)
+        return None if price is None else (price, date.today())
 
     asyncio.run(audit_open_signals(fake_lookup))
 
@@ -1255,6 +2075,113 @@ def test_audit_open_signals_sell_direction_bidirectional_math(clean_signal_db):
     assert rows["ZZSELLSL"]["return_pct"] == -3
     assert rows["ZZSELLOLD"]["status"] == "EXPIRED"
     assert rows["ZZSELLOLD"]["return_pct"] == 2.04  # (1000/980 - 1) * 100, BUKAN (980/1000-1)*100
+
+
+def test_audit_open_signals_refuses_to_resolve_with_price_older_than_recorded_date(clean_signal_db):
+    """Regresi BUG NYATA ditemukan live (laporan user langsung: TPIA & ARTO
+    ter-'Kena SL' padahal user melihat sendiri harganya NAIK hari itu):
+    bar yfinance utk hari terbaru kadang masih NaN/belum terbit -- setelah
+    dropna() di _clean(), harga yang kepakai bisa jadi closing BEBERAPA
+    HARI SEBELUM sinyal itu bahkan direkam (data yang belum berubah sama
+    sekali sejak direkam, BUKAN penurunan harga sungguhan). price_lookup
+    SEKARANG wajib menyertakan tanggal bar di balik harganya -- kalau
+    tanggal itu LEBIH LAMA dari recorded_at, audit_open_signals() HARUS
+    menolak meresolve (tetap OPEN), walau harga itu SENDIRI kalau dipakai
+    apa adanya akan tampak seperti kena SL."""
+    import asyncio
+    from datetime import date, timedelta
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        # entry=1885, sl=3.2% -> SL kena kalau harga <= 1824.68
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, recorded_at) "
+            "VALUES ('ZZSTALE', 1885, 3.2, 3.2, datetime('now', 'localtime'))"
+        )
+
+    stale_date = date.today() - timedelta(days=3)  # bar dari SEBELUM sinyal direkam
+
+    async def fake_lookup(kode):
+        return 1785.0, stale_date  # harga ini SENDIRI di bawah SL (1824.68)
+
+    events = asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status, resolved_at FROM signal_history WHERE kode='ZZSTALE'").fetchone()
+
+    assert row["status"] == "OPEN", "harga basi (lebih lama dari recorded_at) TIDAK BOLEH pernah meresolve sinyal"
+    assert row["resolved_at"] is None
+    assert events == []
+
+
+def test_audit_open_signals_resolves_when_price_date_is_same_day_or_newer(clean_signal_db):
+    """Kontrol dari test di atas: kalau tanggal bar SAMA (atau lebih baru)
+    dari recorded_at, audit HARUS tetap berjalan normal -- staleness guard
+    tidak boleh jadi terlalu ketat sampai memblokir audit yang sah."""
+    import asyncio
+    from datetime import date, timedelta
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, recorded_at) "
+            "VALUES ('ZZFRESH', 1885, 3.2, 3.2, datetime('now', 'localtime'))"
+        )
+
+    fresh_date = date.today() + timedelta(days=1)  # bar SETELAH direkam -- jelas bukan basi
+
+    async def fake_lookup(kode):
+        return 1785.0, fresh_date
+
+    events = asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status FROM signal_history WHERE kode='ZZFRESH'").fetchone()
+
+    assert row["status"] == "SL_HIT", "tanggal bar yang genuinely lebih baru harus tetap bisa meresolve"
+    assert len(events) == 1 and events[0]["status"] == "SL_HIT"
+
+
+def test_audit_open_signals_still_expires_with_permanently_stale_price(clean_signal_db):
+    """Regresi thd staleness guard di atas: kalau feed harga suatu saham
+    MACET PERMANEN lebih lama dari recorded_at (mis. suspensi bursa
+    berkepanjangan/delisting) DAN sudah lewat MAX_HOLD_DAYS, sinyal itu
+    HARUS tetap bisa EXPIRED (murni berbasis waktu, bukan klaim level
+    harga tertentu) -- staleness guard cuma boleh memblokir klaim TP/SL,
+    JANGAN sampai bikin sinyal begini tersangkut OPEN selama-lamanya."""
+    import asyncio
+    from datetime import date, timedelta
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, recorded_at) "
+            "VALUES ('ZZSUSPEND', 1000, 5, 3, datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 1} days',),
+        )
+
+    stale_date = date.today() - timedelta(days=MAX_HOLD_DAYS + 5)  # jauh lebih lama dari recorded_at
+
+    async def fake_lookup(kode):
+        return 1010.0, stale_date  # harga di tengah, TIDAK kena TP/SL manapun
+
+    events = asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status, return_pct FROM signal_history WHERE kode='ZZSUSPEND'").fetchone()
+
+    assert row["status"] == "EXPIRED", "harus tetap expire walau harganya basi -- jangan tersangkut OPEN selamanya"
+    assert row["return_pct"] == 1.0  # (1010/1000 - 1) * 100
+    assert len(events) == 1 and events[0]["status"] == "EXPIRED"
 
 
 def test_get_signal_report_tp_sl_price_bidirectional(clean_signal_db):
@@ -1374,6 +2301,43 @@ def test_signals_endpoint_returns_report_structure(client, clean_signal_db):
     assert r.status_code == 200
     data = r.json()
     assert "signals" in data and "stats" in data and "n_open" in data and "n_total" in data
+
+
+def test_signals_endpoint_enriches_open_signals_with_floating_pnl(client, clean_signal_db):
+    """Regresi fitur baru (permintaan user: 'liatkan floatingnya juga'):
+    sinyal yang MASIH OPEN harus dilengkapi floating_price/floating_
+    return_pct dari harga TERKINI (basis harga SAMA dgn yang dipakai
+    audit_open_signals(), lihat _signal_audit_price_lookup) -- sinyal yang
+    SUDAH SELESAI (closed) TIDAK boleh dapat field ini (hasilnya sudah
+    final, bukan mark-to-market)."""
+    from core.database import get_db
+
+    with get_db() as conn:
+        # tp_pct/sl_pct sengaja SANGAT lebar supaya harga acak dari fixture
+        # no_network TIDAK PERNAH memicu TP/SL/EXPIRED -- posisi harus
+        # tetap OPEN di endpoint ini.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, status)
+            VALUES ('ZZFLOAT', 1000, 90, 180, 270, 90, 'OPEN')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, sl_pct, status, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZCLOSED', 1000, 5, 3, 'TP_HIT', datetime('now'), 1050, 5.0, 2)
+        ''')
+
+    r = client.get("/api/signals")
+    assert r.status_code == 200
+    signals = r.json()["signals"]
+    open_sig = next(s for s in signals if s["kode"] == "ZZFLOAT")
+    closed_sig = next(s for s in signals if s["kode"] == "ZZCLOSED")
+
+    assert open_sig["floating_price"] is not None
+    assert open_sig["floating_return_pct"] == pytest.approx(
+        round((open_sig["floating_price"] / open_sig["entry_price"] - 1) * 100, 2)
+    )
+    assert closed_sig.get("floating_price") is None
+    assert closed_sig.get("floating_return_pct") is None
 
 
 def test_confidence_reasons_flags_pattern_bullish_and_bearish():
@@ -1584,66 +2548,6 @@ def test_telegram_messages_include_source_label():
     assert "Smart Money" in format_signal_new(sm_sig)
 
 
-def test_record_macd_cross_signals_ignores_confidence_score(clean_signal_db):
-    """Regresi inti fitur: entry point MACD Cross HARUS diuji independen
-    dari skor gabungan -- saham dengan confidence_score RENDAH (di bawah
-    MIN_SCORE_TO_RECORD milik Top Pick) tetap harus tercatat selama
-    histogram MACD-nya baru cross bullish dan likuid, supaya validitas
-    teori MACD-nya sendiri yang diaudit, bukan campuran skor lain."""
-    import asyncio
-
-    from core.signal_history import record_macd_cross_signals, MIN_SCORE_TO_RECORD
-
-    items = [
-        _fake_confidence_item("ZZMLOW", MIN_SCORE_TO_RECORD - 30, macd_bullish_cross=True),
-        _fake_confidence_item("ZZMNOCROSS", MIN_SCORE_TO_RECORD + 30, macd_bullish_cross=False),
-    ]
-    saved = asyncio.run(record_macd_cross_signals(items))
-    assert len(saved) == 1
-    assert saved[0]["kode"] == "ZZMLOW"
-    assert saved[0]["source"] == "MACD_CROSS"
-    assert saved[0]["pattern"] == "MACD HISTOGRAM BULLISH CROSS"
-
-
-def test_record_macd_cross_signals_requires_liquidity(clean_signal_db):
-    """Regresi: MACD Cross tetap harus disaring likuiditas (kriteria bisa-
-    dieksekusi, BUKAN kriteria 'seberapa bagus') -- saham tidak likuid
-    dengan histogram cross bullish TIDAK boleh ikut dicatat."""
-    import asyncio
-
-    from core.signal_history import record_macd_cross_signals
-
-    items = [_fake_confidence_item("ZZILLIQUID", 90, macd_bullish_cross=True, likuiditas="Tidak Likuid")]
-    saved = asyncio.run(record_macd_cross_signals(items))
-    assert saved == []
-
-
-def test_record_macd_cross_signals_dedup_independent_of_top_pick(clean_signal_db):
-    """Regresi: dedup MACD Cross per hari HARUS scoped ke source='MACD_CROSS'
-    sendiri -- kode saham yang SAMA boleh tercatat DUA KALI di hari yang
-    sama (satu dari Top Pick, satu dari MACD Cross) karena keduanya teori
-    entry berbeda yang sengaja diaudit terpisah, bukan saling menggantikan."""
-    import asyncio
-
-    from core.signal_history import record_top_picks, record_macd_cross_signals, get_signal_report, MIN_SCORE_TO_RECORD
-
-    items = [_fake_confidence_item("ZZBOTH", MIN_SCORE_TO_RECORD + 10, macd_bullish_cross=True)]
-    saved_tp = asyncio.run(record_top_picks(items))
-    saved_macd = asyncio.run(record_macd_cross_signals(items))
-    assert len(saved_tp) == 1 and len(saved_macd) == 1
-
-    report = get_signal_report()
-    rows = [s for s in report["signals"] if s["kode"] == "ZZBOTH"]
-    assert len(rows) == 2
-    assert {r["source"] for r in rows} == {"TOP_PICK", "MACD_CROSS"}
-
-    # Panggil lagi di hari yang sama -- masing-masing source dedup sendiri,
-    # tidak menambah baris baru sama sekali.
-    saved_tp_again = asyncio.run(record_top_picks(items))
-    saved_macd_again = asyncio.run(record_macd_cross_signals(items))
-    assert saved_tp_again == [] and saved_macd_again == []
-
-
 def _fake_sm_item(kode, pola, harga=1000.0, likuiditas="Sangat Likuid",
                    naik=3.0, turun=2.0):
     return {
@@ -1693,30 +2597,77 @@ def test_record_smart_money_signals_requires_liquidity(clean_signal_db):
     assert saved == []
 
 
-def test_record_smart_money_signals_dedup_independent_of_other_sources(clean_signal_db):
-    """Regresi: dedup Smart Money per hari HARUS scoped ke
-    source='SMART_MONEY' sendiri -- kode yang sama boleh tercatat di
-    TOP_PICK, MACD_CROSS, DAN SMART_MONEY sekaligus di hari yang sama,
-    tiga teori entry berbeda yang sengaja diaudit terpisah."""
+def test_record_smart_money_signals_blocked_by_open_signal_from_other_source(clean_signal_db):
+    """Regresi (permintaan user langsung setelah melihat UI produksi):
+    dedup SEKARANG per-KODE SAJA, lintas semua source -- kalau kode itu
+    SUDAH punya sinyal TOP_PICK yang masih OPEN, TIDAK boleh direkam lagi
+    sbg SMART_MONEY (atau sebaliknya) walau secara teori itu 'entry point
+    berbeda'. Awalnya dedup di sini sengaja diizinkan tumpang tindih antar
+    source (utk 'membandingkan teori entry'), tapi user melihat langsung
+    di UI itu kelihatan persis seperti 'double' yang membingungkan (mis.
+    RAJA tampil sbg TOP_PICK *dan* SMART_MONEY hari yang sama, angka
+    entry/TP/SL nyaris identik)."""
     import asyncio
 
     from core.signal_history import (
-        record_top_picks, record_macd_cross_signals, record_smart_money_signals,
-        get_signal_report, MIN_SCORE_TO_RECORD,
+        record_top_picks, record_smart_money_signals, get_signal_report, MIN_SCORE_TO_RECORD,
     )
 
-    tp_items = [_fake_confidence_item("ZZTRIPLE", MIN_SCORE_TO_RECORD + 10, macd_bullish_cross=True)]
+    tp_items = [_fake_confidence_item("ZZTRIPLE", MIN_SCORE_TO_RECORD + 10)]
     sm_items = [_fake_sm_item("ZZTRIPLE", "Akumulasi Agresif")]
 
     saved_tp = asyncio.run(record_top_picks(tp_items))
-    saved_macd = asyncio.run(record_macd_cross_signals(tp_items))
+    assert len(saved_tp) == 1
+
     saved_sm = asyncio.run(record_smart_money_signals(sm_items))
-    assert len(saved_tp) == 1 and len(saved_macd) == 1 and len(saved_sm) == 1
+    assert saved_sm == [], "ZZTRIPLE sudah punya sinyal TOP_PICK yang masih OPEN -- SMART_MONEY harus diblokir"
 
     report = get_signal_report()
     rows = [s for s in report["signals"] if s["kode"] == "ZZTRIPLE"]
-    assert len(rows) == 3
-    assert {r["source"] for r in rows} == {"TOP_PICK", "MACD_CROSS", "SMART_MONEY"}
+    assert len(rows) == 1
+    assert rows[0]["source"] == "TOP_PICK"
+
+
+def test_record_smart_money_signals_allowed_for_kode_without_open_signal(clean_signal_db):
+    """Kontrol utk test di atas: SMART_MONEY tetap harus bisa mencatat
+    kode yang BELUM punya sinyal OPEN dari source mana pun -- pemblokiran
+    di atas itu spesifik utk konflik per-kode, bukan mematikan SMART_MONEY
+    secara umum."""
+    import asyncio
+
+    from core.signal_history import record_smart_money_signals
+
+    sm_items = [_fake_sm_item("ZZFRESH", "Akumulasi Agresif")]
+    saved_sm = asyncio.run(record_smart_money_signals(sm_items))
+    assert len(saved_sm) == 1
+    assert saved_sm[0]["kode"] == "ZZFRESH"
+
+
+def test_record_smart_money_signals_uses_scenario_entry_price_not_live_quote(clean_signal_db):
+    """Sama seperti test_record_top_picks_uses_scenario_entry_price_not_live_
+    quote, tapi utk record_smart_money_signals(): _record_smart_money_cycle
+    (web/app.py) sekarang menyertakan 'entry_price' = conf.get('entry_price')
+    dari confidence() utk kode yang sama (skenario Trading Plan yang beneran
+    kena hari itu) -- ini HARUS menang atas 'harga' item Smart Money sendiri
+    MAUPUN harga real-time dari price_lookup, konsisten dgn Top Pick."""
+    import asyncio
+
+    from core.signal_history import record_smart_money_signals, get_signal_report
+
+    item = {
+        **_fake_sm_item("ZZSMENTRY", "Akumulasi Agresif", harga=1000.0),
+        "entry_price": 970.0,  # entry skenario dari confidence() -- beda dari harga & live
+    }
+
+    async def fake_lookup(kode):
+        return 1030.0  # harga real-time, beda lagi dari keduanya
+
+    saved = asyncio.run(record_smart_money_signals([item], price_lookup=fake_lookup))
+    assert len(saved) == 1
+
+    report = get_signal_report()
+    by_kode = {s["kode"]: s for s in report["signals"]}
+    assert by_kode["ZZSMENTRY"]["entry_price"] == 970.0  # skenario menang, bukan harga/live
 
 
 def test_record_smart_money_signals_skips_on_weekend(clean_signal_db, monkeypatch):
@@ -1768,7 +2719,8 @@ def test_record_smart_money_cycle_enriches_with_scored_confidence_items(monkeypa
 
     confidence_items = [
         {"kode": "SMHIT", "potensi_naik_pct": 4.0, "risiko_turun_pct": 2.0,
-         "likuiditas": "Sangat Likuid", "confidence_score": 72.5, "ai_score": 68.0, "ai_rating": "BAGUS"},
+         "likuiditas": "Sangat Likuid", "confidence_score": 72.5, "ai_score": 68.0, "ai_rating": "BAGUS",
+         "ringkasan_teknikal": {"overall": "BELI", "beli": 4, "netral": 2, "jual": 0}},
     ]
     asyncio.run(app_module._record_smart_money_cycle(confidence_items))
 
@@ -1779,6 +2731,88 @@ def test_record_smart_money_cycle_enriches_with_scored_confidence_items(monkeypa
     assert enriched["potensi_naik_pct"] == 4.0
     assert enriched["risiko_turun_pct"] == 2.0
     assert enriched["likuiditas"] == "Sangat Likuid"
+    assert enriched["ai_rating"] == "BELI", (
+        "kolom recommendation harus menyimpan verdict Ringkasan Sinyal Teknikal yang JADI ALASAN "
+        "konfirmasinya, bukan ai_rating lama"
+    )
+
+
+def test_record_smart_money_cycle_filters_out_non_buy_technical(monkeypatch):
+    """Permintaan eksplisit user ("smart money itu di combo ama ini" --
+    menunjuk panel Ringkasan Sinyal Teknikal di Analisis): Smart Money
+    HANYA dicatat kalau Ringkasan Sinyal Teknikal JUGA bilang BELI/BELI
+    KUAT -- pola volume Akumulasi yang muncul di saham dgn verdict NETRAL
+    harus di-skip, bukan diandalkan pola volumenya sendiri saja."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def fake_scan(kode):
+        return {"kode": kode, "harga": 1000.0, "chg1": 5.0, "chg5": 5.0,
+                "vol_ratio": 3.0, "rsi": 70.0, "pola": "Akumulasi Agresif",
+                "hari_lalu": 0, "tanggal": "2026-07-06", "grup": "Independen"}
+
+    monkeypatch.setattr(app_module, "_scan_one_sm", fake_scan)
+    monkeypatch.setattr(app_module, "_SM_UNIVERSE", ["SMBUYOK", "SMHOLDONLY"])
+
+    captured = {}
+
+    async def fake_record(enriched_items, price_lookup=None):
+        captured["items"] = enriched_items
+        return []
+
+    import core.signal_history as sh
+    monkeypatch.setattr(sh, "record_smart_money_signals", fake_record)
+
+    confidence_items = [
+        {"kode": "SMBUYOK", "potensi_naik_pct": 4.0, "risiko_turun_pct": 2.0,
+         "likuiditas": "Sangat Likuid", "confidence_score": 72.5, "ai_score": 68.0, "ai_rating": "BAGUS",
+         "ringkasan_teknikal": {"overall": "BELI", "beli": 4, "netral": 2, "jual": 0}},
+        {"kode": "SMHOLDONLY", "potensi_naik_pct": 4.0, "risiko_turun_pct": 2.0,
+         "likuiditas": "Sangat Likuid", "confidence_score": 50.0, "ai_score": 50.0, "ai_rating": "NETRAL",
+         "ringkasan_teknikal": {"overall": "NETRAL", "beli": 2, "netral": 3, "jual": 1}},
+    ]
+    asyncio.run(app_module._record_smart_money_cycle(confidence_items))
+
+    kodes = [it["kode"] for it in captured["items"]]
+    assert kodes == ["SMBUYOK"], "hanya kode dgn Ringkasan Sinyal Teknikal BELI KUAT/BELI yang boleh lolos"
+
+
+def test_record_smart_money_cycle_filters_out_distribusi_pola(monkeypatch):
+    """Permintaan eksplisit user ('hanya yg teknikalnya disuruh buy aja'):
+    pola Distribusi/Distribusi Agresif TIDAK LAGI direkam sbg entry SELL
+    independen, walau teknikalnya kebetulan bagus -- Smart Money sekarang
+    cuma jadi konfirmasi TAMBAHAN di atas sinyal BUY, bukan sumber SELL
+    berdiri sendiri yang bisa bertentangan arah dgn Top Pick."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def fake_scan(kode):
+        return {"kode": kode, "harga": 1000.0, "chg1": -5.0, "chg5": -5.0,
+                "vol_ratio": 3.0, "rsi": 30.0, "pola": "Distribusi Agresif",
+                "hari_lalu": 0, "tanggal": "2026-07-06", "grup": "Independen"}
+
+    monkeypatch.setattr(app_module, "_scan_one_sm", fake_scan)
+    monkeypatch.setattr(app_module, "_SM_UNIVERSE", ["SMDIST"])
+
+    captured = {}
+
+    async def fake_record(enriched_items, price_lookup=None):
+        captured["items"] = enriched_items
+        return []
+
+    import core.signal_history as sh
+    monkeypatch.setattr(sh, "record_smart_money_signals", fake_record)
+
+    confidence_items = [
+        {"kode": "SMDIST", "potensi_naik_pct": 4.0, "risiko_turun_pct": 2.0,
+         "likuiditas": "Sangat Likuid", "confidence_score": 80.0, "ai_score": 80.0, "ai_rating": "SANGAT BAGUS",
+         "ringkasan_teknikal": {"overall": "BELI KUAT", "beli": 5, "netral": 1, "jual": 0}},
+    ]
+    asyncio.run(app_module._record_smart_money_cycle(confidence_items))
+
+    assert captured["items"] == [], "pola Distribusi harus dibuang sepenuhnya, walau ai_rating-nya BUY"
 
 
 def test_record_smart_money_cycle_skips_when_confidence_items_empty():
@@ -2560,6 +3594,44 @@ def test_sm_process_df_exposes_freshness_metadata():
     assert result is not None
     assert result["hari_lalu"] == 0
     assert "tanggal" in result and result["tanggal"]
+
+
+def test_ringkasan_sinyal_teknikal_matches_js_thresholds():
+    """Unit test _ringkasan_sinyal_teknikal: HARUS porting persis dari
+    _buildTechSummary() di web/static/index.html (permintaan user, gerbang
+    konfirmasi Smart Money yang baru). Skenario ini PERSIS contoh dari
+    screenshot user: RSI 56.9 (netral, mendekati overbought), MACD
+    positif (beli), Volume 0.70x (netral), AI Score 75 (beli), %1H +4.82%
+    (beli), %5H +14.62% (beli) -> 4 beli, 2 netral, 0 jual -> overall
+    'BELI' (bukan 'BELI KUAT', krn beli=4 belum >=5)."""
+    import web.app as app_module
+
+    ai_screenshot = {
+        "rsi": 56.9, "macd_bullish": True, "vol_ratio": 0.70,
+        "score": 75, "change_1d": 4.82, "change_5d": 14.62,
+    }
+    r = app_module._ringkasan_sinyal_teknikal(ai_screenshot)
+    assert r == {"overall": "BELI", "beli": 4, "netral": 2, "jual": 0}
+
+    # Semua 6 indikator searah jual -> JUAL KUAT (beli=0, jual=6>=5).
+    ai_jual_kuat = {
+        "rsi": 75, "macd_bullish": False, "vol_ratio": 0.3,
+        "score": 20, "change_1d": -2.0, "change_5d": -5.0,
+    }
+    r2 = app_module._ringkasan_sinyal_teknikal(ai_jual_kuat)
+    assert r2["overall"] == "JUAL KUAT"
+    assert r2["jual"] == 6
+
+    # Semua netral kecuali MACD (yang binary, tidak pernah netral) -> hasil
+    # 1 beli/1 jual dari MACD sendirian, 5 netral dari yang lain -> netral==jual
+    # tergantung arah MACD; di sini MACD bullish=True -> beli=1, jual=0,
+    # netral=5 -> beli>jual -> CENDERUNG BELI.
+    ai_netral = {
+        "rsi": 55, "macd_bullish": True, "vol_ratio": 1.0,
+        "score": 50, "change_1d": 0.0, "change_5d": 0.0,
+    }
+    r3 = app_module._ringkasan_sinyal_teknikal(ai_netral)
+    assert r3 == {"overall": "CENDERUNG BELI", "beli": 1, "netral": 5, "jual": 0}
 
 
 def test_get_ara_arb_bands_per_price_tier():

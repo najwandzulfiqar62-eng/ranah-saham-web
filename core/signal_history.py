@@ -61,11 +61,6 @@ MIN_SCORE_TO_RECORD = 55.0
 # semangat "Top Pick" (peringkat TERATAS), bukan seluruh universe.
 MAX_RECORDED_PER_DAY = 10
 
-# Maksimum berapa entry point MACD Histogram Cross per hari yang dicatat --
-# alasan sama dengan MAX_RECORDED_PER_DAY (jangan bising), TAPI angka ini
-# TIDAK terkait skor gabungan sama sekali (lihat record_macd_cross_signals).
-MACD_CROSS_MAX_PER_DAY = 10
-
 
 def _is_bursa_weekend() -> bool:
     """True kalau HARI INI Sabtu/Minggu -- BEI tidak buka, jadi closing
@@ -201,16 +196,388 @@ def _ensure_table():
                 GROUP BY kode, source, entry_price, tp_pct, sl_pct
             )
         ''')
+        # Migrasi kelima: idx_signal_unique_daily (kode, date(recorded_at),
+        # source) DIGANTI oleh index PARTIAL di bawah -- permintaan user
+        # ("entrynya jangan kebanyakan double") membuat dedup pindah dari
+        # "sudah dicatat hari ini?" (tanggal) ke "masih ada yang OPEN?"
+        # (status, lihat _has_open_signal). BUG NYATA ketemu lewat test:
+        # index lama TETAP menghalangi kode+source yang sama direkam ulang
+        # kalau sinyal sebelumnya SUDAH resolved TAPI masih di HARI YANG
+        # SAMA (mis. kena TP paginya, jadi kandidat lagi sore harinya) --
+        # padahal itu seharusnya boleh, posisi lamanya sudah selesai.
+        # Index unique PARTIAL (cuma mencakup baris status='OPEN') pas
+        # merepresentasikan aturan yang benar: maksimal SATU baris OPEN per
+        # (kode, source) pada satu waktu, tapi boleh banyak baris RESOLVED
+        # historis kapan pun -- sekaligus tetap jadi pengaman ATOMIC
+        # terakhir thd race condition, sama seperti index lama.
+        #
+        # Bersihkan dulu baris OPEN duplikat SEBELUM index baru dibuat
+        # (kalau tidak, CREATE UNIQUE INDEX gagal karena data existing dari
+        # sebelum fix ini melanggar constraint-nya) -- HANYA menyentuh
+        # baris berstatus OPEN (baris RESOLVED/statistik win-rate historis
+        # tidak pernah disentuh), menyisakan id TERKECIL (paling awal
+        # direkam) per (kode, source): baris OPEN yang lebih baru utk
+        # kode+source yang sama secara substansi cuma snapshot ulang dari
+        # peluang yang sama yang masih berlangsung, bukan sinyal baru.
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status = 'OPEN' AND id NOT IN (
+                SELECT MIN(id) FROM signal_history WHERE status = 'OPEN' GROUP BY kode, source
+            )
+        ''')
+        conn.execute('DROP INDEX IF EXISTS idx_signal_unique_daily')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique_open
+            ON signal_history(kode, source)
+            WHERE status = 'OPEN'
+        ''')
+        # Migrasi keenam: user langsung melihat di UI produksi bahwa satu
+        # saham yang SAMA masih tampil 2x di hari yang sama (mis. RAJA/BBCA/
+        # ICBP sbg TOP_PICK DAN SMART_MONEY sekaligus, dgn entry/TP/SL
+        # nyaris identik krn keduanya reuse potensi_naik_pct/risiko_turun_
+        # pct dari confidence() yang SAMA) -- kelihatan persis seperti
+        # "double" yang justru mau dihilangkan, walau secara teknis beda
+        # source. Dedup DIPERKETAT jadi per-KODE SAJA (bukan per kode+
+        # source lagi, lihat _has_open_signal): maksimal SATU sinyal OPEN
+        # per saham pada satu waktu, dari sumber mana pun. Ini SENGAJA
+        # mengorbankan kemampuan "bandingkan Top Pick vs Smart Money utk
+        # saham yang sama" (desain awal fitur ini) demi kejelasan -- user
+        # eksplisit bilang lebih pusing lihat dobel drpd dapat perbandingan
+        # antar teori utk saham yang kebetulan sama.
+        #
+        # Bersihkan dulu baris OPEN duplikat lintas-source SEBELUM index
+        # baru dibuat (pola sama dgn migrasi kelima), menyisakan id
+        # TERKECIL (paling awal direkam, source mana pun) per kode.
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status = 'OPEN' AND id NOT IN (
+                SELECT MIN(id) FROM signal_history WHERE status = 'OPEN' GROUP BY kode
+            )
+        ''')
+        conn.execute('DROP INDEX IF EXISTS idx_signal_unique_open')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique_open_kode
+            ON signal_history(kode)
+            WHERE status = 'OPEN'
+        ''')
+        # Migrasi ketujuh: MACD_CROSS sudah dihapus dari confidence() (tidak
+        # ada baris baru lagi sejak migrasi keenam), tapi baris LAMA yang
+        # kadung tercatat SEBELUM penghapusan itu masih nongol di laporan
+        # -- user melapor "macd cross masih ada" walau sudah tidak direkam
+        # lagi. Daripada nunggu ~MAX_HOLD_DAYS hari bursa buat resolve
+        # sendiri (rencana awal), hapus langsung: source ini sudah
+        # sepenuhnya nonaktif & tidak akan pernah ada baris baru lagi,
+        # jadi DELETE ini aman dijalankan ulang tiap startup (no-op
+        # sesudah pembersihan pertama, konsisten dgn migrasi lain di sini).
+        conn.execute("DELETE FROM signal_history WHERE source = 'MACD_CROSS'")
+        # Migrasi kedelapan: dedup silang-source utk baris yang SUDAH
+        # RESOLVED (migrasi keenam cuma menyentuh baris status='OPEN').
+        # BUG NYATA ketemu lewat screenshot user: MDKA tercatat 2x tanggal
+        # SAMA (dulu satu dari SMART_MONEY, satu dari MACD_CROSS, direkam
+        # SEBELUM migrasi keenam ada) dgn entry/TP/SL IDENTIK -- keduanya
+        # KEBETULAN sudah sama-sama resolve (SL_HIT) sebelum migrasi
+        # keenam sempat jalan, jadi lolos dari cleanup itu. Kriteria beda
+        # dari migrasi ke-4 (yang mensyaratkan source SAMA): di sini kode+
+        # tanggal+entry_price+tp_pct+sl_pct sama persis SUDAH cukup buat
+        # dianggap sinyal yang sama, source APA PUN -- sisakan id
+        # TERKECIL (paling awal direkam).
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                GROUP BY kode, date(recorded_at), entry_price, tp_pct, sl_pct
+            )
+        ''')
+        # Migrasi kesembilan: permintaan user langsung ("yg di smart money
+        # saya mau nya yg secara teknikal dia nyuruh buy aja biar lebih
+        # valid") -- _record_smart_money_cycle() di web/app.py SUDAH
+        # menyaring kandidat baru supaya cuma direkam kalau teknikal JUGA
+        # bilang BELI, TAPI baris SMART_MONEY yang kadung tercatat SEBELUM
+        # filter itu ada masih nongol di laporan dgn recommendation NETRAL/
+        # CUKUP/BURUK -- sama seperti kasus MACD_CROSS di atas, sekadar
+        # menghentikan perekaman baru tidak cukup, riwayat lama yg tidak
+        # lagi memenuhi standar validitas SAAT INI harus ikut dibersihkan.
+        # HANYA menyentuh source='SMART_MONEY' -- TOP_PICK sengaja TIDAK
+        # disyaratkan ini (metodologinya beda, lihat confidence()).
+        #
+        # REVISI: gerbang konfirmasi awalnya pakai ai_rating (SANGAT
+        # BAGUS/BAGUS), lalu diganti user jadi "Ringkasan Sinyal Teknikal"
+        # (BELI KUAT/BELI -- lihat _ringkasan_sinyal_teknikal &
+        # _RINGKASAN_TEKNIKAL_BUY di web/app.py). `recommendation` kolom
+        # dulu menyimpan ai_rating, SEKARANG menyimpan verdict Ringkasan
+        # Sinyal Teknikal (nilai domain BEDA -- lihat _record_smart_money_
+        # cycle) -- kriteria di bawah SENGAJA menerima KEDUA domain nilai
+        # ("lama": SANGAT BAGUS/BAGUS; "baru": BELI KUAT/BELI) supaya baris
+        # lama yang legitimately tercatat di bawah kriteria lama TIDAK ikut
+        # kehapus cuma krn kriterianya berganti, SEKALIGUS baris baru yang
+        # direkam di bawah kriteria baru juga tidak salah kehapus. NULL
+        # (belum pernah diisi) tetap dihapus krn tidak bisa dipastikan
+        # memenuhi kriteria apa pun.
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE source = 'SMART_MONEY'
+              AND (recommendation IS NULL
+                   OR recommendation NOT IN ('SANGAT BAGUS', 'BAGUS', 'BELI KUAT', 'BELI'))
+        ''')
+        # Migrasi kesepuluh: BUG NYATA ditemukan lewat laporan user --
+        # ANTM kelihatan "kena TP lalu kena SL" (sebenarnya 2 baris BEDA:
+        # SMART_MONEY resolve TP_HIT, dihapus migrasi kesembilan krn
+        # recommendation-nya NETRAL, menyisakan cuma TOP_PICK yang resolve
+        # SL_HIT -- dari sudut pandang user yang cuma lihat nama tiker,
+        # itu kelihatan seperti satu posisi berbalik dari untung ke rugi).
+        # RAJA juga: TOP_PICK OPEN dan SMART_MONEY TP_HIT tercatat di
+        # TANGGAL YANG SAMA -- bukan "salah" secara teknis (dua teori
+        # entry independen), tapi user melihatnya sbg "kok ada dua".
+        # audit_open_signals() SENDIRI tidak punya bug (SELECT selalu
+        # WHERE status='OPEN', baris yang sudah resolve TIDAK PERNAH
+        # disentuh/dievaluasi ulang -- diverifikasi baca kode) -- akar
+        # masalahnya di LAPISAN PEREKAMAN: kode yang sama boleh dapat
+        # sinyal BARU dari source lain di HARI YANG SAMA persis saat
+        # sinyal sebelumnya utk kode itu sudah/sedang resolve, membuat 2+
+        # baris kode+tanggal yang sama muncul berdampingan.
+        #
+        # Bersihkan riwayat yang SUDAH kadung begini: utk tiap grup (kode,
+        # tanggal) yang py >1 baris, PRIORITASKAN baris yang masih OPEN
+        # (itu "cerita aktif" saat ini utk kode itu); kalau tidak ada yang
+        # OPEN (semua sudah resolved), sisakan id TERKECIL (paling awal
+        # direkam). Dua langkah supaya logikanya gampang diverifikasi:
+        # (1) hapus semua baris NON-OPEN dalam grup yang py baris OPEN,
+        # (2) utk grup yang tersisa (semua resolved), sisakan MIN(id).
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status != 'OPEN'
+              AND EXISTS (
+                  SELECT 1 FROM signal_history s2
+                  WHERE s2.kode = signal_history.kode
+                    AND date(s2.recorded_at) = date(signal_history.recorded_at)
+                    AND s2.status = 'OPEN'
+              )
+        ''')
+        # `AND status != 'OPEN'` di bawah ini SECARA LOGIKA seharusnya
+        # tidak pernah menyaring apa pun pada titik ini (migrasi keenam +
+        # idx_signal_unique_open_kode sudah menjamin maksimal 1 baris OPEN
+        # per kode SEBELUM migrasi ini jalan, dan tidak ada baris di file
+        # ini yang pernah mengembalikan status ke OPEN) -- ditambahkan
+        # sbg pengaman eksplisit (bukan cuma implisit lewat urutan
+        # migrasi) setelah verifikasi adversarial menunjukkan: TANPA guard
+        # ini, kalau invarian itu PERNAH rusak di masa depan (mis. urutan
+        # migrasi diubah), langkah ini akan diam-diam menghapus salah satu
+        # dari dua baris OPEN yang sah -- bukan cuma riwayat, tapi POSISI
+        # AKTIF yang sedang dipantau. Step A di atas sudah punya guard yang
+        # sama (`status != 'OPEN'`); ini menyamakan Step B supaya konsisten.
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status != 'OPEN' AND id NOT IN (
+                SELECT MIN(id) FROM signal_history GROUP BY kode, date(recorded_at)
+            )
+        ''')
+        # Migrasi kesebelas: permintaan user langsung (menunjuk ANTM/ACES
+        # kena SL padahal SL-nya kedeketan -- "selagi masih oke bisa di
+        # hold"): floor MIN_SL_PCT di _calc_entry_levels() (core/
+        # trading_plan.py) cuma berlaku utk sinyal yang dihitung SETELAH
+        # floor itu ada -- sinyal yang SUDAH kadung tercatat sebelumnya
+        # (dgn sl_pct asli, kadang <1%) tidak ikut lebar walau rumusnya
+        # sudah diperbaiki. Pola yang SAMA dgn migrasi 7/9 (perbaiki aturan
+        # tidak cukup, riwayat lama yang tidak lagi memenuhi standar juga
+        # harus dibenahi).
+        #
+        # HANYA baris status='OPEN' yang dilebarkan -- baris yang SUDAH
+        # resolved (mis. ANTM/ACES kena SL di sl_pct lama) TIDAK disentuh:
+        # hasilnya sudah terjadi apa adanya di bawah aturan lama saat itu,
+        # mengubahnya sekarang sama dengan mengarang ulang track record
+        # (lihat prinsip "jangan pernah mengarang win rate" di catatan
+        # atas modul ini). tp_pct TIDAK disentuh -- floor TP1 (max(3.0,
+        # risk_pct)) sudah ada SEBELUM floor SL ini, jadi baris lama sudah
+        # benar utk TP, cuma SL yang perlu dilebarkan.
+        from core.trading_plan import MIN_SL_PCT as _MIN_SL_PCT
+        conn.execute(
+            "UPDATE signal_history SET sl_pct = ? WHERE status = 'OPEN' AND sl_pct < ?",
+            (_MIN_SL_PCT, _MIN_SL_PCT),
+        )
+        # Migrasi kedua belas: BUG NYATA ditemukan lewat verifikasi
+        # adversarial (workflow terpisah) -- klausul (b) _has_open_signal
+        # SEBELUM perbaikan ini memakai date(recorded_at), bukan date(
+        # resolved_at) (lihat catatan panjang di _has_open_signal). Selama
+        # bug itu aktif, sinyal yang butuh >1 hari utk resolve (kasus
+        # PALING UMUM, bukan edge case) gagal terdeteksi "baru resolve
+        # hari ini" -- dibuktikan nyata di data produksi: AKRA & RAJA
+        # sama-sama direkam 2026-07-04, resolve TP_HIT 2026-07-06, LALU
+        # dapat baris OPEN baru di hari yang sama (2026-07-06) -- migrasi
+        # kesepuluh (yang mengelompokkan per date(recorded_at)) tidak
+        # menangkap ini karena baris lama & baris baru py recorded_at
+        # BEDA tanggal (07-04 vs 07-06), padahal resolved_at-nya (kalau
+        # baris baru itu nanti resolve) bisa jadi tanggal yang SAMA --
+        # persis pola ANTM yang migrasi kesepuluh coba tutup.
+        #
+        # Bersihkan: utk tiap kode yang py baris resolved (bukan OPEN)
+        # HARI INI ATAU KEMARIN* dan JUGA py baris OPEN, PRIORITASKAN yang
+        # OPEN (pola sama dgn migrasi kesepuluh Step A) -- hapus baris
+        # resolved yang "menabrak" cerita aktif yang sedang berjalan.
+        # (*dicek s.d. kemarin, bukan cuma hari ini, supaya migrasi ini
+        # idempotent aman dijalankan kapan pun server restart, bukan cuma
+        # persis di hari kejadian.)
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status != 'OPEN'
+              AND resolved_at IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM signal_history s2
+                  WHERE s2.kode = signal_history.kode AND s2.status = 'OPEN'
+              )
+        ''')
+        # Sisi lain: kalau TIDAK ada yang OPEN, tapi >1 baris resolved utk
+        # kode yang sama kebetulan resolve di TANGGAL YANG SAMA (resolved_
+        # at), itu juga "dua cerita, satu hari" yang membingungkan -- sisakan
+        # id TERKECIL (paling awal direkam).
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE resolved_at IS NOT NULL AND id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                WHERE resolved_at IS NOT NULL
+                GROUP BY kode, date(resolved_at)
+            )
+        ''')
+        # Migrasi ketiga belas: permintaan user langsung, menunjuk ANTM &
+        # ACES ("masih sama belom berubah sl masih kedeketan tolong
+        # perbaiki semua") -- migrasi kesebelas SENGAJA tidak menyentuh
+        # baris yang SUDAH resolved (SL_HIT) dgn alasan "hasilnya sudah
+        # terjadi, jangan mengarang ulang track record". User menegaskan
+        # itu KURANG TEPAT utk kasus spesifik ini: SL_HIT-nya BUKAN hasil
+        # pasar yang sah, itu ARTEFAK dari sl_pct yang KETERLALU KETAT
+        # (bug yang migrasi kesebelas perbaiki) -- diverifikasi lewat data
+        # ANTM/ACES sendiri: resolved_price (2960 utk ANTM, 334 utk ACES)
+        # keduanya MASIH DI ATAS harga yang seharusnya jadi SL kalau floor
+        # 3.0% sudah benar sejak awal (entry*0.97 = 2919.7 utk ANTM, 327.86
+        # utk ACES) -- artinya kalau floor-nya sudah benar SAAT ITU, posisi
+        # ini TIDAK akan resolve SL_HIT di titik itu sama sekali. Menyimpan
+        # SL_HIT itu sbg "riwayat" justru MELESTARIKAN kesalahan ukur, bukan
+        # menjaga kejujuran data.
+        #
+        # Kriteria (general, bukan spesifik ANTM/ACES sby id) -- HARUS
+        # SEMUA benar: (1) status SL_HIT, (2) sl_pct ASLI di bawah floor
+        # (direkam sebelum migrasi kesebelas ada), (3) resolved_price MASIH
+        # DI ATAS floor yang benar (entry*(1-floor/100)) -- kalau harga
+        # SUNGGUHAN sudah turun MELEWATI floor yang benar juga, SL_HIT
+        # tetap sah, TIDAK disentuh. TP_HIT TIDAK PERNAH kena kriteria ini
+        # (SL lebih lebar cuma bikin LEBIH SULIT kena SL, tidak pernah
+        # mengubah status TP_HIT yang sudah tercapai jadi tidak tercapai).
+        #
+        # Baris yang cocok kriteria DIKEMBALIKAN ke OPEN dgn sl_pct
+        # dilebarkan ke floor (recorded_at, entry_price, tp_pct TIDAK
+        # disentuh sama sekali -- persis permintaan user "entrynya jgn
+        # diubah-ubah") -- siklus audit normal yang akan menentukan ulang
+        # nasibnya memakai harga LIVE saat ini, bukan dikarang manual.
+        from core.trading_plan import MIN_SL_PCT as _MIN_SL_PCT2
+        conn.execute('''
+            UPDATE signal_history
+            SET status = 'OPEN', sl_pct = ?, resolved_at = NULL,
+                resolved_price = NULL, return_pct = NULL, days_to_resolve = NULL
+            WHERE status = 'SL_HIT'
+              AND sl_pct < ?
+              AND resolved_price > entry_price * (1 - ? / 100.0)
+        ''', (_MIN_SL_PCT2, _MIN_SL_PCT2, _MIN_SL_PCT2))
+        # Migrasi keempat belas: permintaan user langsung ("misalkan kena
+        # area tp1 tandai juga lanjut ke area tp selanjutnya") -- TP
+        # SEKARANG bertingkat 3 level (TP1/TP2/TP3, angka SUDAH ADA &
+        # dihitung _calc_entry_levels di core/trading_plan.py sbg
+        # tp1_pct/tp2_pct/tp3_pct = risk%/2x/3x, cuma SEBELUM ini yang
+        # dipakai & disimpan cuma TP1). Begitu TP1/TP2 tercapai, posisi
+        # TIDAK langsung ditutup (status TETAP 'OPEN') -- cuma `tp_level_
+        # hit` yang naik, terus dipantau sampai TP3 (baru benar-benar
+        # closed) ATAU SL tersentuh ATAU EXPIRED. Lihat audit_open_signals
+        # utk logika lengkapnya.
+        cols2 = {r["name"] for r in conn.execute("PRAGMA table_info(signal_history)").fetchall()}
+        if "tp2_pct" not in cols2:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN tp2_pct REAL")
+        if "tp3_pct" not in cols2:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN tp3_pct REAL")
+        if "tp_level_hit" not in cols2:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN tp_level_hit INTEGER NOT NULL DEFAULT 0")
+        # Backfill baris LAMA (direkam sebelum kolom ini ada): tp2/tp3
+        # pakai relasi yang SAMA dgn _calc_entry_levels (tp2=tp1x2,
+        # tp3=tp1x3) -- konsisten dgn cara tp1_pct itu sendiri dihitung,
+        # bukan angka baru yang beda basis.
+        conn.execute("UPDATE signal_history SET tp2_pct = tp_pct * 2 WHERE tp2_pct IS NULL")
+        conn.execute("UPDATE signal_history SET tp3_pct = tp_pct * 3 WHERE tp3_pct IS NULL")
+        # Baris LAMA yang statusnya SUDAH TP_HIT (di bawah sistem lama,
+        # menutup posisi begitu TP1-setara tercapai) -- HARUS dianggap
+        # baru mencapai level 1, BUKAN level 3/full target, krn sistem
+        # lama memang tidak pernah punya kesempatan mengejar TP2/TP3.
+        # Jujur merepresentasikan apa yang SUNGGUHAN terjadi, bukan
+        # mengarang seolah sudah sampai TP3.
+        conn.execute("UPDATE signal_history SET tp_level_hit = 1 WHERE status = 'TP_HIT' AND tp_level_hit = 0")
     _ensured = True
+
+
+def _has_open_signal(kode: str) -> bool:
+    """True kalau `kode` TIDAK BOLEH dapat sinyal baru sekarang -- karena
+    (a) masih ada sinyal OPEN utk kode itu (source mana pun), ATAU (b)
+    sinyal utk kode itu SUDAH resolve (TP_HIT/SL_HIT/EXPIRED) TAPI masih
+    di HARI YANG SAMA (hari ini).
+
+    Dipakai record_top_picks()/record_smart_money_signals() SEBAGAI GANTI
+    dedup "sudah dicatat hari ini" yang lama -- dedup per-hari itu cuma
+    mencegah duplikat di HARI YANG SAMA, tapi kalau satu saham tetap jadi
+    kandidat (mis. Top Pick) 4-5 hari berturut-turut, tiap hari tetap
+    dicatat sbg entry BARU yang terpisah -- user melapor ini bikin Audit
+    Sinyal penuh "banyak yg double" utk saham yang sama, membingungkan
+    (tidak jelas mana yang harus diikuti).
+
+    AWALNYA scoped per (kode, source) supaya TOP_PICK dan SMART_MONEY bisa
+    "membandingkan teori entry" utk saham yang sama secara independen --
+    tapi user langsung melihat di UI produksi bahwa itu KELIHATAN persis
+    seperti "double" yang sama yang justru mau dihilangkan (mis. RAJA
+    tampil sbg TOP_PICK *dan* SMART_MONEY hari yang sama, entry/TP/SL
+    nyaris identik karena keduanya reuse angka confidence() yang sama).
+    Diperketat jadi per-KODE SAJA: maksimal SATU sinyal OPEN per saham
+    pada satu waktu, dari sumber mana pun -- lihat migrasi keenam di
+    _ensure_table utk index unique DB yang menegakkan aturan yang sama.
+
+    KLAUSUL (b) ditambahkan setelah user melapor kasus ANTM: satu sumber
+    (SMART_MONEY) resolve TP_HIT hari ini, lalu source LAIN (TOP_PICK)
+    merekam sinyal BARU utk ANTM di hari yang SAMA yang kemudian resolve
+    SL_HIT -- dari sudut pandang user yang cuma lihat nama tiker, itu
+    kelihatan seperti satu posisi "berbalik dari untung ke rugi" (BUKAN
+    bug di audit_open_signals -- baris yang sudah resolve tidak PERNAH
+    dievaluasi ulang, sudah diverifikasi baca kode -- ini murni soal
+    perekaman sinyal BARU yang kebetulan terlalu cepat utk kode yang sama).
+    Klausul (b) memastikan begitu SATU cerita utk kode itu selesai hari
+    ini (menang ATAU kalah), tidak ada cerita KEDUA yang dibuka sampai
+    besok -- konsisten dgn semangat "satu saham = satu cerita per hari".
+
+    BUG NYATA ditemukan lewat verifikasi adversarial (workflow terpisah)
+    SEHARI setelah klausul (b) di atas ditulis: kondisi awalnya memakai
+    `date(recorded_at) = date('now')` -- yaitu tanggal SAAT BARIS ITU
+    PERTAMA DICATAT, bukan tanggal SAAT BARIS ITU RESOLVE. Sinyal nyata
+    hampir selalu butuh >1 hari sebelum kena TP/SL (AKRA & RAJA di data
+    produksi butuh 2 hari) -- begitu baris itu resolve HARI INI, `date
+    (recorded_at)`-nya masih tanggal beberapa hari LALU (kapan dicatat),
+    BUKAN hari ini, jadi klausul (b) versi lama SELALU gagal mendeteksi
+    "baru saja resolve hari ini" utk kasus yang justru paling umum --
+    persis KEBALIKAN dari yang dimaksudkan. Akibatnya AKRA/RAJA yang
+    resolve TP_HIT hari ini tetap lolos merekam entry BARU jam-jam
+    berikutnya di hari yang sama, mereproduksi ulang bug ANTM yang
+    seharusnya sudah ditutup klausul ini. Diperbaiki: pakai `date(
+    resolved_at)`, bukan `date(recorded_at)` -- resolved_at TEPAT
+    mencatat kapan baris itu BENAR-BENAR selesai (NULL selama masih OPEN,
+    jadi tidak pernah salah cocok utk baris yang belum resolve)."""
+    with get_db() as conn:
+        row = conn.execute('''
+            SELECT 1 FROM signal_history
+            WHERE kode = ? AND (status = 'OPEN' OR date(resolved_at) = date('now', 'localtime'))
+            LIMIT 1
+        ''', (kode,)).fetchone()
+    return row is not None
 
 
 async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     """Catat sinyal baru dari hasil /api/confidence (items sudah diurut
     confidence_score menurun). Hanya MAX_RECORDED_PER_DAY teratas yang skornya
-    >= MIN_SCORE_TO_RECORD, dan SATU kode SAHAM cuma dicatat SEKALI per hari
-    (dedup via tanggal) -- mencegah duplikasi kalau /api/confidence dipanggil
-    berkali-kali di hari yang sama (cache 300 detik bisa expire & recompute
-    beberapa kali sehari).
+    >= MIN_SCORE_TO_RECORD, dan SATU kode SAHAM cuma boleh punya SATU sinyal
+    OPEN pada satu waktu (lihat _has_open_signal) -- kalau kode itu masih
+    jadi Top Pick besok/lusa, TIDAK dicatat lagi sbg entry baru selama yang
+    sebelumnya belum resolved, supaya Audit Sinyal tidak menumpuk banyak
+    entry konkuren utk saham yang sama.
 
     Melewati saham tanpa potensi_naik_pct/risiko_turun_pct valid (mis. GOTO
     yang sedang flat di harga floor -- lihat catatan di core/charts/
@@ -250,47 +617,77 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
 
     saved = []
     for it in candidates:
-        with get_db() as conn:
-            already = conn.execute('''
-                SELECT 1 FROM signal_history
-                WHERE kode = ? AND date(recorded_at) = date('now', 'localtime') AND source = 'TOP_PICK'
-                LIMIT 1
-            ''', (it["kode"],)).fetchone()
-        if already:
+        if _has_open_signal(it["kode"]):
             continue
 
-        entry_price = it["harga"]
-        if price_lookup is not None:
-            try:
-                live_price = await price_lookup(it["kode"])
-                if live_price:
-                    entry_price = live_price
-            except Exception:
-                pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
+        # Prioritas: entry_price dari SKENARIO Trading Plan yang BENERAN
+        # kena hari itu (confidence() di web/app.py -- normal/pullback/deep/
+        # breakout) -- ini FAKTA harga yang sudah terjadi hari itu, BUKAN
+        # prediksi, jadi TIDAK BOLEH ditimpa harga real-time yang mungkin
+        # sudah bergerak jauh dari level itu (bug NYATA: sebelumnya entry
+        # SELALU ditimpa harga real-time sesaat sinyal dicatat, membuat
+        # TP/SL yang dihitung dari skenario jadi tidak nyambung dgn entry
+        # yang benar-benar tersimpan -- laporan user: "raja low nya 3960
+        # kena area pullback ... udh kena area tp"). price_lookup (real-
+        # time) HANYA dipakai sbg fallback kalau caller tidak menyediakan
+        # entry_price skenario sama sekali (mis. item lama/pemanggil lain).
+        entry_price = it.get("entry_price")
+        if entry_price is None:
+            entry_price = it["harga"]
+            if price_lookup is not None:
+                try:
+                    live_price = await price_lookup(it["kode"])
+                    if live_price:
+                        entry_price = live_price
+                except Exception:
+                    pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
 
         tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        # TP2/TP3 (permintaan user: "kena tp1 tandai, lanjut ke tp
+        # selanjutnya") -- ikut disimpan kalau caller sudah menyediakan
+        # (confidence() sekarang menyertakan tp2_pct/tp3_pct dari skenario
+        # trading plan yang sama dgn tp1_pct/tp_pct), fallback ke relasi
+        # tp1x2/tp1x3 (SAMA dgn yang dipakai _calc_entry_levels) kalau
+        # caller lama belum menyediakannya -- supaya backward-compatible
+        # tanpa memaksa SEMUA pemanggil diperbarui sekaligus.
+        tp2_pct = it.get("tp2_pct") or (tp_pct * 2)
+        tp3_pct = it.get("tp3_pct") or (tp_pct * 3)
         pattern = it.get("pattern")
+        # Re-cek TEPAT sebelum INSERT, TANPA `await` lagi di antaranya --
+        # menutup celah race yang ditemukan lewat verifikasi adversarial:
+        # klausul (b) _has_open_signal (resolved HARI INI) TIDAK dijamin
+        # index unik manapun (beda dgn klausul OPEN yang dijamin
+        # idx_signal_unique_open_kode) -- kalau `await price_lookup(...)`
+        # di atas kebetulan berbarengan dgn task LAIN yang me-resolve
+        # sinyal kode ini hari ini (mis. audit_open_signals via siklus
+        # background), pengecekan PERTAMA di atas bisa sudah basi.
+        # Karena tidak ada `await` antara baris ini dan INSERT OR IGNORE
+        # di bawah, event loop tidak bisa berpindah task di celah ini --
+        # secara efektif atomic thd race yang sama persis.
+        if _has_open_signal(it["kode"]):
+            continue
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'))
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'))
             ''', (
-                it["kode"], entry_price, tp_pct, sl_pct,
+                it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
             ))
             # OR IGNORE: kalau baris ini SEBENARNYA sudah tercatat proses/
             # task lain di celah antara SELECT di atas dan INSERT ini
-            # (race, lihat catatan idx_signal_unique_daily di _ensure_table),
-            # constraint UNIQUE membuat SQLite diam-diam skip insert ini --
-            # rowcount jadi 0, bukan exception. Jangan masukkan ke `saved`
-            # (bukan baris baru, caller tidak perlu kirim notifikasi lagi).
+            # (race utk klausul OPEN, lihat idx_signal_unique_open_kode di
+            # _ensure_table), constraint UNIQUE membuat SQLite diam-diam
+            # skip insert ini -- rowcount jadi 0, bukan exception. Jangan
+            # masukkan ke `saved` (bukan baris baru, caller tidak perlu
+            # kirim notifikasi lagi).
             if cur.rowcount == 0:
                 continue
             new_id = cur.lastrowid
         saved.append({
             "id": new_id, "kode": it["kode"], "entry_price": entry_price,
-            "tp_pct": tp_pct, "sl_pct": sl_pct,
+            "tp_pct": tp_pct, "tp2_pct": tp2_pct, "tp3_pct": tp3_pct, "sl_pct": sl_pct,
             "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
             "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
@@ -299,89 +696,17 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     return saved
 
 
-async def record_macd_cross_signals(items: list[dict], price_lookup=None) -> list[dict]:
-    """Catat entry point dari TEORI MACD HISTOGRAM CROSS secara independen
-    dari Top Pick (lihat record_top_picks) -- permintaan eksplisit user:
-    histogram MACD (MACD line - Signal line) yang baru saja berbalik
-    positif dipakai SENDIRI sebagai sinyal entry, TANPA disaring skor
-    gabungan (confidence_score) sama sekali. Ini supaya validitas teori
-    itu (dikutip riset QuantifiedStrategies di core/screening_pro.py) bisa
-    diuji apa adanya lewat data real -- kalau disaring skor gabungan juga,
-    yang teruji bukan lagi teori MACD-nya sendiri, tapi campuran.
-
-    Kriteria PENAPISAN (bukan "seberapa bagus", tapi "apakah bisa
-    dieksekusi secara wajar"): saham likuid (Sangat Likuid/Likuid) dan
-    target TP/SL valid -- di luar itu, SEMUA saham dgn histogram baru
-    cross bullish ikut dicatat, berapa pun confidence_score-nya.
-
-    Boleh mencatat kode saham yang SAMA di hari yang sama dengan Top Pick
-    (dedup di sini HANYA per source='MACD_CROSS') -- keduanya teori entry
-    yang berbeda, sengaja diaudit terpisah, bukan saling menggantikan.
-
-    price_lookup/pattern/return: lihat docstring record_top_picks(), pola
-    yang sama persis dipakai di sini."""
-    _ensure_table()
-    if _is_bursa_weekend():
-        return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
-    candidates = [
-        it for it in items
-        if it.get("macd_bullish_cross")
-        and it.get("likuiditas") in ("Sangat Likuid", "Likuid")
-        and it.get("potensi_naik_pct") is not None
-        and it.get("risiko_turun_pct") is not None
-        and it.get("risiko_turun_pct") > 0
-        and it.get("harga")
-    ][:MACD_CROSS_MAX_PER_DAY]
-
-    if not candidates:
-        return []
-
-    saved = []
-    for it in candidates:
-        with get_db() as conn:
-            already = conn.execute('''
-                SELECT 1 FROM signal_history
-                WHERE kode = ? AND date(recorded_at) = date('now', 'localtime') AND source = 'MACD_CROSS'
-                LIMIT 1
-            ''', (it["kode"],)).fetchone()
-        if already:
-            continue
-
-        entry_price = it["harga"]
-        if price_lookup is not None:
-            try:
-                live_price = await price_lookup(it["kode"])
-                if live_price:
-                    entry_price = live_price
-            except Exception:
-                pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
-
-        tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
-        with get_db() as conn:
-            cur = conn.execute('''
-                INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'MACD HISTOGRAM BULLISH CROSS', 'MACD_CROSS', datetime('now', 'localtime'))
-            ''', (
-                it["kode"], entry_price, tp_pct, sl_pct,
-                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
-            ))
-            # Lihat catatan sama di record_top_picks(): OR IGNORE + index
-            # unique adalah pengaman ATOMIC terakhir terhadap race antara
-            # SELECT dedup di atas dan INSERT ini.
-            if cur.rowcount == 0:
-                continue
-            new_id = cur.lastrowid
-        saved.append({
-            "id": new_id, "kode": it["kode"], "entry_price": entry_price,
-            "tp_pct": tp_pct, "sl_pct": sl_pct,
-            "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
-            "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
-            "confidence_score": it.get("confidence_score"), "pattern": "MACD HISTOGRAM BULLISH CROSS",
-            "source": "MACD_CROSS", "direction": "BUY",
-        })
-    return saved
-
+# record_macd_cross_signals() DIHAPUS (sebelumnya sengaja dibiarkan ada
+# tapi tidak dipanggil, "in case direvive") -- verifikasi adversarial
+# menemukan ini jadi LANDMINE nyata: fungsi ini masih pakai dedup date-
+# based lamanya sendiri (bukan _has_open_signal), jadi kalau PERNAH
+# di-wire ulang tanpa ikut memperbarui dedup-nya, bug ANTM/RAJA (kode
+# yang sama dapat sinyal baru di hari yang sama saat sinyal lain utk
+# kode itu resolve) akan muncul lagi lewat jalur ini -- padahal source
+# MACD_CROSS sendiri sudah permanen nonaktif (migrasi ketujuh menghapus
+# SEMUA baris source ini tiap startup, komentarnya sendiri bilang "tidak
+# akan pernah ada baris baru lagi"). Kode mati yang bertentangan dgn
+# invarian saat ini lebih berbahaya drpd tidak ada kode sama sekali.
 
 # Maksimum berapa anomali volume "Smart Money" per hari yang dicatat --
 # alasan sama dengan MACD_CROSS_MAX_PER_DAY (jangan bising).
@@ -425,12 +750,16 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
     akan membuat SELL "untung" ketika harga naik -- kebalikan dari makna
     Distribusi itu sendiri.
 
-    Kriteria PENAPISAN sama filosofinya dgn record_macd_cross_signals:
-    saham likuid & TP/SL valid supaya sinyal bisa dieksekusi secara wajar.
+    Kriteria PENAPISAN: saham likuid & TP/SL valid supaya sinyal bisa
+    dieksekusi secara wajar.
 
-    Dedup HANYA per source='SMART_MONEY' -- boleh mencatat kode yang sama
-    di hari yang sama dgn TOP_PICK/MACD_CROSS, tiga teori entry berbeda
-    yang sengaja diaudit terpisah.
+    Dedup via _has_open_signal SEKARANG per-KODE SAJA (lintas semua
+    source) -- kalau kode itu SUDAH punya sinyal OPEN dari TOP_PICK (atau
+    sebaliknya), TIDAK direkam lagi sbg SMART_MONEY terpisah. Awalnya
+    dedup di sini cuma scoped ke source='SMART_MONEY' sendiri (boleh
+    tumpang tindih dgn TOP_PICK utk "membandingkan teori entry"), tapi
+    user melihat langsung di UI itu kelihatan persis seperti "double" yang
+    membingungkan -- lihat migrasi keenam di _ensure_table.
 
     price_lookup/pattern/return: lihat docstring record_top_picks(), pola
     yang sama persis dipakai di sini."""
@@ -452,23 +781,30 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
 
     saved = []
     for it in candidates:
-        with get_db() as conn:
-            already = conn.execute('''
-                SELECT 1 FROM signal_history
-                WHERE kode = ? AND date(recorded_at) = date('now', 'localtime') AND source = 'SMART_MONEY'
-                LIMIT 1
-            ''', (it["kode"],)).fetchone()
-        if already:
+        if _has_open_signal(it["kode"]):
             continue
 
-        entry_price = it["harga"]
-        if price_lookup is not None:
-            try:
-                live_price = await price_lookup(it["kode"])
-                if live_price:
-                    entry_price = live_price
-            except Exception:
-                pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
+        # Prioritas: entry_price dari SKENARIO Trading Plan yang BENERAN
+        # kena hari itu (confidence() di web/app.py -- normal/pullback/deep/
+        # breakout) -- ini FAKTA harga yang sudah terjadi hari itu, BUKAN
+        # prediksi, jadi TIDAK BOLEH ditimpa harga real-time yang mungkin
+        # sudah bergerak jauh dari level itu (bug NYATA: sebelumnya entry
+        # SELALU ditimpa harga real-time sesaat sinyal dicatat, membuat
+        # TP/SL yang dihitung dari skenario jadi tidak nyambung dgn entry
+        # yang benar-benar tersimpan -- laporan user: "raja low nya 3960
+        # kena area pullback ... udh kena area tp"). price_lookup (real-
+        # time) HANYA dipakai sbg fallback kalau caller tidak menyediakan
+        # entry_price skenario sama sekali (mis. item lama/pemanggil lain).
+        entry_price = it.get("entry_price")
+        if entry_price is None:
+            entry_price = it["harga"]
+            if price_lookup is not None:
+                try:
+                    live_price = await price_lookup(it["kode"])
+                    if live_price:
+                        entry_price = live_price
+                except Exception:
+                    pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
 
         is_sell = it.get("pola") in SMART_MONEY_SELL_POLA
         direction = "SELL" if is_sell else "BUY"
@@ -478,14 +814,28 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
             tp_pct, sl_pct = it["risiko_turun_pct"], it["potensi_naik_pct"]
         else:
             tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        # TP2/TP3 (lihat catatan sama di record_top_picks()) -- utk SELL
+        # (jalur ini SAAT INI TIDAK PERNAH tercapai lagi krn gerbang
+        # Ringkasan Sinyal Teknikal cuma meloloskan BELI, lihat
+        # _record_smart_money_cycle, tapi tetap disediakan simetris utk
+        # konsistensi kalau SELL direvive) pakai relasi tp1x2/tp1x3 dari
+        # tp_pct yang SUDAH ditukar di atas.
+        tp2_pct = it.get("tp2_pct") if not is_sell else None
+        tp3_pct = it.get("tp3_pct") if not is_sell else None
+        tp2_pct = tp2_pct or (tp_pct * 2)
+        tp3_pct = tp3_pct or (tp_pct * 3)
         pattern = it.get("pola")
+        # Re-cek TEPAT sebelum INSERT, TANPA `await` lagi di antaranya --
+        # lihat catatan sama di record_top_picks() soal race klausul (b).
+        if _has_open_signal(it["kode"]):
+            continue
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, direction)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'), ?)
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, direction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'), ?)
             ''', (
-                it["kode"], entry_price, tp_pct, sl_pct,
+                it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern, direction,
             ))
             # Lihat catatan sama di record_top_picks(): OR IGNORE + index
@@ -502,7 +852,7 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
             sl_price = round(entry_price * (1 - sl_pct / 100), 2)
         saved.append({
             "id": new_id, "kode": it["kode"], "entry_price": entry_price,
-            "tp_pct": tp_pct, "sl_pct": sl_pct,
+            "tp_pct": tp_pct, "tp2_pct": tp2_pct, "tp3_pct": tp3_pct, "sl_pct": sl_pct,
             "tp_price": tp_price, "sl_price": sl_price,
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
             "source": "SMART_MONEY", "direction": direction,
@@ -513,21 +863,42 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
 async def audit_open_signals(price_lookup) -> list[dict]:
     """Cek ulang semua sinyal berstatus OPEN terhadap harga TERKINI.
 
-    price_lookup: async callable(kode: str) -> float | None -- caller (web/
-    app.py) yang menyediakan cara ambil harga (REUSE _clean/harga close
-    terakhir yang sudah ada, supaya modul ini TIDAK melakukan I/O jaringan
-    sendiri dan tetap mudah ditest tanpa mock network).
+    price_lookup: async callable(kode: str) -> tuple[float, date] | None --
+    caller (web/app.py) yang menyediakan cara ambil harga (REUSE _clean/
+    harga close terakhir yang sudah ada, supaya modul ini TIDAK melakukan
+    I/O jaringan sendiri dan tetap mudah ditest tanpa mock network) SEKALIGUS
+    tanggal bar historis di balik harga itu.
+
+    Tanggal bar itu WAJIB ada (bukan cuma harga) krn BUG NYATA yang
+    ditemukan live: TPIA & ARTO ter-SL_HIT padahal user melihat sendiri
+    harganya NAIK hari itu -- ternyata bar yfinance utk "hari ini" masih
+    NaN/belum terbit, jadi setelah dropna() harga yang kepakai adalah
+    closing BEBERAPA HARI SEBELUM sinyal itu bahkan direkam (data yang
+    SAMA SEKALI belum berubah sejak direkam, bukan penurunan harga
+    sungguhan). Kalau tanggal bar itu LEBIH LAMA dari tanggal sinyal
+    direkam (price_date < recorded_date), berarti belum ada informasi
+    harga BARU sama sekali sejak direkam -- sinyal itu dilewati (tetap
+    OPEN, dicoba lagi siklus berikutnya), TIDAK PERNAH diresolve pakai
+    data yang lebih basi dari titik awalnya sendiri.
+
+    Target TP kini 3 level (tp_pct/tp2_pct/tp3_pct, lihat migrasi ke-14) --
+    permintaan user: "misalkan kena area tp1 tandai juga lanjut ke area tp
+    selanjutnya", jadi TP1/TP2 tercapai HANYA menaikkan tp_level_hit (posisi
+    TETAP OPEN, tidak ditutup); hanya TP3 yang jadi status akhir TP_HIT.
+    SL selalu final TIDAK PEDULI tp_level_hit sudah berapa (user tidak minta
+    stop-loss dipindah ke breakeven, jadi risiko awal tetap berlaku penuh
+    selama posisi masih terbuka).
 
     Status akhir (BUY, arah default/mayoritas -- harga diharapkan NAIK):
-    - TP_HIT: harga >= entry x (1 + tp_pct/100)
+    - TP_HIT: harga >= entry x (1 + tp3_pct/100)
     - SL_HIT: harga <= entry x (1 - sl_pct/100)
 
     Utk SELL (arah baru -- Distribusi/Distribusi Agresif Smart Money,
     harga diharapkan TURUN, "untung" berarti harga jatuh sejumlah tp_pct):
-    - TP_HIT: harga <= entry x (1 - tp_pct/100)
+    - TP_HIT: harga <= entry x (1 - tp3_pct/100)
     - SL_HIT: harga >= entry x (1 + sl_pct/100)
 
-    - EXPIRED: belum kena TP/SL tapi sudah lewat MAX_HOLD_DAYS sejak dicatat
+    - EXPIRED: belum kena TP3/SL tapi sudah lewat MAX_HOLD_DAYS sejak dicatat
     - OPEN: belum satupun kondisi di atas terpenuhi, tetap dibiarkan terbuka
 
     return_pct SELALU direpresentasikan sbg untung(+)/rugi(-), BUKAN
@@ -535,64 +906,137 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     return_pct tetap POSITIF, konsisten makna dgn BUY (supaya stats_by_
     source/win-rate bisa digabung apa adanya tanpa perlu tahu direction).
 
-    Returns LIST sinyal yang BARU SAJA berpindah status di pemanggilan ini
-    (bukan sinyal yang sudah lama closed) -- caller pakai ini utk kirim
-    notifikasi Telegram cuma sekali per sinyal, persis saat statusnya
-    berubah, bukan berulang setiap audit berikutnya."""
+    Returns LIST kejadian yang BARU SAJA terjadi di pemanggilan ini, tiap
+    dict punya key "kind": "resolved" (status akhir, sama seperti dulu)
+    atau "tp_progress" (TP1/TP2 baru tercapai, posisi masih OPEN) --
+    caller pakai field ini utk memilih format notifikasi Telegram yang
+    sesuai (lihat format_signal_resolved vs format_signal_tp_progress di
+    core/telegram_notify.py). price_lookup HANYA memberi satu titik harga
+    (bukan rentang High/Low harian), jadi kalau harga loncat lewat lebih
+    dari 1 level TP sekaligus (mis. gap up), level menengah yang mungkin
+    "dilewati" tidak bisa dipastikan tersentuh -- diambil level TERTINGGI
+    yang terbukti tercapai dari harga saat ini saja."""
     _ensure_table()
     with get_db() as conn:
         open_rows = conn.execute(
-            "SELECT id, kode, recorded_at, entry_price, tp_pct, sl_pct, source, pattern, direction "
-            "FROM signal_history WHERE status = 'OPEN'"
+            "SELECT id, kode, recorded_at, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, "
+            "source, pattern, direction, tp_level_hit FROM signal_history WHERE status = 'OPEN'"
         ).fetchall()
 
     just_resolved = []
     for row in open_rows:
-        price = await price_lookup(row["kode"])
+        result = await price_lookup(row["kode"])
+        if result is None:
+            continue
+        price, price_date = result
         if price is None or price <= 0:
             continue
 
+        recorded_at = datetime.fromisoformat(row["recorded_at"])
+        # Harga basi (bar-nya lebih lama dari recorded_at) TIDAK BOLEH
+        # dipakai utk mengklaim TP/SL tercapai (lihat catatan panjang di
+        # docstring) -- TAPI EXPIRED murni berbasis WAKTU (bukan klaim
+        # level harga tertentu), jadi tetap harus bisa jalan walau harga
+        # basi -- kalau tidak, saham yang feed harganya macet permanen
+        # (suspensi/delisting berkepanjangan) akan tersangkut OPEN
+        # SELAMANYA, tidak pernah bisa expire sama sekali.
+        is_stale = price_date is not None and price_date < recorded_at.date()
+
         entry = row["entry_price"]
         is_sell = row["direction"] == "SELL"
-        if is_sell:
-            tp_price = entry * (1 - row["tp_pct"] / 100)
-            sl_price = entry * (1 + row["sl_pct"] / 100)
-        else:
-            tp_price = entry * (1 + row["tp_pct"] / 100)
-            sl_price = entry * (1 - row["sl_pct"] / 100)
-        recorded_at = datetime.fromisoformat(row["recorded_at"])
+
+        def _level_price(pct):
+            if pct is None:
+                return None
+            return entry * (1 - pct / 100) if is_sell else entry * (1 + pct / 100)
+
+        def _reached(target):
+            if target is None:
+                return False
+            return price <= target if is_sell else price >= target
+
+        sl_price = entry * (1 + row["sl_pct"] / 100) if is_sell else entry * (1 - row["sl_pct"] / 100)
+        tp1_price = _level_price(row["tp_pct"])
+        tp2_price = _level_price(row["tp2_pct"])
+        tp3_price = _level_price(row["tp3_pct"])
+
         age_days = (datetime.now() - recorded_at).days
 
-        status, return_pct = None, None
-        if is_sell:
-            if price <= tp_price:
-                status, return_pct = "TP_HIT", row["tp_pct"]
-            elif price >= sl_price:
-                status, return_pct = "SL_HIT", -row["sl_pct"]
-            elif age_days >= MAX_HOLD_DAYS:
-                status, return_pct = "EXPIRED", round((entry / price - 1) * 100, 2)
-        else:
-            if price >= tp_price:
-                status, return_pct = "TP_HIT", row["tp_pct"]
-            elif price <= sl_price:
-                status, return_pct = "SL_HIT", -row["sl_pct"]
-            elif age_days >= MAX_HOLD_DAYS:
-                status, return_pct = "EXPIRED", round((price / entry - 1) * 100, 2)
+        sl_hit = (price >= sl_price) if is_sell else (price <= sl_price)
 
-        if status is None:
+        reached_level = 0
+        if _reached(tp1_price):
+            reached_level = 1
+        if _reached(tp2_price):
+            reached_level = 2
+        if _reached(tp3_price):
+            reached_level = 3
+
+        # Level TERTINGGI yang benar-benar dikonfigurasi utk sinyal ini --
+        # baris lama/manual (mis. test yang insert langsung via SQL tanpa
+        # tp2_pct/tp3_pct) TIDAK dapat backfill migrasi ke-14 kalau
+        # di-insert SETELAH _ensure_table() jalan, jadi tp2_pct/tp3_pct-nya
+        # NULL: sinyal begini harus tetap berlaku SATU level lama (TP1
+        # tercapai = langsung final), bukan menunggu level yang tidak
+        # pernah ada.
+        if row["tp3_pct"] is not None:
+            configured_max, final_pct = 3, row["tp3_pct"]
+        elif row["tp2_pct"] is not None:
+            configured_max, final_pct = 2, row["tp2_pct"]
+        else:
+            configured_max, final_pct = 1, row["tp_pct"]
+
+        prev_level = row["tp_level_hit"] or 0
+        kind, status, return_pct = None, None, None
+
+        if is_stale:
+            # Harga basi -- lewati klaim TP/SL/tp_progress sepenuhnya,
+            # cuma EXPIRED (berbasis waktu) yang boleh jalan.
+            if age_days >= MAX_HOLD_DAYS:
+                kind, status = "resolved", "EXPIRED"
+                return_pct = round((entry / price - 1) * 100, 2) if is_sell else round((price / entry - 1) * 100, 2)
+        elif sl_hit:
+            kind, status, return_pct = "resolved", "SL_HIT", -row["sl_pct"]
+        elif reached_level >= configured_max and reached_level > 0:
+            kind, status, return_pct = "resolved", "TP_HIT", final_pct
+        elif reached_level > prev_level:
+            kind = "tp_progress"  # TP1/TP2 baru tercapai -- TETAP OPEN
+        elif age_days >= MAX_HOLD_DAYS:
+            kind, status = "resolved", "EXPIRED"
+            return_pct = round((entry / price - 1) * 100, 2) if is_sell else round((price / entry - 1) * 100, 2)
+
+        if kind is None:
             continue  # tetap OPEN, tidak ada perubahan
 
+        if kind == "tp_progress":
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE signal_history SET tp_level_hit = ? WHERE id = ?",
+                    (reached_level, row["id"]),
+                )
+            just_resolved.append({
+                "id": row["id"], "kode": row["kode"], "entry_price": entry,
+                "kind": "tp_progress", "tp_level_hit": reached_level, "price": price,
+                "recorded_at": row["recorded_at"], "source": row["source"],
+                "pattern": row["pattern"], "direction": row["direction"],
+            })
+            continue
+
+        # SL_HIT/EXPIRED mempertahankan tp_level_hit historis (TP1/TP2 yang
+        # SUDAH terbukti tercapai sebelumnya tetap tercatat apa adanya,
+        # bukan direset ke 0 hanya karena harga sekarang sudah turun lagi).
+        final_level = reached_level if status == "TP_HIT" else prev_level
         with get_db() as conn:
             conn.execute('''
                 UPDATE signal_history
                 SET status = ?, resolved_at = datetime('now', 'localtime'), resolved_price = ?,
-                    return_pct = ?, days_to_resolve = ?
+                    return_pct = ?, days_to_resolve = ?, tp_level_hit = ?
                 WHERE id = ?
-            ''', (status, price, return_pct, age_days, row["id"]))
+            ''', (status, price, return_pct, age_days, final_level, row["id"]))
 
         just_resolved.append({
             "id": row["id"], "kode": row["kode"], "entry_price": entry,
-            "status": status, "resolved_price": price, "return_pct": return_pct,
+            "kind": "resolved", "status": status, "resolved_price": price, "return_pct": return_pct,
             "days_to_resolve": age_days, "recorded_at": row["recorded_at"],
             "source": row["source"], "pattern": row["pattern"], "direction": row["direction"],
         })
@@ -650,14 +1094,16 @@ def get_signal_report() -> dict:
     # SATU sumber kebenaran: kalau formulanya berubah, tidak ada risiko
     # nilai tersimpan jadi basi/tidak sinkron dengan logic audit.
     for s in signals:
-        if s.get("direction") == "SELL":
-            # SELL (Distribusi Smart Money): untung kalau harga TURUN --
-            # TP di BAWAH entry, SL di ATAS entry, kebalikan dari BUY.
-            s["tp_price"] = round(s["entry_price"] * (1 - s["tp_pct"] / 100), 2)
-            s["sl_price"] = round(s["entry_price"] * (1 + s["sl_pct"] / 100), 2)
-        else:
-            s["tp_price"] = round(s["entry_price"] * (1 + s["tp_pct"] / 100), 2)
-            s["sl_price"] = round(s["entry_price"] * (1 - s["sl_pct"] / 100), 2)
+        is_sell = s.get("direction") == "SELL"
+        sign = -1 if is_sell else 1
+        # SELL (Distribusi Smart Money): untung kalau harga TURUN --
+        # TP di BAWAH entry, SL di ATAS entry, kebalikan dari BUY.
+        s["tp_price"] = round(s["entry_price"] * (1 + sign * s["tp_pct"] / 100), 2)
+        s["sl_price"] = round(s["entry_price"] * (1 - sign * s["sl_pct"] / 100), 2)
+        s["tp2_price"] = (round(s["entry_price"] * (1 + sign * s["tp2_pct"] / 100), 2)
+                          if s.get("tp2_pct") is not None else None)
+        s["tp3_price"] = (round(s["entry_price"] * (1 + sign * s["tp3_pct"] / 100), 2)
+                          if s.get("tp3_pct") is not None else None)
 
     closed = [s for s in signals if s["status"] in ("TP_HIT", "SL_HIT", "EXPIRED")]
     stats = _compute_stats(closed)
