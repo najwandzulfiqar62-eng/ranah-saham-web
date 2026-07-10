@@ -69,22 +69,70 @@ def format_signal_new(sig: dict) -> str:
     Tanda +/- pada TP/SL mengikuti ARAH HARGA (bukan untung/rugi): BUY
     untung kalau harga naik (TP="+", SL="-"), SELL untung kalau harga
     turun (TP="-", SL="+") -- supaya user paham APA yang akan terjadi
-    pada harga, bukan cuma label "Target/Stop Loss" yang ambigu arahnya."""
+    pada harga, bukan cuma label "Target/Stop Loss" yang ambigu arahnya.
+
+    TOP_PICK (BARU, lihat migrasi ke-16 core/signal_history.py) sekarang
+    START sbg PENDING_ENTRY, bukan langsung posisi aktif -- pesannya HARUS
+    bilang ini REKOMENDASI (tunggu harga turun ke level entry), bukan
+    "posisi sudah dibuka", supaya user tidak salah kira sudah punya posisi
+    padahal belum ada trade yang benar-benar terjadi. SMART_MONEY belum
+    ikut alur ini (masih langsung OPEN), jadi pesannya tetap seperti dulu."""
     direction = sig.get("direction", "BUY")
     is_sell = direction == "SELL"
     tp_sign, sl_sign = ("-", "+") if is_sell else ("+", "-")
-    lines = [
-        f"🆕 <b>{sig['kode']}</b> — sinyal {direction} baru dicatat",
-        f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
-        f"Entry: Rp{sig['entry_price']:,.0f}",
-        f"Target TP: Rp{sig['tp_price']:,.0f} ({tp_sign}{sig['tp_pct']:.1f}%)",
-        f"Stop Loss: Rp{sig['sl_price']:,.0f} ({sl_sign}{sig['sl_pct']:.1f}%)",
-    ]
+    is_pending = sig.get("source") == "TOP_PICK"
+    if is_pending:
+        lines = [
+            f"🆕 <b>{sig['kode']}</b> — rekomendasi entry baru (menunggu harga turun ke level ini)",
+            f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
+            f"Entry disarankan: Rp{sig['entry_price']:,.0f}",
+            f"Target TP (setelah entry kena): Rp{sig['tp_price']:,.0f} ({tp_sign}{sig['tp_pct']:.1f}%)",
+            f"Stop Loss (setelah entry kena): Rp{sig['sl_price']:,.0f} ({sl_sign}{sig['sl_pct']:.1f}%)",
+        ]
+    else:
+        lines = [
+            f"🆕 <b>{sig['kode']}</b> — sinyal {direction} baru dicatat",
+            f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
+            f"Entry: Rp{sig['entry_price']:,.0f}",
+            f"Target TP: Rp{sig['tp_price']:,.0f} ({tp_sign}{sig['tp_pct']:.1f}%)",
+            f"Stop Loss: Rp{sig['sl_price']:,.0f} ({sl_sign}{sig['sl_pct']:.1f}%)",
+        ]
     if sig.get("pattern"):
         lines.append(f"Pola chart: {sig['pattern']}")
     if sig.get("confidence_score") is not None:
         lines.append(f"Skor Keyakinan: {sig['confidence_score']:.1f}/100")
     lines.append("Analisis teknikal otomatis (rule-based) untuk edukasi — bukan rekomendasi investasi. DYOR.")
+    return "\n".join(lines)
+
+
+def format_signal_entry_filled(sig: dict) -> str:
+    """Format pesan pas rekomendasi entry (PENDING_ENTRY) BENERAN
+    tersentuh -- posisi resmi jadi aktif (status OPEN), TP/SL mulai
+    berlaku dari sini. Lihat audit_pending_entries() di core/signal_
+    history.py."""
+    lines = [
+        f"📥 <b>{sig['kode']}</b> — entry tercapai, posisi resmi aktif",
+        f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
+        f"Entry disarankan Rp{sig['entry_price']:,.0f} → harga saat entry kena Rp{sig['fill_price']:,.0f}",
+        "TP/SL mulai dipantau dari sini.",
+        "Analisis teknikal otomatis (rule-based) untuk edukasi — bukan rekomendasi investasi. DYOR.",
+    ]
+    return "\n".join(lines)
+
+
+def format_signal_entry_expired(sig: dict) -> str:
+    """Format pesan pas rekomendasi entry TIDAK PERNAH tersentuh dalam
+    MAX_ENTRY_WAIT_DAYS -- BUKAN kalah, BUKAN menang: analisisnya boleh
+    jadi tetap benar, cuma pasar tidak pernah kasih kesempatan masuk di
+    harga yang disarankan."""
+    lines = [
+        f"⌛ <b>{sig['kode']}</b> — entry tidak pernah tercapai, rekomendasi kadaluarsa",
+        f"Sumber: {_SOURCE_LABEL.get(sig.get('source', 'TOP_PICK'), sig.get('source', '-'))}",
+        f"Entry disarankan Rp{sig['entry_price']:,.0f}, harga tidak pernah turun ke level itu "
+        f"(terakhir Rp{sig['last_price']:,.0f})",
+        "Bukan menang, bukan kalah -- tidak pernah ada posisi yang benar-benar dibuka.",
+        "Analisis teknikal otomatis (rule-based) untuk edukasi — bukan rekomendasi investasi. DYOR.",
+    ]
     return "\n".join(lines)
 
 

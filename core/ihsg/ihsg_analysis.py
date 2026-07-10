@@ -408,34 +408,34 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
     atr = calculate_atr(df_daily)
 
     if bullish_percent >= 70:
-        prediction = "BULLISH 🟢"
+        prediction = "BULLISH"
         confidence = "TINGGI (70%+)"
-        action = "📈 AKUMULASI - Harga diperkirakan naik"
+        action = "AKUMULASI - Harga diperkirakan naik"
         target_move = _calculate_target_move(atr, current_price, confidence, is_bullish=True)
     elif bullish_percent >= 60:
-        prediction = "CENDERUNG BULLISH 🟡"
+        prediction = "CENDERUNG BULLISH"
         confidence = "SEDANG (60-70%)"
-        action = "📊 WAIT & SEE - Cenderung naik, tunggu konfirmasi"
+        action = "WAIT & SEE - Cenderung naik, tunggu konfirmasi"
         target_move = _calculate_target_move(atr, current_price, confidence, is_bullish=True)
     elif bearish_percent >= 70:
-        prediction = "BEARISH 🔴"
+        prediction = "BEARISH"
         confidence = "TINGGI (70%+)"
-        action = "⚠️ HINDARI BELI - Harga diperkirakan turun"
+        action = "HINDARI BELI - Harga diperkirakan turun"
         target_move = _calculate_target_move(atr, current_price, confidence, is_bullish=False)
     elif bearish_percent >= 60:
-        prediction = "CENDERUNG BEARISH 🟠"
+        prediction = "CENDERUNG BEARISH"
         confidence = "SEDANG (60-70%)"
-        action = "⏸️ HOLD - Cenderung turun, jangan entry baru"
+        action = "HOLD - Cenderung turun, jangan entry baru"
         target_move = _calculate_target_move(atr, current_price, confidence, is_bullish=False)
     elif abs(bullish_percent - bearish_percent) < 15:
-        prediction = "SIDEWAYS ⚪"
+        prediction = "SIDEWAYS"
         confidence = "RENDAH (50-60%)"
-        action = "🔄 RANGE TRADING - Jual di resistance, beli di support"
+        action = "RANGE TRADING - Jual di resistance, beli di support"
         target_move = "0.0% (sideways)"
     else:
-        prediction = "MIXED 🔄"
+        prediction = "MIXED"
         confidence = "RENDAH (<50%)"
-        action = "👀 MONITOR - Tunggu sinyal lebih jelas"
+        action = "MONITOR - Tunggu sinyal lebih jelas"
         target_move = "Tidak jelas"
 
     # ===== AKURASI: TIDAK DIHITUNG DI SINI =====

@@ -20,11 +20,13 @@
 # lalu buka http://localhost:8000
 
 import os
+import re
 import sys
 import time
 import asyncio
 import tempfile
 import hashlib
+import hmac
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
@@ -63,7 +65,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.gzip import GZipMiddleware
 
-from core.async_yf import async_download
+from core.async_yf import async_download, async_download_many
 from core.stock_data import fix_yf_columns
 from core.ai_score import calculate_ai_score_from_df
 from core.insight import _narrate_technical
@@ -93,24 +95,75 @@ from core.config import SAHAM_XLSX_PATH
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
 # tidak tersedia dari yfinance, jadi dipetakan manual untuk universe ini.
+# DIPERLUAS (permintaan user: Top Pick jangan cuma LQ45) supaya cakupan
+# penuh sama dgn LIQUID_250 (178 saham) -- entri BARU di bawah diturunkan
+# LANGSUNG dari pengelompokan komentar sektor yang SUDAH ada di LIQIUD_250
+# sendiri (bukan riset baru dari nol), TAPI diverifikasi dulu tidak
+# menimpa entri yang SUDAH benar di atas (mis. KLBF sengaja TETAP
+# Healthcare, meski di LIQUID_250 kebetulan dikelompokkan dekat saham
+# consumer -- pengelompokan LIQUID_250 itu cuma kemudahan visual daftar,
+# bukan klasifikasi GICS yang presisi). Dua kategori baru ("Real Estate",
+# "Transportation & Logistics") ditambah krn LIQUID_250 punya saham dari
+# 2 grup itu yang sebelumnya sama sekali tidak terwakili di sini.
 SECTOR_MAP_UNIVERSE = {
     "BBCA": "Financials", "BBRI": "Financials", "BMRI": "Financials", "BBNI": "Financials",
     "BRIS": "Financials", "ARTO": "Financials",
+    "BTPS": "Financials", "MEGA": "Financials", "BDMN": "Financials", "BJTM": "Financials",
+    "BJBR": "Financials", "PNBN": "Financials", "NISP": "Financials", "BNGA": "Financials",
+    "BNLI": "Financials", "BBMD": "Financials", "ADMF": "Financials", "BFIN": "Financials",
+    "MFIN": "Financials", "VRNA": "Financials", "WOMF": "Financials", "MREI": "Financials",
+    "ASBI": "Financials",
     "TLKM": "Infrastructure", "EXCL": "Infrastructure", "ISAT": "Infrastructure",
     "TOWR": "Infrastructure", "TBIG": "Infrastructure", "JSMR": "Infrastructure",
+    "SUPR": "Infrastructure", "WIKA": "Infrastructure", "WSKT": "Infrastructure",
+    "PTPP": "Infrastructure", "ADHI": "Infrastructure", "PPRE": "Infrastructure", "LINK": "Infrastructure",
     "ASII": "Industrials", "UNTR": "Industrials",
+    "AUTO": "Industrials", "SMSM": "Industrials", "IMAS": "Industrials", "INDS": "Industrials",
+    "BRAM": "Industrials", "HEXA": "Industrials", "ASSA": "Industrials", "BIRD": "Industrials",
+    "GIAA": "Industrials", "GJTL": "Industrials", "FASW": "Industrials", "SRIL": "Industrials",
+    "SMDR": "Industrials",
     "UNVR": "Consumer Non-Cyclical", "ICBP": "Consumer Non-Cyclical", "INDF": "Consumer Non-Cyclical",
     "GGRM": "Consumer Non-Cyclical", "HMSP": "Consumer Non-Cyclical", "CPIN": "Consumer Non-Cyclical",
     "JPFA": "Consumer Non-Cyclical", "AMRT": "Consumer Non-Cyclical",
+    "SIDO": "Consumer Non-Cyclical", "ULTJ": "Consumer Non-Cyclical", "MYOR": "Consumer Non-Cyclical",
+    "ROTI": "Consumer Non-Cyclical", "DLTA": "Consumer Non-Cyclical", "MLBI": "Consumer Non-Cyclical",
+    "LSIP": "Consumer Non-Cyclical", "AALI": "Consumer Non-Cyclical", "SGRO": "Consumer Non-Cyclical",
+    "SSMS": "Consumer Non-Cyclical", "PALM": "Consumer Non-Cyclical", "TBLA": "Consumer Non-Cyclical",
+    "BWPT": "Consumer Non-Cyclical", "TAPG": "Consumer Non-Cyclical", "STTP": "Consumer Non-Cyclical",
+    "CAMP": "Consumer Non-Cyclical", "GOOD": "Consumer Non-Cyclical", "KEJU": "Consumer Non-Cyclical",
     "KLBF": "Healthcare",
+    "MIKA": "Healthcare", "SILO": "Healthcare", "HEAL": "Healthcare", "PRDA": "Healthcare",
+    "IRRA": "Healthcare", "DVLA": "Healthcare", "TSPC": "Healthcare", "KAEF": "Healthcare",
+    "SCPI": "Healthcare", "SOHO": "Healthcare", "PHAR": "Healthcare",
     "ADRO": "Energy", "PTBA": "Energy", "ITMG": "Energy", "MEDC": "Energy", "PGAS": "Energy",
     "BRMS": "Energy", "RAJA": "Energy", "AKRA": "Energy",
+    "BYAN": "Energy", "HRUM": "Energy", "DSSA": "Energy", "TOBA": "Energy", "GEMS": "Energy",
+    "BSSR": "Energy", "KKGI": "Energy", "MYOH": "Energy", "DEWA": "Energy", "FIRE": "Energy",
+    "INDY": "Energy", "ELSA": "Energy", "PTRO": "Energy", "SMMT": "Energy", "CUAN": "Energy",
+    "ARCI": "Energy", "PGEO": "Energy", "AMMN": "Energy",
     "ANTM": "Basic Materials", "INCO": "Basic Materials", "MDKA": "Basic Materials",
     "TINS": "Basic Materials", "SMGR": "Basic Materials", "INTP": "Basic Materials",
     "BRPT": "Basic Materials", "TPIA": "Basic Materials",
+    "SMBR": "Basic Materials", "WTON": "Basic Materials", "BTON": "Basic Materials",
+    "ISSP": "Basic Materials", "KRAS": "Basic Materials", "NIKL": "Basic Materials",
+    "AMFG": "Basic Materials", "AGII": "Basic Materials", "MLIA": "Basic Materials",
+    "INKP": "Basic Materials", "TKIM": "Basic Materials", "ALKA": "Basic Materials",
+    "NCKL": "Basic Materials", "DPUM": "Basic Materials",
     "MNCN": "Consumer Cyclical", "ACES": "Consumer Cyclical", "MAPI": "Consumer Cyclical",
     "ERAA": "Consumer Cyclical",
+    "LPPF": "Consumer Cyclical", "RALS": "Consumer Cyclical", "KINO": "Consumer Cyclical",
+    "MAPB": "Consumer Cyclical", "EMTK": "Consumer Cyclical", "MLPL": "Consumer Cyclical",
+    "MIDI": "Consumer Cyclical", "CSMI": "Consumer Cyclical", "PZZA": "Consumer Cyclical",
     "GOTO": "Technology", "BUKA": "Technology",
+    "DMMX": "Technology", "KREN": "Technology", "MTDL": "Technology", "DCII": "Technology",
+    "ARNA": "Technology",
+    "CTRA": "Real Estate", "BSDE": "Real Estate", "SMRA": "Real Estate", "PWON": "Real Estate",
+    "LPKR": "Real Estate", "JRPT": "Real Estate", "APLN": "Real Estate", "MDLN": "Real Estate",
+    "DUTI": "Real Estate", "DMAS": "Real Estate", "MKPI": "Real Estate", "PLIN": "Real Estate",
+    "GPRA": "Real Estate", "NRCA": "Real Estate", "CITY": "Real Estate", "KIJA": "Real Estate",
+    "BEST": "Real Estate",
+    "HITS": "Transportation & Logistics", "LEAD": "Transportation & Logistics",
+    "TMAS": "Transportation & Logistics", "SHIP": "Transportation & Logistics",
 }
 
 # Peta grup konglomerasi (kepemilikan/afiliasi bisnis keluarga besar IDX).
@@ -323,11 +376,26 @@ async def rate_limit(request: Request, call_next):
         ip = request.client.host if request.client else "unknown"
         key = f"rate_limit:{ip}"
         try:
-            # Increment and set expiry if new
+            # BUG NYATA ditemukan lewat laporan user ("kenapa lagi nih" --
+            # 429 bertubi-tubi walau endpoint-nya sendiri sehat): `expire()`
+            # DULU dipanggil di SETIAP request (bukan cuma saat counter baru
+            # dibuat), mengubah ini dari fixed-window jadi jendela yang
+            # SELALU refresh sendiri -- selama masih ada request masuk
+            # (dijamin ada, market-strip auto-refresh tiap 30 detik), TTL
+            # 60 detik itu TIDAK PERNAH benar-benar habis. Begitu counter
+            # kelewat 1200 sekali saja (mudah tercapai: satu buka Beranda
+            # nembak ~11 endpoint sekaligus + user pindah2 tab), user itu
+            # macet kena 429 SELAMANYA -- termasuk request yang DIBLOKIR pun
+            # ikut me-refresh window-nya (pipe.incr jalan sebelum threshold
+            # dicek), jadi tidak pernah ada celah 60 detik kosong utk reset.
+            # Fix: expire cuma dipasang SEKALI, saat count==1 (key baru
+            # dibuat) -- window sekarang benar2 reset tiap 60 detik apa pun
+            # volume trafiknya.
             pipe = _redis.pipeline()
             pipe.incr(key)
-            pipe.expire(key, _RATE_WINDOW)
-            count, _ = pipe.execute()
+            count, = pipe.execute()
+            if count == 1:
+                _redis.expire(key, _RATE_WINDOW)
             if count > _RATE_MAX:
                 return JSONResponse(
                     {"error": "Terlalu banyak permintaan. Coba lagi sebentar."},
@@ -336,6 +404,260 @@ async def rate_limit(request: Request, call_next):
             # If Redis fails, fail open to avoid blocking service
             pass
     return await call_next(request)
+
+
+# ---------- Forum komunitas (Tanya Jawab) ----------
+# Permintaan user: "fitur chat buat komunitas ... lebih ke forum sih".
+# Aplikasi ini TIDAK PUNYA sistem akun/login (dihapus dead code sesi
+# sebelumnya) -- identitas poster HANYA nama bebas yang diketik user
+# sendiri (bukan terverifikasi). `is_admin` per baris SATU-SATUNYA hal
+# yang benar2 diverifikasi SERVER (hmac.compare_digest thd FORUM_ADMIN_
+# SECRET) -- kode admin BOLEH di-cache di localStorage sisi klien utk
+# kenyamanan autofill, TAPI klien TIDAK PERNAH dipercaya begitu saja soal
+# status admin, konsisten dgn prinsip "tidak ada kunci/token di sisi
+# browser" di atas (baris awal file ini).
+FORUM_NAMA_MAX, FORUM_JUDUL_MAX, FORUM_ISI_MAX = 50, 200, 5000
+
+# Limiter TERPISAH & lebih ketat dari rate_limit() global di atas (1200/60d
+# terlalu longgar utk anti-spam endpoint tulis spesifik) -- SAMA PERSIS pola
+# INCR + expire-HANYA-saat-count==1 (fix bug "stuck window" di komentar
+# rate_limit() di atas) -- JANGAN panggil expire() unconditional di sini.
+_FORUM_RATE_MAX = 8        # tulis/hapus
+_FORUM_RATE_WINDOW = 300   # per 5 menit
+
+
+def _forum_rate_limit(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    key = f"forum_write:{ip}"
+    try:
+        pipe = _redis.pipeline()
+        pipe.incr(key)
+        count, = pipe.execute()
+        if count == 1:
+            _redis.expire(key, _FORUM_RATE_WINDOW)
+        if count > _FORUM_RATE_MAX:
+            raise HTTPException(429, "Terlalu banyak aktivitas forum. Coba lagi beberapa menit lagi.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Redis down -- fail open, konsisten dgn limiter global
+
+
+def _forum_is_admin(admin_code: str | None) -> bool:
+    """Kode kosong ATAU FORUM_ADMIN_SECRET belum di-set -> SELALU False
+    (fail-closed) -- SEBELUM compare_digest, supaya hmac.compare_digest
+    ("","") == True tidak pernah jadi celah kalau secret env lupa diisi."""
+    from core.config import FORUM_ADMIN_SECRET
+    if not admin_code or not FORUM_ADMIN_SECRET:
+        return False
+    return hmac.compare_digest(admin_code, FORUM_ADMIN_SECRET)
+
+
+def _forum_text(value, max_len: int, label: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        raise HTTPException(400, f"{label} wajib diisi.")
+    if len(v) > max_len:
+        raise HTTPException(400, f"{label} maksimal {max_len} karakter.")
+    return v
+
+
+def _forum_admin_flag(body: dict) -> bool:
+    """Kode kosong/whitespace -> posting biasa (bukan error). Kode ADA
+    tapi SALAH -> error eksplisit (bukan diam2 turun jadi non-admin) --
+    supaya admin sadar kalau salah ketik, bukan bingung kenapa postingnya
+    tidak dapat badge."""
+    code = (body.get("admin_code") or "").strip()
+    if not code:
+        return False
+    if not _forum_is_admin(code):
+        raise HTTPException(400, "Kode admin salah.")
+    return True
+
+
+# Set kategori TETAP (bukan tabel dinamis) -- cukup utk skala forum ini,
+# divalidasi thd dict ini di endpoint (bukan di core/forum.py, modul data
+# itu tetap tidak tahu apa pun soal validasi HTTP-facing, sama prinsip dgn
+# _forum_text di atas).
+FORUM_KATEGORI = {
+    "umum": "Umum",
+    "pertanyaan": "Pertanyaan",
+    "teknikal": "Analisis Teknikal",
+    "fundamental": "Analisis Fundamental",
+    "fitur": "Fitur Website",
+}
+_FORUM_SORT = {"terbaru", "populer"}
+_FORUM_STATUS = {"belum_dijawab"}
+
+
+def _forum_kategori_flag(value) -> str:
+    """Kosong/tidak dikirim -> default 'umum'. Dikirim tapi bukan salah
+    satu key FORUM_KATEGORI -> error eksplisit (mencegah nilai sampah
+    mengotori chip filter kategori)."""
+    v = (value or "").strip() or "umum"
+    if v not in FORUM_KATEGORI:
+        raise HTTPException(400, "Kategori tidak dikenal.")
+    return v
+
+
+def _forum_like_escape(q: str) -> str:
+    """Escape literal `%`/`_` (dan escape char `\\` itu sendiri lebih
+    dulu) sebelum dibungkus jadi pola LIKE '%...%' -- supaya user yang
+    ketik '%' atau '_' di kotak pencarian tidak diam2 memicu wildcard SQL
+    yang tidak dia maksud."""
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _forum_tickers(teks: str) -> list[str]:
+    """Deteksi kode saham yang disebut di teks bebas (forum), utk auto-link
+    ke halaman Analisis di frontend. WAJIB reuse deteksi_emiten() dari
+    core/news_emiten.py -- SATU-SATUNYA implementasi matching ticker-di-
+    teks-bebas yang benar di codebase ini (case-sensitive, ada guard kode
+    rawan-false-positive spt GOOD/LABA/CARE); core/news.py pernah punya
+    implementasi kedua yang lebih naif (substring match) dan itu bug yang
+    sudah diperbaiki -- JANGAN bikin regex ticker baru di sini.
+
+    Pre-filter kandidat via regex "4 huruf kapital utuh" dulu (bukan cek
+    seluruh ~800 kode emiten per post) -- deteksi_emiten(kandidat_kode=...)
+    memang didesain utk shortlist spt ini, penting utk performa krn forum
+    bisa nampilkan puluhan post sekaligus di satu request list."""
+    from core.news_emiten import deteksi_emiten
+    candidates = list(set(re.findall(r"\b[A-Z]{4}\b", teks)))
+    if not candidates:
+        return []
+    return deteksi_emiten(teks, kandidat_kode=candidates)
+
+
+@app.get("/api/forum/threads")
+async def api_forum_list_threads(request: Request):
+    from core.forum import list_threads
+    qp = request.query_params
+    q = (qp.get("q") or "").strip()
+    kategori = (qp.get("kategori") or "").strip()
+    if kategori and kategori not in FORUM_KATEGORI:
+        raise HTTPException(400, "Kategori tidak dikenal.")
+    sort = qp.get("sort") or "terbaru"
+    if sort not in _FORUM_SORT:
+        sort = "terbaru"
+    status = qp.get("status") or None
+    if status not in _FORUM_STATUS:
+        status = None
+    threads = await asyncio.to_thread(
+        list_threads,
+        200,
+        _forum_like_escape(q) if q else None,
+        kategori or None,
+        sort,
+        status,
+    )
+    for t in threads:
+        t["tickers"] = _forum_tickers(f"{t['judul']} {t['isi']}")
+    return _py(threads)
+
+
+@app.get("/api/forum/threads/{thread_id}")
+async def api_forum_thread_detail(thread_id: int):
+    from core.forum import get_thread, list_replies
+    thread = await asyncio.to_thread(get_thread, thread_id)
+    if thread is None:
+        raise HTTPException(404, "Thread tidak ditemukan.")
+    replies = await asyncio.to_thread(list_replies, thread_id)
+    thread["tickers"] = _forum_tickers(f"{thread['judul']} {thread['isi']}")
+    for r in replies:
+        r["tickers"] = _forum_tickers(r["isi"])
+    return _py({"thread": thread, "replies": replies})
+
+
+@app.post("/api/forum/threads")
+async def api_forum_create_thread(request: Request):
+    _forum_rate_limit(request)
+    body = await request.json()
+    nama = _forum_text(body.get("nama"), FORUM_NAMA_MAX, "Nama")
+    judul = _forum_text(body.get("judul"), FORUM_JUDUL_MAX, "Judul")
+    isi = _forum_text(body.get("isi"), FORUM_ISI_MAX, "Isi")
+    is_admin = _forum_admin_flag(body)
+    kategori = _forum_kategori_flag(body.get("kategori"))
+    from core.forum import create_thread
+    return _py(await asyncio.to_thread(create_thread, nama, judul, isi, is_admin, kategori))
+
+
+@app.post("/api/forum/threads/{thread_id}/replies")
+async def api_forum_create_reply(thread_id: int, request: Request):
+    _forum_rate_limit(request)
+    body = await request.json()
+    nama = _forum_text(body.get("nama"), FORUM_NAMA_MAX, "Nama")
+    isi = _forum_text(body.get("isi"), FORUM_ISI_MAX, "Isi")
+    is_admin = _forum_admin_flag(body)
+    from core.forum import create_reply
+    reply = await asyncio.to_thread(create_reply, thread_id, nama, isi, is_admin)
+    if reply is None:
+        raise HTTPException(404, "Thread tidak ditemukan.")
+    return _py(reply)
+
+
+@app.delete("/api/forum/threads/{thread_id}")
+async def api_forum_delete_thread(thread_id: int, request: Request):
+    _forum_rate_limit(request)
+    body = await request.json()
+    if not _forum_is_admin((body.get("admin_code") or "").strip()):
+        raise HTTPException(400, "Kode admin salah/kosong.")
+    from core.forum import delete_thread
+    if not await asyncio.to_thread(delete_thread, thread_id):
+        raise HTTPException(404, "Thread tidak ditemukan.")
+    return {"ok": True}
+
+
+@app.delete("/api/forum/replies/{reply_id}")
+async def api_forum_delete_reply(reply_id: int, request: Request):
+    _forum_rate_limit(request)
+    body = await request.json()
+    if not _forum_is_admin((body.get("admin_code") or "").strip()):
+        raise HTTPException(400, "Kode admin salah/kosong.")
+    from core.forum import delete_reply
+    if not await asyncio.to_thread(delete_reply, reply_id):
+        raise HTTPException(404, "Balasan tidak ditemukan.")
+    return {"ok": True}
+
+
+@app.post("/api/forum/replies/{reply_id}/upvote")
+async def api_forum_upvote_reply(reply_id: int, request: Request):
+    _forum_rate_limit(request)
+    from core.forum import upvote_reply
+    reply = await asyncio.to_thread(upvote_reply, reply_id)
+    if reply is None:
+        raise HTTPException(404, "Balasan tidak ditemukan.")
+    return _py(reply)
+
+
+@app.post("/api/forum/replies/{reply_id}/best-answer")
+async def api_forum_best_answer(reply_id: int, request: Request):
+    _forum_rate_limit(request)
+    body = await request.json()
+    if not _forum_is_admin((body.get("admin_code") or "").strip()):
+        raise HTTPException(400, "Kode admin salah/kosong.")
+    from core.forum import set_best_answer
+    reply = await asyncio.to_thread(set_best_answer, reply_id)
+    if reply is None:
+        raise HTTPException(404, "Balasan tidak ditemukan.")
+    return _py(reply)
+
+
+@app.post("/api/forum/threads/{thread_id}/report")
+async def api_forum_report_thread(thread_id: int, request: Request):
+    _forum_rate_limit(request)
+    from core.forum import report_thread
+    if not await asyncio.to_thread(report_thread, thread_id):
+        raise HTTPException(404, "Thread tidak ditemukan.")
+    return {"ok": True}
+
+
+@app.post("/api/forum/replies/{reply_id}/report")
+async def api_forum_report_reply(reply_id: int, request: Request):
+    _forum_rate_limit(request)
+    from core.forum import report_reply
+    if not await asyncio.to_thread(report_reply, reply_id):
+        raise HTTPException(404, "Balasan tidak ditemukan.")
+    return {"ok": True}
 
 
 # ---------- cache chart PNG (Redis) ----------
@@ -388,6 +710,101 @@ async def _render_chart(label: str, kind: str, df: pd.DataFrame, gen_fn, *gen_ar
 _inflight: dict[str, asyncio.Task] = {}
 
 
+async def _backfill_recent_gap(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """BUG NYATA ditemukan lewat 2 laporan user di hari yang sama: (1) IHSG
+    tetap tampil "BULLISH 91%" walau user tahu persis kemarin pasar merah
+    ("kayanya emg datanya yg ngaco deh"), (2) sinyal ARTO baru (TOP_PICK,
+    dicatat 2026-07-09 00:01) entry_price=953 yang sama sekali tidak nyambung
+    dengan histori harga ARTO sungguhan ("arto aneh bgt hari ini aja arto di
+    harga 1000 bukan 950"). Ditelusuri sampai akar: Yahoo Finance kadang
+    GAGAL menerbitkan bar HARIAN utk hari bursa yang baru saja selesai --
+    utk ^JKSE baris hari itu HILANG SAMA SEKALI dari respons, utk saham
+    individual (ARTO) baris itu ADA tapi OHLC-nya semua NaN (cuma Volume
+    yang terisi) -- dropna() di _clean() lalu diam-diam MEMBUANG baris NaN
+    itu. Efeknya SAMA: dataframe harian "macet" 1 hari bursa di belakang,
+    dan SEMUA yang dihitung darinya (RSI, MACD, tren MA, volume_trend,
+    skor bullish/bearish IHSG, skenario entry price Trading Plan) diam-diam
+    buta terhadap pergerakan hari yang hilang itu -- padahal harga REAL-TIME
+    (fast_info/quote langsung, jalur terpisah) tetap benar, jadi yang
+    tampil ke user JADI KONTRADIKTIF (harga live sudah pindah jauh, tapi
+    "analisis teknikal" masih baca kondisi 1 hari sebelumnya).
+
+    Dibuktikan nyata: data INTRADAY (interval per jam) untuk hari yang
+    "hilang" itu SELALU LENGKAP walau data harian gagal -- jadi hari yang
+    hilang/NaN itu ditambal dengan meresample candle per-jam jadi 1 candle
+    harian (Open=jam pertama, High/Low=ekstrem, Close=jam terakhir,
+    Volume=jumlah), HANYA utk tanggal yang benar2 hilang/tidak lengkap di
+    data harian -- tanggal yang SUDAH ada & valid di data harian tidak
+    disentuh sama sekali (data harian resmi tetap diutamakan kalau ada).
+
+    Fail-safe: kalau fetch intraday-nya sendiri gagal/kosong (mis. ticker
+    yang memang tidak py data per-jam), balikin df apa adanya -- tidak
+    boleh menggagalkan seluruh analisis cuma gara2 tambalan ini gagal."""
+    if df is None or df.empty:
+        return df
+    try:
+        hourly = await async_download(ticker, period="5d", interval="1h", progress=False)
+        hourly = fix_yf_columns(hourly).apply(pd.to_numeric, errors="coerce").dropna()
+        return _merge_hourly_gap(df, hourly)
+    except Exception:
+        return df
+
+
+def _merge_hourly_gap(df: pd.DataFrame, hourly: pd.DataFrame) -> pd.DataFrame:
+    """Logika inti (sinkron, dipakai bareng oleh _backfill_recent_gap versi
+    1-ticker & versi batch _backfill_recent_gap_batch): resample candle
+    per-jam yang SUDAH bersih jadi candle harian, lalu tambal HANYA tanggal
+    yang belum ada di df harian -- lihat docstring _backfill_recent_gap utk
+    latar belakang bug-nya."""
+    if hourly is None or hourly.empty:
+        return df
+    try:
+        if hourly.index.tz is not None:
+            hourly.index = hourly.index.tz_localize(None)
+        daily_from_hourly = hourly.resample("1D").agg(
+            {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+        ).dropna()
+        daily_from_hourly.index = daily_from_hourly.index.normalize()
+
+        df_norm_index = df.index.tz_localize(None) if df.index.tz is not None else df.index
+        existing_dates = set(pd.DatetimeIndex(df_norm_index).normalize())
+        missing = daily_from_hourly[~daily_from_hourly.index.isin(existing_dates)]
+        if missing.empty:
+            return df
+
+        df2 = df.copy()
+        df2.index = df_norm_index
+        return pd.concat([df2, missing]).sort_index()
+    except Exception:
+        return df
+
+
+async def _backfill_recent_gap_batch(daily_map: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Versi batch dari _backfill_recent_gap -- dipakai _confidence_raw_
+    signals() yang menganalisis SCREENER_UNIVERSE sekaligus (bukan 1
+    ticker), supaya penambalannya TETAP 1 panggilan batch tambahan (lewat
+    async_download_many, yang sudah py throttling/retry sendiri) BUKAN N
+    panggilan per-ticker terpisah yang bisa memicu rate-limit Yahoo
+    Finance sendiri. Fail-safe: kalau batch intraday-nya gagal total,
+    balikin daily_map apa adanya."""
+    try:
+        hourly_map = await async_download_many(list(daily_map.keys()), period="5d", interval="1h")
+    except Exception:
+        return daily_map
+    if not hourly_map:
+        return daily_map
+    result = {}
+    for ticker, df in daily_map.items():
+        hourly = hourly_map.get(ticker)
+        if hourly is not None and not hourly.empty:
+            try:
+                hourly = fix_yf_columns(hourly).apply(pd.to_numeric, errors="coerce").dropna()
+            except Exception:
+                hourly = None
+        result[ticker] = _merge_hourly_gap(df, hourly) if hourly is not None else df
+    return result
+
+
 async def _clean(ticker: str, period: str = "1y", interval: str = "1d"):
     key = f"df:{ticker}:{period}:{interval}"
     cached = _cache_get(key)
@@ -407,6 +824,12 @@ async def _clean(ticker: str, period: str = "1y", interval: str = "1d"):
     async def _fetch():
         df = await async_download(ticker, period=period, interval=interval, progress=False)
         df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+        # Tambal celah bar harian terbaru yang hilang/NaN (lihat
+        # _backfill_recent_gap) -- HANYA relevan utk data harian; interval
+        # lain (mis. mingguan utk tren, atau per-jam itu sendiri) tidak
+        # kena bug spesifik ini.
+        if interval == "1d":
+            df = await _backfill_recent_gap(df, ticker)
         _cache_set(key, df)
         return df
 
@@ -1333,6 +1756,28 @@ async def _signal_audit_price_lookup(kode: str):
         return None
 
 
+async def _run_pending_entry_audit_and_notify() -> list[dict]:
+    """Audit semua sinyal PENDING_ENTRY (entry tersentuh -> OPEN, atau
+    kadaluarsa -> EXPIRED_NO_ENTRY) + kirim notifikasi Telegram. Dipanggil
+    SEBELUM _run_signal_audit_and_notify (audit posisi OPEN) di satu
+    putaran auto-cycle -- urutan ini sengaja: entry yang baru saja tersentuh
+    di siklus INI belum perlu dicek TP/SL sampai siklus BERIKUTNYA (posisi
+    baru saja aktif, wajar belum kemana-mana)."""
+    from core.signal_history import audit_pending_entries
+    from core.telegram_notify import send_message, format_signal_entry_filled, format_signal_entry_expired
+
+    events = await audit_pending_entries(_signal_audit_price_lookup)
+    for ev in events:
+        try:
+            if ev.get("kind") == "entry_filled":
+                await send_message(format_signal_entry_filled(ev))
+            else:
+                await send_message(format_signal_entry_expired(ev))
+        except Exception as e:
+            print(f"⚠️ Gagal kirim notifikasi pending-entry: {type(e).__name__}: {e}")
+    return events
+
+
 async def _run_signal_audit_and_notify() -> list[dict]:
     """Audit semua sinyal OPEN + kirim notifikasi Telegram (kalau
     dikonfigurasi -- lihat core/telegram_notify.py, no-op aman kalau
@@ -1368,10 +1813,12 @@ async def _run_signal_auto_cycle():
     sama dipakai /api/insight/{kode} memanggil ihsg()); (2) scan & catat
     anomali Smart Money (source ketiga, reuse items confidence() yang
     SAMA utk TP/SL/likuiditas -- lihat _record_smart_money_cycle); (3)
-    audit semua sinyal OPEN + notifikasi utk yang baru selesai. Dipisah
-    dari loop-nya sendiri (bukan langsung di dalam while True) supaya
-    SATU putaran bisa dipanggil & ditest langsung tanpa perlu menunggu
-    interval sungguhan."""
+    audit semua sinyal OPEN + notifikasi utk yang baru selesai; (4) catat
+    snapshot harian (permintaan user: "track sinyalnya, besok yg lanjut
+    naik apa yg turun apa" -- lihat record_daily_snapshots, idempotent
+    per hari jadi aman dipanggil tiap 10 menit). Dipisah dari loop-nya
+    sendiri (bukan langsung di dalam while True) supaya SATU putaran bisa
+    dipanggil & ditest langsung tanpa perlu menunggu interval sungguhan."""
     confidence_items = []
     try:
         confidence_result = await confidence()
@@ -1383,9 +1830,18 @@ async def _run_signal_auto_cycle():
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal catat Smart Money: {type(e).__name__}: {e}")
     try:
+        await _run_pending_entry_audit_and_notify()
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal audit pending-entry: {type(e).__name__}: {e}")
+    try:
         await _run_signal_audit_and_notify()
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal audit sinyal: {type(e).__name__}: {e}")
+    try:
+        from core.signal_history import record_daily_snapshots
+        await record_daily_snapshots(_signal_entry_price_lookup)
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal catat snapshot harian: {type(e).__name__}: {e}")
 
 
 async def _signal_auto_loop():
@@ -1411,21 +1867,35 @@ async def _confidence_raw_signals() -> list[dict]:
     if cached is not None:
         return cached
 
-    from core.async_yf import async_download_many
     from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns
 
     ihsg_raw = await _clean("^JKSE", period="1y")
     market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
 
     shares = _load_shares()
-    tickers = [t + ".JK" for t in SCREENER_UNIVERSE]
+    # Universe DIPERLUAS (permintaan user: "di top pick tambahin jgn cuman
+    # lq45") dari SCREENER_UNIVERSE (~45, LQ45-ish) ke LIQUID_250 (178
+    # saham likuid, SUDAH dipakai fitur lain scope='medium' di scale yang
+    # sama -- lihat async_download_many, batching+retry sudah teruji utk
+    # ~200 ticker). SCREENER_UNIVERSE ⊂ LIQUID_250 penuh, jadi fitur lain
+    # yang masih pakai SCREENER_UNIVERSE (Screener default, Smart Money
+    # scanner _SM_UNIVERSE, Backtest, dst) TIDAK terpengaruh -- join-nya
+    # (_record_smart_money_cycle) tetap valid krn cuma superset, bukan
+    # ganti universe. record_top_picks() di confidence() tetap MAX_
+    # RECORDED_PER_DAY=10/hari, jadi Audit Sinyal tidak dibanjiri meski
+    # kandidat yang di-scan sekarang jauh lebih banyak.
+    tickers = [t + ".JK" for t in LIQUID_250]
     data = await async_download_many(tickers, period="1y", interval="1d")
+    data = {t: fix_yf_columns(d).apply(pd.to_numeric, errors="coerce").dropna() for t, d in data.items()}
+    # Tambal celah bar harian terbaru (lihat _backfill_recent_gap) -- SATU
+    # panggilan batch tambahan utk semua ticker, bukan N panggilan per-
+    # ticker (lihat _backfill_recent_gap_batch).
+    data = await _backfill_recent_gap_batch(data)
 
     items = []
-    for ticker, df_raw in data.items():
+    for ticker, df in data.items():
         kode = ticker.replace(".JK", "")
         try:
-            df = fix_yf_columns(df_raw).apply(pd.to_numeric, errors="coerce").dropna()
             if len(df) < 200:
                 continue
             ai = calculate_ai_score_from_df(df)
@@ -1454,37 +1924,41 @@ async def _confidence_raw_signals() -> list[dict]:
             # pernah lebih ketat dari SL-nya sendiri. Ini logic yang SUDAH
             # ada & teruji (dipakai "Rencana Trading" di halaman Analisis),
             # bukan heuristik baru.
-            # REVISI (permintaan user langsung): SEBELUM ini SELALU pakai
-            # skenario 'normal' (entry = harga sekarang) apa pun yang
-            # sungguhan terjadi hari itu -- kurang realistis kalau
-            # misalnya harga hari itu SEMPAT pullback ke S1 atau bahkan
-            # lebih dalam ke S2 (deep). Sekarang pakai get_hit_scenarios()
-            # (SUDAH ADA & teruji, dipakai fitur Watchlist/Alert Rencana
-            # Trading -- bukan heuristik baru) utk cek Low/High HARI ITU
-            # thd tiap level skenario, lalu pilih yang PALING DALAM/
-            # konservatif dari yang benar-benar kena: deep > pullback >
-            # normal > breakout. get_hit_scenarios sendiri SUDAH menangani
-            # "kalau low hari ini di bawah level deep juga, tetap dianggap
-            # deep" (deep_kena pakai `<=`, bukan `==`) -- tidak perlu
-            # skenario ke-5 yang lebih dalam lagi, "floating" dari area
-            # deep itu sendiri.
-            from core.trading_plan import calculate_fixed_entry_levels_from_df, get_hit_scenarios
+            # REVISI KEDUA (permintaan user langsung: "kamu jadi analyst,
+            # nentuin entrinya dimana, nanti tinggal liat kena entry yg
+            # disaranin apa engga"): versi SEBELUM ini pakai get_hit_
+            # scenarios() utk klaim entry "sudah kena HARI INI" -- itu
+            # BUG NYATA yang baru ketemu (kasus ARTO 2026-07-09, entry
+            # Rp953 yang tidak nyambung sama sekali dgn histori harga
+            # sungguhan): sinyal baru DICATAT hari ini, jadi mengklaim
+            # entry di harga pullback yang sudah "kena" HARI YANG SAMA
+            # sama saja mengklaim trader bisa mundur waktu ke harga yang
+            # sudah lewat sebelum sinyalnya sendiri ada. Sekarang SELALU
+            # pakai skenario 'pullback' (S1) sbg REKOMENDASI (bukan klaim
+            # sudah terjadi) -- record_top_picks() menyimpannya sbg status
+            # PENDING_ENTRY, lalu audit_pending_entries() (core/signal_
+            # history.py) yang menentukan kapan (kalau pernah) level ini
+            # BENERAN tersentuh ke depannya, sebelum TP/SL mulai berlaku.
+            # REVISI KETIGA (permintaan user langsung: "skenario nya antara
+            # pullback atau breakout aja tapi valid soalnya kalo pullback
+            # kadang ga kena yg ada malah kena tp") -- pullback SELALU
+            # dipakai apa adanya kadang tidak realistis: kalau saham SEDANG
+            # breakout momentum (harga tembus R1 dgn volume), harga jarang
+            # mundur lagi ke S1 -- sinyal berakhir EXPIRED_NO_ENTRY padahal
+            # harga sudah lanjut jalan (bahkan sempat menyentuh level yang
+            # SEHARUSNYA jadi TP kalau entry-nya breakout, bukan pullback).
+            # calculate_fixed_entry_levels_from_df() sekarang menentukan
+            # recommended_scenario ('breakout' vs 'pullback') sendiri
+            # berdasar is_breakout (harga > R1) + volume_confirmation (vol >
+            # 1.3x rata2 20 hari) -- lihat catatan lengkap di situ. Fallback
+            # ke 'normal' kalau skenario yang direkomendasikan entah kenapa
+            # tidak ada (harusnya nyaris tidak pernah -- _determine_entry_
+            # points selalu punya fallback sintetis).
+            from core.trading_plan import calculate_fixed_entry_levels_from_df
             plan = calculate_fixed_entry_levels_from_df(df, "")
             scenarios = (plan or {}).get("scenarios") or {}
-            chosen = None
-            if scenarios:
-                low_today = float(df["Low"].iloc[-1])
-                high_today = float(df["High"].iloc[-1])
-                hit_keys = {h["key"] for h in get_hit_scenarios(scenarios, low_today, high_today)}
-                # Prioritas "paling bawah/konservatif" -- BEDA dari urutan
-                # append get_hit_scenarios sendiri (breakout sebelum normal)
-                # krn breakout levelnya di ATAS harga normal, bukan di bawah.
-                for key in ("deep", "pullback", "normal", "breakout"):
-                    if key in hit_keys:
-                        chosen = scenarios[key]
-                        break
-            if chosen is None:  # jaring pengaman -- normal_kena harusnya nyaris selalu True
-                chosen = scenarios.get("normal")
+            recommended_key = (plan or {}).get("recommended_scenario", "pullback")
+            chosen = scenarios.get(recommended_key) or scenarios.get("pullback") or scenarios.get("normal")
             potensi_naik_pct = chosen["tp1_pct"] if chosen else None
             risiko_turun_pct = chosen["risk_pct"] if chosen else None
             # TP2/TP3 (permintaan user: "kena tp1 tandai, lanjut ke tp
@@ -1493,11 +1967,12 @@ async def _confidence_raw_signals() -> list[dict]:
             # pernah diekstrak/disimpan sebelum ini.
             tp2_pct_val = chosen["tp2_pct"] if chosen else None
             tp3_pct_val = chosen["tp3_pct"] if chosen else None
-            # Entry level SKENARIO yang beneran kena hari ini (mis. level
-            # pullback/S1), dipakai belakangan utk pencatatan signal_history
-            # supaya entry_price konsisten dgn skenario tp_pct/sl_pct yang
-            # dipilih -- BEDA dari "harga" di bawah (harga pasar berjalan,
-            # tetap dipakai apa adanya utk tampilan tabel Top Pick).
+            # Entry level REKOMENDASI (skenario pullback/S1), dipakai
+            # belakangan utk pencatatan signal_history (status PENDING_
+            # ENTRY) supaya entry_price konsisten dgn skenario tp_pct/
+            # sl_pct yang dipilih -- BEDA dari "harga" di bawah (harga
+            # pasar berjalan saat ini, tetap dipakai apa adanya utk
+            # tampilan tabel Top Pick).
             entry_price_signal = chosen["entry"] if chosen else None
             rr_ratio = (potensi_naik_pct / risiko_turun_pct
                         if potensi_naik_pct and risiko_turun_pct and risiko_turun_pct > 0 else None)
@@ -1606,7 +2081,19 @@ async def _confidence_raw_signals() -> list[dict]:
         for it in items:
             it.setdefault("kepemilikan_change_pct", None)
 
-    _cache_set("confidence:raw", items)
+    # TTL LEBIH PANJANG dari _CACHE_TTL default (300s) -- SENGAJA, ditemukan
+    # lewat pengukuran latency live setelah universe diperluas ke LIQUID_250
+    # (178 saham, sebelumnya SCREENER_UNIVERSE ~45): compute dingin sekarang
+    # ~44 detik (diverifikasi langsung), sedangkan auto-cycle background
+    # (_run_signal_auto_cycle, lihat SIGNAL_AUTO_INTERVAL_SECONDS=600s) yang
+    # SEHARUSNYA menjaga cache tetap hangat cuma jalan tiap 10 menit -- kalau
+    # TTL cache tetap 300s (5 menit), ada jendela 5 menit tiap siklus di
+    # mana cache SUDAH kadaluarsa tapi auto-cycle BELUM refresh lagi, jadi
+    # user pertama yang buka Top Pick di jendela itu kena compute dingin
+    # penuh 44 detik. TTL 900s (>600s interval auto-cycle + jeda aman) --
+    # cache SELALU sempat di-refresh auto-cycle sebelum kadaluarsa, user
+    # nyaris tidak pernah kena compute dingin lagi di luar restart server.
+    _cache_set("confidence:raw", items, ttl=900)
     return items
 
 
@@ -1700,7 +2187,7 @@ async def confidence():
         "items": items,
         "weights": weights,
         "weight_source": weight_source,
-        "universe": len(SCREENER_UNIVERSE),
+        "universe": len(LIQUID_250),
         "market_regime": market_regime,
         "market_regime_score": market_regime_score,
         "computed_at": int(time.time()),
@@ -1720,6 +2207,10 @@ async def signals():
     pemicu audit, cuma memastikan data terbaru saat halaman dibuka."""
     from core.signal_history import get_signal_report
 
+    try:
+        await _run_pending_entry_audit_and_notify()
+    except Exception as e:
+        print(f"⚠️ Gagal audit pending-entry: {type(e).__name__}: {e}")
     try:
         await _run_signal_audit_and_notify()
     except Exception as e:
@@ -1760,7 +2251,59 @@ async def signals():
             sig["floating_price"] = round(price, 2)
             sig["floating_return_pct"] = round(floating_pct, 2)
 
+    # "Jarak ke entry" utk PENDING_ENTRY (migrasi ke-16) -- sama semangat
+    # dgn floating P&L di atas, tapi maknanya beda: ini BUKAN untung/rugi
+    # (belum ada posisi), murni "harga sekarang segini, entry yang
+    # disarankan segini, tinggal berapa % lagi turun supaya kena". Reuse
+    # lookup live yang SAMA (bukan basis harian) -- alasan identik dgn di
+    # atas.
+    pending_signals = [s for s in report.get("signals", []) if s.get("status") == "PENDING_ENTRY"]
+    if pending_signals:
+        prices = await asyncio.gather(
+            *[_signal_entry_price_lookup(s["kode"]) for s in pending_signals],
+            return_exceptions=True,
+        )
+        for sig, price in zip(pending_signals, prices):
+            if isinstance(price, Exception) or not price:
+                continue
+            entry = sig["entry_price"]
+            sig["current_price"] = round(price, 2)
+            sig["distance_to_entry_pct"] = round((price / entry - 1) * 100, 2)
+
     return _py(report)
+
+
+@app.get("/api/signals/riwayat-harian")
+async def api_signals_riwayat_harian(tanggal: str | None = None):
+    """Riwayat HARIAN Audit Sinyal -- permintaan user langsung: "track
+    sinyalnya, hari ini wr berapa loss berapa yg berjalan apa aja,
+    besoknya yg lanjut naik apa yg turun apa, sama di riwayat ada tombol
+    tanggal jadi bisa liat riwayat wr signal". tanggal opsional
+    ('YYYY-MM-DD', default hari ini).
+
+    Memicu record_daily_snapshots() dulu (idempotent per hari, SAMA pola
+    dgn /api/signals memicu audit) supaya snapshot HARI INI selalu ada
+    saat endpoint ini dibuka, tidak menunggu siklus background 10 menit --
+    TAPI HANYA kalau tanggal yang diminta adalah HARI INI (atau tidak
+    diisi). REVISI: sebelumnya dipanggil UNCONDITIONAL di setiap request,
+    termasuk saat date-picker di frontend browsing ke tanggal LAMPAU --
+    itu SIA-SIA (snapshot HARI INI tidak relevan utk recap tanggal lain)
+    dan BOROS (record_daily_snapshots melakukan real-time price lookup
+    sama lambatnya dgn /api/signals, ~detikan per sinyal OPEN x puluhan
+    sinyal) -- ketauan dari trace Playwright: klik date-picker ke tanggal
+    lampau tetap makan puluhan detik, padahal seharusnya cuma query
+    SQLite biasa (cepat) krn tidak perlu snapshot baru sama sekali."""
+    from datetime import datetime as _dt
+    from core.signal_history import get_daily_recap, record_daily_snapshots
+
+    if tanggal is None or tanggal == _dt.now().strftime("%Y-%m-%d"):
+        try:
+            await record_daily_snapshots(_signal_entry_price_lookup)
+        except Exception as e:
+            print(f"⚠️ Gagal catat snapshot harian: {type(e).__name__}: {e}")
+
+    recap = await asyncio.to_thread(get_daily_recap, tanggal)
+    return _py(recap)
 
 
 @app.post("/api/backtest")
@@ -1826,16 +2369,28 @@ async def universe(scope: str = "core"):
     except Exception:
         raise HTTPException(502, "Gagal memuat data universe. Coba lagi sebentar.")
 
-    items = []
+    cleaned = {}
     for t in tickers:
-        kode = t.replace(".JK", "")
         df = data.get(t) if isinstance(data, dict) else None
         if df is None:
             continue
         try:
-            df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+            cleaned[t] = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
         except Exception:
             continue
+    # Tambal celah bar harian terbaru (lihat _backfill_recent_gap) -- endpoint
+    # ini jalur fetch KETIGA yang terpisah dari _clean()/_confidence_raw_
+    # signals() dan sama-sama kena bug yang sama (price/change_1d di sini
+    # dihitung langsung dari Close baris terakhir, jadi kalau baris itu
+    # hilang/basi, harga & % perubahan yang ditampilkan ikut basi juga --
+    # inilah kenapa marquee/Top Movers/Pasar keliatan "macet" walau
+    # cache sisi klien sudah diperbaiki).
+    cleaned = await _backfill_recent_gap_batch(cleaned)
+
+    items = []
+    for t in tickers:
+        kode = t.replace(".JK", "")
+        df = cleaned.get(t)
         if df is None or len(df) < 50:
             continue
         try:
@@ -2662,36 +3217,44 @@ async def screener_fundamental():
 
 
 _MACRO_TICKERS = {
-    # Kurs
-    "USDIDR=X": {"label": "USD / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": "🇺🇸"},
-    "EURIDR=X": {"label": "EUR / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": "🇪🇺"},
-    "JPYIDR=X": {"label": "JPY / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": "🇯🇵"},
-    "CNHIDR=X": {"label": "CNY / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": "🇨🇳"},
+    # Kurs -- icon dipakai sbg kode ticker singkat (teks polos), BUKAN emoji
+    # flag/pictogram: emoji flag (regional indicator) tidak render sbg
+    # bendera sungguhan di banyak font Windows (jadi teks 2-huruf acak),
+    # dan emoji lain (medali, tong minyak, dst) tampil belang dgn sistem
+    # ikon SVG custom yang sudah dipakai di seluruh halaman lain -- sama
+    # kelas masalah dgn sweep ikon Screener/Audit Sinyal, ketemu belakangan
+    # krn halaman Makro tidak ikut ter-render saat sweep awal dilakukan.
+    # icon dikosongkan utk kurs -- label ("USD / IDR") sendiri SUDAH berupa
+    # kode, kasih prefix kode lagi cuma bikin duplikat ("USD USD / IDR").
+    "USDIDR=X": {"label": "USD / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": ""},
+    "EURIDR=X": {"label": "EUR / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": ""},
+    "JPYIDR=X": {"label": "JPY / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": ""},
+    "CNHIDR=X": {"label": "CNY / IDR",    "cat": "kurs",      "unit": "IDR",       "icon": ""},
     # Energi & Logam — CME/COMEX, batch-compatible
-    "GC=F":     {"label": "Emas",         "cat": "komoditas", "unit": "USD/oz",    "icon": "🥇"},
-    "SI=F":     {"label": "Perak",        "cat": "komoditas", "unit": "USD/oz",    "icon": "🥈"},
-    "HG=F":     {"label": "Tembaga",      "cat": "komoditas", "unit": "USD/lb",    "icon": "🟠"},
-    "CL=F":     {"label": "Minyak WTI",   "cat": "komoditas", "unit": "USD/bbl",   "icon": "🛢"},
-    "BZ=F":     {"label": "Minyak Brent", "cat": "komoditas", "unit": "USD/bbl",   "icon": "🛢"},
-    "NG=F":     {"label": "Gas Alam",     "cat": "komoditas", "unit": "USD/MMBtu", "icon": "🔥"},
+    "GC=F":     {"label": "Emas",         "cat": "komoditas", "unit": "USD/oz",    "icon": "XAU"},
+    "SI=F":     {"label": "Perak",        "cat": "komoditas", "unit": "USD/oz",    "icon": "XAG"},
+    "HG=F":     {"label": "Tembaga",      "cat": "komoditas", "unit": "USD/lb",    "icon": "CU"},
+    "CL=F":     {"label": "Minyak WTI",   "cat": "komoditas", "unit": "USD/bbl",   "icon": "WTI"},
+    "BZ=F":     {"label": "Minyak Brent", "cat": "komoditas", "unit": "USD/bbl",   "icon": "BRENT"},
+    "NG=F":     {"label": "Gas Alam",     "cat": "komoditas", "unit": "USD/MMBtu", "icon": "NG"},
     # Nickel, CPO, Batu Bara — gunakan ETC London sebagai proxy (ICE/LME futures tidak tersedia di Yahoo)
-    "NICL.L":   {"label": "Nickel",       "cat": "komoditas", "unit": "GBX/unit",  "icon": "⚙"},
-    "PALM.L":   {"label": "CPO",          "cat": "komoditas", "unit": "GBX/unit",  "icon": "🌴"},
+    "NICL.L":   {"label": "Nickel",       "cat": "komoditas", "unit": "GBX/unit",  "icon": "NI"},
+    "PALM.L":   {"label": "CPO",          "cat": "komoditas", "unit": "GBX/unit",  "icon": "CPO"},
     # Agri & Bahan Pokok — ICE/CBOT (KC=F/CC=F diambil individual karena batch gagal)
-    "KC=F":     {"label": "Kopi Arabika", "cat": "agri",      "unit": "¢/lb",      "icon": "☕", "individual": True},
-    "SB=F":     {"label": "Gula",         "cat": "agri",      "unit": "¢/lb",      "icon": "🍬"},
-    "CC=F":     {"label": "Kakao",        "cat": "agri",      "unit": "USD/t",     "icon": "🍫", "individual": True},
-    "ZC=F":     {"label": "Jagung",       "cat": "agri",      "unit": "¢/bu",      "icon": "🌽"},
-    "ZS=F":     {"label": "Kedelai",      "cat": "agri",      "unit": "¢/bu",      "icon": "🫘"},
-    "ZW=F":     {"label": "Gandum",       "cat": "agri",      "unit": "¢/bu",      "icon": "🌾"},
-    "ZR=F":     {"label": "Beras",        "cat": "agri",      "unit": "USD/cwt",   "icon": "🍚"},
-    "ZL=F":     {"label": "Minyak Sawit", "cat": "agri",      "unit": "¢/lb",      "icon": "🌻"},
+    "KC=F":     {"label": "Kopi Arabika", "cat": "agri",      "unit": "¢/lb",      "icon": "KC", "individual": True},
+    "SB=F":     {"label": "Gula",         "cat": "agri",      "unit": "¢/lb",      "icon": "SB"},
+    "CC=F":     {"label": "Kakao",        "cat": "agri",      "unit": "USD/t",     "icon": "CC", "individual": True},
+    "ZC=F":     {"label": "Jagung",       "cat": "agri",      "unit": "¢/bu",      "icon": "CORN"},
+    "ZS=F":     {"label": "Kedelai",      "cat": "agri",      "unit": "¢/bu",      "icon": "SOY"},
+    "ZW=F":     {"label": "Gandum",       "cat": "agri",      "unit": "¢/bu",      "icon": "WHEAT"},
+    "ZR=F":     {"label": "Beras",        "cat": "agri",      "unit": "USD/cwt",   "icon": "RICE"},
+    "ZL=F":     {"label": "Minyak Sawit", "cat": "agri",      "unit": "¢/lb",      "icon": "PALM"},
     # Pasar Global
-    "^GSPC":    {"label": "S&P 500",      "cat": "global",    "unit": "pts",       "icon": "🇺🇸"},
-    "^DJI":     {"label": "Dow Jones",    "cat": "global",    "unit": "pts",       "icon": "🏛"},
-    "^IXIC":    {"label": "Nasdaq",       "cat": "global",    "unit": "pts",       "icon": "💻"},
-    "^N225":    {"label": "Nikkei 225",   "cat": "global",    "unit": "pts",       "icon": "🇯🇵"},
-    "^HSI":     {"label": "Hang Seng",    "cat": "global",    "unit": "pts",       "icon": "🇭🇰"},
+    "^GSPC":    {"label": "S&P 500",      "cat": "global",    "unit": "pts",       "icon": "SPX"},
+    "^DJI":     {"label": "Dow Jones",    "cat": "global",    "unit": "pts",       "icon": "DJI"},
+    "^IXIC":    {"label": "Nasdaq",       "cat": "global",    "unit": "pts",       "icon": "IXIC"},
+    "^N225":    {"label": "Nikkei 225",   "cat": "global",    "unit": "pts",       "icon": "N225"},
+    "^HSI":     {"label": "Hang Seng",    "cat": "global",    "unit": "pts",       "icon": "HSI"},
 }
 
 _MACRO_SECTOR_IMPACT = {
@@ -3597,9 +4160,28 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
     masing-masing oleh endpoint pemanggil, bukan di sini. Field 'jabatan'
     hasil parse SUDAH berisi posisi resmi (Direktur/Komisaris/dst) untuk
     pelapor insider -- makanya transaksi insider tidak perlu sumber data
-    baru, cuma perlu tidak dibuang oleh filter ≥5%."""
+    baru, cuma perlu tidak dibuang oleh filter ≥5%.
+
+    Cache HASIL MENTAH per-hari DI SINI (key 'x15raw:{days_back}') -- BUKAN
+    cuma di lapisan endpoint (/api/x15, /api/insider) seperti sebelumnya.
+    Ditemukan nyata: /api/pemegang-saham/{kode} (dipakai halaman Pemegang
+    Saham) butuh scan sampai 90 hari SEKALIGUS per saham, dan kalau tiap
+    hari selalu fetch ULANG ke idx.co.id (tidak reuse cache /api/x15/
+    /api/insider yang sudah ada), beberapa panggilan berturut-turut
+    (mis. cek beberapa saham cepat) bisa dengan mudah menembak >100
+    request ke idx.co.id dalam hitungan detik -- PERSIS yang terjadi:
+    idx.co.id sendiri membalas 429 (rate-limited PIHAK MEREKA, bukan
+    limiter kita), yang kalau dibiarkan bisa membuat IP kita diblokir dan
+    MEROBOHKAN /api/x15 & /api/insider yang sudah berjalan baik. Dengan
+    cache di sini, KETIGA konsumen (x15, insider, pemegang-saham) berbagi
+    SATU hasil fetch per hari, bukan tiga (atau lebih) fetch terpisah."""
     from datetime import timedelta as _td, datetime as _dt
     import cloudscraper as _cs
+
+    cache_key = f"x15raw:{days_back}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     def _sync():
         sc = _cs.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
@@ -3610,7 +4192,12 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
                     "dateFrom": today, "dateTo": today, "lang": "id", "keyword": "kepemilikan"},
             timeout=15,
         )
-        replies = r.json().get("Replies", []) if r.status_code == 200 else []
+        if r.status_code != 200:
+            # Termasuk 429 (rate-limited idx.co.id sendiri) -- JANGAN cache
+            # kegagalan sbg "tidak ada filing", biar dicoba lagi nanti
+            # (bukan "basi" selama _CACHE_TTL_HISTORICAL/24 jam).
+            return None
+        replies = r.json().get("Replies", [])
         results = []
         for rep in replies:
             p = rep["pengumuman"]
@@ -3641,7 +4228,11 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
         return results
 
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync)
+    results = await loop.run_in_executor(None, _sync)
+    if results is None:
+        return []
+    _cache_set(cache_key, results, ttl=_CACHE_TTL if days_back == 0 else _CACHE_TTL_HISTORICAL)
+    return results
 
 
 def _is_insider_jabatan(jabatan: str) -> bool:
@@ -3680,6 +4271,105 @@ def _split_x15_items(items: list[dict]) -> tuple[list[dict], list[dict], list[di
         key=lambda x: x["kode"],
     )
     return akumulasi, distribusi, aksi_korporasi
+
+
+def _latest_x15_holders_for_kode(items: list[dict]) -> list[dict]:
+    """Dari SEMUA filing X-15 milik SATU kode (rentang beberapa hari/bulan),
+    ambil HANYA filing TERBARU per pelapor (nama, atau perusahaan kalau
+    nama kosong/'null') sbg status kepemilikannya SAAT INI -- kalau
+    orang/entitas yang sama lapor beberapa kali (tiap kali ada perubahan),
+    filing LAMA-nya sudah basi (sudah digantikan filing baru), jangan
+    ditampilkan dobel.
+
+    Diurutkan dari % kepemilikan TERBESAR (pct_setelah) -- meniru
+    tampilan 'top holder' walau ini BUKAN registry lengkap (cuma yang
+    PERNAH lapor wajib ≥5%/insider, retail/pemegang kecil tidak pernah
+    muncul krn tidak wajib lapor)."""
+    latest_by_person: dict[str, dict] = {}
+    for it in items:
+        person_key = (it.get("nama") or it.get("perusahaan") or "").strip().lower()
+        if not person_key:
+            continue  # tidak bisa diidentifikasi (nama 'null' & perusahaan kosong) -- lewati, jangan ditebak
+        existing = latest_by_person.get(person_key)
+        if existing is None or it["tanggal"] > existing["tanggal"]:
+            latest_by_person[person_key] = it
+    return sorted(latest_by_person.values(), key=lambda x: x["pct_setelah"], reverse=True)
+
+
+async def _fetch_x15_history_for_kode(kode: str, days: int = 90) -> list[dict]:
+    """Kumpulkan SEMUA filing X-15 utk SATU kode dari rentang 'days' hari
+    kalender terakhir -- reuse _fetch_x15_today(days_back=d), yang SEKARANG
+    (lihat catatan di fungsi itu) sudah cache hasil MENTAH per-hari sendiri
+    ('x15raw:{d}'), jadi hari yang SUDAH pernah di-scan (oleh /api/x15,
+    /api/insider, ATAU kode lain yang lebih dulu dicek lewat endpoint ini)
+    tidak perlu fetch ulang ke idx.co.id.
+
+    Concurrency DIBATASI (semaphore, bukan asyncio.gather polos utk semua
+    hari sekaligus) -- ditemukan nyata: gather 90 request SEKALIGUS ke
+    idx.co.id (apalagi kalau di-panggil utk beberapa saham berturut-turut
+    dgn cache dingin) memicu idx.co.id MEMBALAS 429 (rate-limit di PIHAK
+    MEREKA), yang kalau dibiarkan bisa membuat IP kita diblokir dan
+    merobohkan /api/x15 & /api/insider yang sudah berjalan baik sebelum
+    fitur ini ada. 8 konkuren cukup cepat tanpa membombardir sekaligus."""
+    days = max(1, min(90, days))
+    sem = asyncio.Semaphore(8)
+
+    async def _fetch_one(d):
+        async with sem:
+            return await _fetch_x15_today(days_back=d)
+
+    results_per_day = await asyncio.gather(
+        *[_fetch_one(d) for d in range(days)],
+        return_exceptions=True,
+    )
+    kode = kode.upper()
+    items = []
+    for day_result in results_per_day:
+        if isinstance(day_result, Exception):
+            continue
+        items.extend(x for x in day_result if x["kode"] == kode)
+    return items
+
+
+@app.get("/api/pemegang-saham/{kode}")
+async def api_pemegang_saham(kode: str):
+    """Pemegang saham ≥5% & insider (Direksi/Komisaris/Pengendali) utk
+    SATU saham, dari filing X-15/POJK 4-2024 resmi IDX yang sama dgn
+    /api/x15 -- BUKAN registry lengkap KSEI (lihat catatan jujur di
+    'disclaimer' respons): cuma pelapor yang PERNAH mengajukan filing
+    wajib dalam 90 hari terakhir yang muncul, pemegang kecil (di bawah 5%
+    & bukan insider) tidak pernah tercatat krn memang tidak wajib lapor.
+    Persentase, BUKAN jumlah lembar saham/nilai Rupiah -- filing X-15
+    cuma melaporkan hak suara sebelum/sesudah dalam %, tidak menyertakan
+    jumlah saham mentah."""
+    kode = kode.upper().strip()
+    cache_key = f"pemegang_saham:{kode}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        raw_items = await _fetch_x15_history_for_kode(kode, days=90)
+    except Exception as e:
+        raise HTTPException(502, f"Gagal fetch data pemegang saham: {e}")
+
+    holders = _latest_x15_holders_for_kode(raw_items)
+    for h in holders:
+        h["is_insider"] = _is_insider_jabatan(h["jabatan"])
+        h["nama_tampil"] = h.get("nama") or h.get("perusahaan") or "(tidak diketahui)"
+
+    payload = _py({
+        "kode": kode,
+        "holders": holders,
+        "total": len(holders),
+        "disclaimer": ("Data dari filing X-15/POJK 4-2024 resmi IDX (pemegang ≥5% & insider yang "
+                       "wajib lapor perubahan kepemilikan), 90 hari terakhir. BUKAN daftar lengkap "
+                       "seluruh pemegang saham -- pemegang di bawah 5% (termasuk retail) tidak wajib "
+                       "lapor sehingga tidak pernah muncul di sini. Persentase hak suara, bukan jumlah "
+                       "saham/nilai Rupiah (tidak dilaporkan dalam filing ini)."),
+    })
+    _cache_set(cache_key, payload, ttl=_CACHE_TTL_HISTORICAL)
+    return payload
 
 
 @app.get("/api/x15")

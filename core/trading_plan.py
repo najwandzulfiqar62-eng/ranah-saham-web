@@ -28,6 +28,20 @@ from core.indicators import calculate_atr, calculate_support_resistance_deep, ca
 # sudah ada -- konsisten, bukan angka baru yang asal pilih.
 MIN_SL_PCT = 3.0
 
+# Diskon entry PULLBACK dari harga saat ini (persen). REVISI KETIGA sehari
+# (S1 pivot -> MA20 -> 1x ATR -> INI, permintaan user langsung sambil
+# lihat data nyata: "nih kaya gini kejauhan keburu org pada tp saya
+# mintanya entry pada hari itu bukan nunggu lama kaya gitu" -- BRMS
+# tercatat Rp478 tapi harga sudah lari ke Rp505 (+5,65%) SEBELUM entry
+# sempat kena, padahal TP1-nya cuma Rp500 -- pasar sudah "lewat" area TP
+# sebelum PENDING_ENTRY sempat jadi OPEN. ATR (~1x, sering 3-6% dari
+# harga) & MA20 (bisa >5-10% saat tren kuat) SAMA-SAMA masih terlalu
+# dalam. Angka ini SENGAJA kecil (sisi bawah rentang 0,5-1% yang dipilih
+# user) supaya PENDING_ENTRY realistis kena LEWAT FLUKTUASI HARIAN WAJAR
+# (hari yang sama/besoknya), bukan menunggu pullback besar yang saham
+# keburu jalan duluan sebelum sempat terjadi.
+PULLBACK_DISCOUNT_PCT = 0.5
+
 
 def _calc_entry_levels(entry: float, atr: float, sr: dict) -> dict:
     """Hitung SL dan 3 level TP untuk satu titik entry. Dipakai bersama
@@ -95,9 +109,23 @@ def _calc_entry_levels(entry: float, atr: float, sr: dict) -> dict:
 
 def _determine_entry_points(current_price: float, atr: float, sr: dict) -> dict:
     """Tentukan 4 titik entry (normal/pullback/deep/breakout) berdasarkan
-    harga saat ini, ATR, dan level support/resistance."""
+    harga saat ini, ATR, dan level support/resistance.
+
+    PULLBACK -- REVISI KETIGA sehari (S1 pivot -> MA20 -> 1x ATR -> INI).
+    Kedua percobaan sebelumnya (MA20, lalu 1x ATR ~3-6% dari harga) SAMA-
+    SAMA masih dikoreksi user setelah lihat data nyata: BRMS tercatat
+    entry Rp478, tapi harga SUDAH lari ke Rp505 (+5,65%) SEBELUM entry
+    sempat kena -- padahal TP1-nya cuma Rp500, jadi pasar sudah "lewat"
+    area TP sebelum PENDING_ENTRY sempat jadi OPEN sama sekali ("kejauhan
+    keburu org pada tp ... saya mintanya entry pada hari itu bukan nunggu
+    lama"). SEKARANG cuma diskon KECIL (lihat PULLBACK_DISCOUNT_PCT, 0,5%)
+    dari harga saat sinyal dicatat -- SENGAJA supaya PENDING_ENTRY
+    realistis kena lewat fluktuasi harian wajar (hari yang sama/besoknya),
+    BUKAN nunggu pullback besar yang keburu dilewati tren duluan. Ini
+    mengorbankan sebagian "tunggu harga lebih baik" demi jauh lebih
+    realistis kena -- trade-off yang sengaja dipilih user."""
     entry_normal = current_price
-    entry_pullback = sr["S1"] if sr["S1"] < current_price else current_price * 0.98
+    entry_pullback = current_price * (1 - PULLBACK_DISCOUNT_PCT / 100)
     entry_deep = sr["S2"] if sr["S2"] < current_price else current_price * 0.96
     breakout_level = sr["R1"] + (atr * 0.2)
     entry_breakout = breakout_level if breakout_level > current_price else current_price * 1.02
@@ -128,7 +156,7 @@ def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | No
 
     scenario_meta = {
         "normal": {"name": "NORMAL", "display_name": "📊 NORMAL"},
-        "pullback": {"name": "PULLBACK (S1)", "display_name": "📉 PULLBACK (S1)"},
+        "pullback": {"name": "PULLBACK (-0.5%)", "display_name": "📉 PULLBACK (-0.5%)"},
         "deep": {"name": "DEEP (S2)", "display_name": "🔻 DEEP (S2)"},
         "breakout": {"name": "BREAKOUT", "display_name": "🚀 BREAKOUT"},
     }
@@ -142,10 +170,48 @@ def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | No
             **_calc_entry_levels(entry_price, atr, sr),
         }
 
+    # recommended_scenario (permintaan user langsung: "skenario nya antara
+    # pullback atau breakout aja tapi valid soalnya kalo pullback kadang ga
+    # kena yg ada malah kena tp") -- SEBELUM ini Top Pick SELALU pakai
+    # 'pullback' apa adanya, padahal kalau saham SEDANG breakout momentum
+    # harga jarang mundur ke S1 lagi -- nunggu pullback yang tidak pernah
+    # datang membuat sinyal berakhir EXPIRED_NO_ENTRY padahal harga sudah
+    # lanjut jalan (bahkan sempat menyentuh level yang SEHARUSNYA jadi TP
+    # kalau entry-nya breakout, bukan pullback).
+    #
+    # PENTING -- SENGAJA TIDAK reuse is_breakout=(current_price > sr["R1"])
+    # dari calculate_advanced_plan_from_df: R1 di situ dihitung dari H/L/C
+    # HARI YANG SAMA (baris terakhir df itu sendiri), dan secara matematis
+    # pivot+range*0.382 SELALU >= Close hari itu (dibuktikan lewat aljabar
+    # + sanity check langsung -- bahkan candle yang closing PERSIS di High
+    # tetap menghasilkan R1 > Close). Itu artinya is_breakout di fungsi itu
+    # PADA DASARNYA TIDAK PERNAH true -- bug laten terpisah, di luar scope
+    # perubahan ini, TIDAK disentuh di sini supaya tidak memperbesar blast
+    # radius (fitur "Rencana Trading" lain yang memakainya).
+    #
+    # Definisi breakout yang dipakai DI SINI reuse PERSIS formula
+    # condition_breakout() di core/screening_pro.py::walk_forward_validate
+    # (mode 'breakout', SUDAH divalidasi walk-forward, bukan ambang baru
+    # yang dikarang): close hari ini > 98% dari HIGH 20 HARI SEBELUMNYA
+    # (index i-20:i, TIDAK termasuk hari ini -- bukan self-referential),
+    # DAN volume hari ini > 2x median volume 20 hari sebelumnya.
+    if len(df) >= 21:
+        prior_high_20 = float(df["Close"].iloc[-21:-1].max())
+        prior_vol_median = float(df["Volume"].iloc[-21:-1].median())
+        is_breakout = current_price > prior_high_20 * 0.98
+        volume_confirmation = bool(prior_vol_median > 0 and float(df["Volume"].iloc[-1]) > prior_vol_median * 2)
+    else:
+        is_breakout = False
+        volume_confirmation = False
+    recommended_scenario = "breakout" if (is_breakout and volume_confirmation) else "pullback"
+
     return {
         "created_date": created_date_str,
         "price_at_create": round(current_price, 0),
         "scenarios": scenarios,
+        "is_breakout": is_breakout,
+        "volume_confirmation": volume_confirmation,
+        "recommended_scenario": recommended_scenario,
     }
 
 

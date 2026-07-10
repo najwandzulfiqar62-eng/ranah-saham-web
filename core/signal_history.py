@@ -44,7 +44,7 @@
 # selain angka gabungan -- supaya user bisa benar-benar bandingkan mana
 # yang lebih valid, bukan cuma klaim.
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from core.database import get_db
 
@@ -52,6 +52,17 @@ from core.database import get_db
 # "kadaluarsa" (EXPIRED) -- horison realistis untuk sinyal teknikal
 # swing/menengah (bukan scalping harian, bukan juga investasi tahunan).
 MAX_HOLD_DAYS = 20
+
+# Sinyal PENDING_ENTRY (rekomendasi entry pullback, lihat migrasi ke-16)
+# yang harganya tidak pernah turun ke level itu dalam MAX_ENTRY_WAIT_DAYS
+# dianggap EXPIRED_NO_ENTRY -- SENGAJA lebih pendek dari MAX_HOLD_DAYS:
+# "menunggu kesempatan masuk" itu jendela yang lebih sempit drpd "menahan
+# posisi yang sudah aktif" -- setup teknikal yang jadi dasar rekomendasi
+# (AI Score, konfluensi, dll dihitung SAAT itu) makin basi seiring waktu
+# kalau harga tidak kunjung pullback; menunggu selama MAX_HOLD_DAYS penuh
+# cuma utk "dapat entry" akan membuat rekomendasi lama dipakai utk kondisi
+# pasar yang sudah jauh berubah.
+MAX_ENTRY_WAIT_DAYS = 5
 
 # Ambang minimum confidence_score supaya masuk daftar yang diaudit --
 # JANGAN catat SEMUA 45 saham tiap hari (terlalu bising, dan sinyal yang
@@ -84,6 +95,44 @@ def _is_bursa_weekend() -> bool:
     luar cakupan perbaikan ini. Tetap perbaikan nyata utk kasus dominan
     (2 dari 7 hari), bukan solusi lengkap."""
     return datetime.now().weekday() >= 5  # 5=Sabtu, 6=Minggu
+
+
+def _is_bursa_trading_hours() -> bool:
+    """True kalau SEDANG dalam jam bursa BEI (Senin-Jumat, kira-kira
+    09:00-16:00 WIB) -- dipakai utk mencegah audit_open_signals()
+    meresolusi TP/SL/EXPIRED pakai harga yang SEBENARNYA basi tapi salah
+    dikira "harga hari ini".
+
+    BUG NYATA ditemukan lewat laporan user langsung ("ngebug nih perasaan
+    arto bukan harga segitu hari ini"): sinyal ARTO yang baru dicatat jam
+    00:01 WIB (9 jam SEBELUM bursa buka) langsung ter-audit 6 detik
+    kemudian jadi TP_HIT, memakai fast_info.last_price yfinance yang
+    ternyata cuma ECHO closing print sesi SEBELUMNYA -- yfinance TIDAK
+    membedakan "harga baru hari ini" vs "harga terakhir yg pernah
+    tercatat" di luar jam bursa, keduanya sama-sama muncul di fast_info.
+    Staleness guard yang SUDAH ADA di audit_open_signals (price_date <
+    recorded_date) TIDAK PERNAH menangkap kasus ini krn
+    _signal_audit_price_lookup (web/app.py) menstempel SEMUA hasil
+    fast_info sbg tanggal HARI INI tanpa syarat -- tanggalnya memang
+    "hari ini", masalahnya HARGANYA yang basi (jam bursa belum mulai).
+
+    Perbaikan di sini: JANGAN audit sama sekali kalau bursa jelas belum/
+    sudah tidak buka -- lebih aman drpd mencoba mendeteksi "kesegaran"
+    dari payload fast_info (field itu tidak reliably tersedia).
+
+    KETERBATASAN YANG JUJUR DICATAT (sama pola dgn _is_bursa_weekend()):
+    - Jam istirahat siang (12:00-13:30) SENGAJA tidak ditutup presisi --
+      harga tidak bergerak saat istirahat, jadi audit yang jalan di jam
+      segitu tetap aman (harga cuma "agak basi beberapa jam", BUKAN
+      "basi 8+ jam sejak sesi kemarin" spt kasus 00:01 WIB di atas).
+    - Libur nasional Indonesia yg jatuh di hari kerja BELUM ditutup --
+      butuh kalender libur bursa eksternal, di luar cakupan perbaikan
+      ini (sama keterbatasan yg sudah diakui di _is_bursa_weekend())."""
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    hm = now.hour * 60 + now.minute
+    return 9 * 60 <= hm <= 16 * 60  # 09:00-16:00 WIB
 
 
 # CATATAN TIMEZONE PENTING: semua SQL di modul ini yang butuh "tanggal hari
@@ -336,41 +385,30 @@ def _ensure_table():
         # sinyal sebelumnya utk kode itu sudah/sedang resolve, membuat 2+
         # baris kode+tanggal yang sama muncul berdampingan.
         #
-        # Bersihkan riwayat yang SUDAH kadung begini: utk tiap grup (kode,
-        # tanggal) yang py >1 baris, PRIORITASKAN baris yang masih OPEN
-        # (itu "cerita aktif" saat ini utk kode itu); kalau tidak ada yang
-        # OPEN (semua sudah resolved), sisakan id TERKECIL (paling awal
-        # direkam). Dua langkah supaya logikanya gampang diverifikasi:
-        # (1) hapus semua baris NON-OPEN dalam grup yang py baris OPEN,
-        # (2) utk grup yang tersisa (semua resolved), sisakan MIN(id).
-        conn.execute('''
-            DELETE FROM signal_history
-            WHERE status != 'OPEN'
-              AND EXISTS (
-                  SELECT 1 FROM signal_history s2
-                  WHERE s2.kode = signal_history.kode
-                    AND date(s2.recorded_at) = date(signal_history.recorded_at)
-                    AND s2.status = 'OPEN'
-              )
-        ''')
-        # `AND status != 'OPEN'` di bawah ini SECARA LOGIKA seharusnya
-        # tidak pernah menyaring apa pun pada titik ini (migrasi keenam +
-        # idx_signal_unique_open_kode sudah menjamin maksimal 1 baris OPEN
-        # per kode SEBELUM migrasi ini jalan, dan tidak ada baris di file
-        # ini yang pernah mengembalikan status ke OPEN) -- ditambahkan
-        # sbg pengaman eksplisit (bukan cuma implisit lewat urutan
-        # migrasi) setelah verifikasi adversarial menunjukkan: TANPA guard
-        # ini, kalau invarian itu PERNAH rusak di masa depan (mis. urutan
-        # migrasi diubah), langkah ini akan diam-diam menghapus salah satu
-        # dari dua baris OPEN yang sah -- bukan cuma riwayat, tapi POSISI
-        # AKTIF yang sedang dipantau. Step A di atas sudah punya guard yang
-        # sama (`status != 'OPEN'`); ini menyamakan Step B supaya konsisten.
-        conn.execute('''
-            DELETE FROM signal_history
-            WHERE status != 'OPEN' AND id NOT IN (
-                SELECT MIN(id) FROM signal_history GROUP BY kode, date(recorded_at)
-            )
-        ''')
+        # RETRAKSI (2026-07-08): kedua DELETE migrasi kesepuluh (Step A/B)
+        # DICABUT -- BUKAN dijalankan lagi. Alasan: user melaporkan riwayat
+        # SL_HIT INDF yang sah hilang begitu saja ("perasaan kmrn indf kena
+        # sl ko ilang"); investigasi live DB membuktikan migrasi kedua
+        # belas Step A (di bawah) menghapusnya, tapi migrasi ini (kesepuluh)
+        # SATU KELUARGA BUG YANG SAMA: baik Step A maupun B DI SINI
+        # menghapus baris yang statusnya SUDAH resolved (TP_HIT/SL_HIT)
+        # HANYA karena ada baris LAIN utk kode yang sama yang "terlihat
+        # bentrok" (direkam di tanggal yang sama / sama-sama resolved).
+        # Komentar asli di atas SENDIRI mengakui baris-baris itu "bukan
+        # 'salah' secara teknis (dua teori entry independen)" -- artinya
+        # migrasi ini SADAR menghapus sinyal yang SAH & BERBEDA, semata
+        # demi tampilan (biar user tidak bingung lihat "dua cerita" utk
+        # satu kode). Itu justru KEBALIKAN dari prinsip yang ditegaskan
+        # user hari ini: "misalkan ada yg kena sl kmrn atau hari ini jgn
+        # di hapus buat ngetrack" -- lihat catatan prinsip di kepala modul
+        # ini ("JANGAN PERNAH mengarang win rate"). Menghapus sinyal yang
+        # SUDAH resolve (menang ATAU kalah) demi kerapian tampilan sama
+        # saja dgn mengarang ulang track record: riwayat yang tersisa jadi
+        # tidak lagi representasi jujur dari semua sinyal yang pernah
+        # dicatat. Kalau ke depan dua baris utk kode yang sama di tanggal
+        # berdekatan memang bikin bingung dilihat berdampingan, itu masalah
+        # TAMPILAN (mis. kelompokkan per source di UI) -- BUKAN alasan
+        # menghapus data dari signal_history.
         # Migrasi kesebelas: permintaan user langsung (menunjuk ANTM/ACES
         # kena SL padahal SL-nya kedeketan -- "selagi masih oke bisa di
         # hold"): floor MIN_SL_PCT di _calc_entry_levels() (core/
@@ -409,34 +447,28 @@ def _ensure_table():
         # baris baru itu nanti resolve) bisa jadi tanggal yang SAMA --
         # persis pola ANTM yang migrasi kesepuluh coba tutup.
         #
-        # Bersihkan: utk tiap kode yang py baris resolved (bukan OPEN)
-        # HARI INI ATAU KEMARIN* dan JUGA py baris OPEN, PRIORITASKAN yang
-        # OPEN (pola sama dgn migrasi kesepuluh Step A) -- hapus baris
-        # resolved yang "menabrak" cerita aktif yang sedang berjalan.
-        # (*dicek s.d. kemarin, bukan cuma hari ini, supaya migrasi ini
-        # idempotent aman dijalankan kapan pun server restart, bukan cuma
-        # persis di hari kejadian.)
-        conn.execute('''
-            DELETE FROM signal_history
-            WHERE status != 'OPEN'
-              AND resolved_at IS NOT NULL
-              AND EXISTS (
-                  SELECT 1 FROM signal_history s2
-                  WHERE s2.kode = signal_history.kode AND s2.status = 'OPEN'
-              )
-        ''')
-        # Sisi lain: kalau TIDAK ada yang OPEN, tapi >1 baris resolved utk
-        # kode yang sama kebetulan resolve di TANGGAL YANG SAMA (resolved_
-        # at), itu juga "dua cerita, satu hari" yang membingungkan -- sisakan
-        # id TERKECIL (paling awal direkam).
-        conn.execute('''
-            DELETE FROM signal_history
-            WHERE resolved_at IS NOT NULL AND id NOT IN (
-                SELECT MIN(id) FROM signal_history
-                WHERE resolved_at IS NOT NULL
-                GROUP BY kode, date(resolved_at)
-            )
-        ''')
+        # RETRAKSI (2026-07-08): kedua DELETE migrasi kedua belas (Step A/B)
+        # DICABUT -- INI AKAR MASALAH NYATA yang menghapus riwayat SL_HIT
+        # INDF yang sah (dilaporkan user: "perasaan kmrn indf kena sl ko
+        # ilang"). Step A di atas TIDAK PERNAH benar-benar membatasi ke
+        # "hari ini atau kemarin" seperti yang diklaim komentar aslinya --
+        # klausul EXISTS-nya cuma cek "kode ini py baris OPEN", TANPA syarat
+        # tanggal apa pun antara baris resolved & baris OPEN itu. Akibatnya:
+        # SETIAP kali server restart (migrasi ini jalan ulang tiap startup),
+        # SETIAP kode yang py riwayat resolved DAN SEDANG py posisi OPEN
+        # baru -- walau resolved-nya berhari-hari/berminggu-minggu
+        # sebelumnya, sama sekali tidak "bentrok" dgn posisi OPEN yang
+        # baru -- riwayat resolved-nya DIHAPUS PERMANEN. Dibuktikan nyata:
+        # live DB cuma menyisakan 2 baris resolved dari 32 baris total
+        # setelah beberapa kali restart. Step B py masalah serupa (kolaps
+        # >1 resolusi SAH pada kode yang sama hanya krn kebetulan resolve
+        # di tanggal kalender yang sama). Sama seperti retraksi migrasi
+        # kesepuluh di atas: menghapus sinyal yang sudah resolve demi
+        # menghindari "dua cerita" yang membingungkan justru melanggar
+        # prinsip inti modul ini (JANGAN PERNAH mengarang win rate) dan
+        # instruksi eksplisit user ("jgn di hapus buat ngetrack"). Data yang
+        # SUDAH terhapus oleh bug ini (termasuk INDF) TIDAK BISA
+        # dikembalikan -- tidak ada backup dari titik sebelum terhapus.
         # Migrasi ketiga belas: permintaan user langsung, menunjuk ANTM &
         # ACES ("masih sama belom berubah sl masih kedeketan tolong
         # perbaiki semua") -- migrasi kesebelas SENGAJA tidak menyentuh
@@ -506,6 +538,67 @@ def _ensure_table():
         # Jujur merepresentasikan apa yang SUNGGUHAN terjadi, bukan
         # mengarang seolah sudah sampai TP3.
         conn.execute("UPDATE signal_history SET tp_level_hit = 1 WHERE status = 'TP_HIT' AND tp_level_hit = 0")
+        # Migrasi kelima belas: permintaan user langsung ("bisa ga di audit
+        # sinyal dibuat track sinyalnya, hari ini wr berapa loss berapa yg
+        # berjalan apa aja, besoknya yg lanjut naik apa yg turun apa") --
+        # snapshot HARIAN per sinyal OPEN (harga & progres saat itu), supaya
+        # bisa dibandingkan hari-ke-hari ("naik/turun DIBANDING KEMARIN").
+        # Tabel BARU, bukan kolom baru di signal_history -- satu sinyal
+        # OPEN butuh SATU baris snapshot PER HARI dia masih terbuka (time
+        # series), beda sifatnya dari signal_history yang satu baris per
+        # sinyal. JUJUR: snapshot baru mulai tercatat dari migrasi ini
+        # jalan pertama kali -- tidak bisa direkonstruksi mundur ke hari-
+        # hari SEBELUM fitur ini ada (data harga historis per-hari utk tiap
+        # sinyal OPEN tidak pernah disimpan sebelumnya).
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS signal_daily_snapshot (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id            INTEGER NOT NULL REFERENCES signal_history(id),
+                tanggal              TEXT NOT NULL,
+                price                REAL,
+                floating_return_pct  REAL,
+                status               TEXT NOT NULL,
+                tp_level_hit         INTEGER NOT NULL DEFAULT 0,
+                dicatat_at           TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                UNIQUE(signal_id, tanggal)
+            )
+        ''')
+        # Migrasi keenam belas: permintaan user langsung ("gimana kalo kamu
+        # jadi analyst, nentuin entrinya dimana ketika ada sinyal masuk,
+        # nanti tinggal liat kena entry yg disaranin apa engga"). SEBELUM
+        # ini, entry_price TOP_PICK diklaim "sudah kena hari ini" (dipilih
+        # dari skenario yang low/high HARI ITU kebetulan menyentuhnya) --
+        # itu artinya sistem sering mengklaim entry yang di dunia nyata
+        # TIDAK MUNGKIN dieksekusi trader (baru baca sinyalnya hari itu,
+        # bukan travel-back-in-time ke harga pullback yang sudah lewat).
+        # Sekarang dipisah jadi 2 fase: status PENDING_ENTRY dulu (entry
+        # yang DIREKOMENDASIKAN, skenario pullback/S1 -- lihat
+        # _confidence_raw_signals di web/app.py), baru pindah ke OPEN
+        # (posisi aktif, TP/SL mulai dihitung) begitu harga BENERAN
+        # menyentuh level itu (lihat audit_pending_entries). Kalau tidak
+        # pernah tersentuh dalam MAX_ENTRY_WAIT_DAYS, jadi EXPIRED_NO_ENTRY
+        # (bukan menang bukan kalah -- analisisnya mungkin benar, cuma
+        # pasar tidak pernah kasih kesempatan masuk).
+        #
+        # entry_filled_at: kapan status PENDING_ENTRY->OPEN terjadi (beda
+        # dari recorded_at, yang tetap berarti "kapan rekomendasi dibuat").
+        # NULL utk baris lama (sebelum migrasi ini) & baris yang tidak
+        # lewat fase PENDING_ENTRY sama sekali -- audit_open_signals HARUS
+        # fallback ke recorded_at kalau ini NULL, supaya MAX_HOLD_DAYS baris
+        # lama tidak tiba-tiba berubah makna.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(signal_history)").fetchall()}
+        if "entry_filled_at" not in cols:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN entry_filled_at TEXT")
+        # Perluas index unique "1 cerita aktif per kode" supaya PENDING_ENTRY
+        # ikut dihitung sbg "aktif" (sama semangat dgn OPEN) -- kalau tidak,
+        # kode yang sama bisa dapat BANYAK rekomendasi PENDING_ENTRY yang
+        # menumpuk tiap hari selama entry-nya belum/tidak pernah tersentuh.
+        conn.execute('DROP INDEX IF EXISTS idx_signal_unique_open_kode')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique_active_kode
+            ON signal_history(kode)
+            WHERE status IN ('OPEN', 'PENDING_ENTRY')
+        ''')
     _ensured = True
 
 
@@ -564,7 +657,7 @@ def _has_open_signal(kode: str) -> bool:
     with get_db() as conn:
         row = conn.execute('''
             SELECT 1 FROM signal_history
-            WHERE kode = ? AND (status = 'OPEN' OR date(resolved_at) = date('now', 'localtime'))
+            WHERE kode = ? AND (status IN ('OPEN', 'PENDING_ENTRY') OR date(resolved_at) = date('now', 'localtime'))
             LIMIT 1
         ''', (kode,)).fetchone()
     return row is not None
@@ -603,6 +696,40 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     _ensure_table()
     if _is_bursa_weekend():
         return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
+
+    # Sisa kuota HARI INI (BUKAN cuma sisa kuota panggilan ini) -- bug NYATA
+    # ditemukan lewat verifikasi live setelah universe diperluas ke LIQUID_250
+    # (178 saham): MAX_RECORDED_PER_DAY cuma dipotong PER PANGGILAN, bukan
+    # akumulatif per hari. confidence() dipanggil ULANG tiap siklus auto-cycle
+    # (~10 menit, lihat SIGNAL_AUTO_INTERVAL_SECONDS di web/app.py) -- begitu
+    # 10 kandidat skor-tertinggi panggilan PERTAMA sudah PENDING_ENTRY (jadi
+    # otomatis diblokir _has_open_signal), panggilan KEDUA 10 menit kemudian
+    # akan lolos ke 10 kandidat BERIKUTNYA (rank 11-20) yang belum diblokir,
+    # lalu panggilan KETIGA ke rank 21-30, dst -- tanpa henti sepanjang hari
+    # bursa, jauh melampaui "MAX 10/hari" yang namanya sendiri menjanjikan
+    # (terverifikasi nyata: 21 PENDING_ENTRY baru muncul dari cuma 2-3 kali
+    # panggilan manual dalam hitungan menit). Query di bawah menghitung
+    # BERAPA yang SUDAH tercatat hari ini (source TOP_PICK), supaya kuota
+    # yang tersisa MENGECIL tiap panggilan, bukan reset ke 10 tiap kali.
+    with get_db() as conn:
+        recorded_today = conn.execute(
+            "SELECT COUNT(*) c FROM signal_history "
+            "WHERE source = 'TOP_PICK' AND date(recorded_at) = date('now', 'localtime')"
+        ).fetchone()["c"]
+    remaining_quota = max(0, MAX_RECORDED_PER_DAY - recorded_today)
+    if remaining_quota == 0:
+        return []
+
+    # _has_open_signal DIFILTER DI SINI (SEBELUM slice), bukan cuma di dalam
+    # loop -- bug NYATA lain yang ditemukan lewat verifikasi live: kalau
+    # kandidat skor-tertinggi KEBETULAN semuanya sudah OPEN/PENDING_ENTRY
+    # (mis. saham blue-chip likuid yang cenderung terus2an jadi Top Pick),
+    # slice lama membuang kandidat lain yang skornya lebih rendah TAPI
+    # SEBENARNYA belum diblokir, sehingga fungsi ini diam2 mencatat NOL
+    # sinyal baru hari itu meski ada peluang valid. Loop di bawah TETAP
+    # re-cek _has_open_signal tepat sebelum INSERT (closing race TOCTOU,
+    # lihat komentar di situ) -- filter di sini cuma memperbaiki SELEKSI
+    # kandidat, bukan menggantikan re-cek itu.
     candidates = [
         it for it in items
         if it.get("confidence_score", 0) >= MIN_SCORE_TO_RECORD
@@ -610,7 +737,8 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         and it.get("risiko_turun_pct") is not None
         and it.get("risiko_turun_pct") > 0
         and it.get("harga")
-    ][:MAX_RECORDED_PER_DAY]
+        and not _has_open_signal(it["kode"])
+    ][:remaining_quota]
 
     if not candidates:
         return []
@@ -669,8 +797,8 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'))
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'), 'PENDING_ENTRY')
             ''', (
                 it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
@@ -860,6 +988,85 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
     return saved
 
 
+async def audit_pending_entries(price_lookup) -> list[dict]:
+    """Cek semua sinyal berstatus PENDING_ENTRY: apakah harga SEKARANG
+    sudah menyentuh level entry yang direkomendasikan (lihat migrasi
+    ke-16 & _confidence_raw_signals di web/app.py utk latar belakang) --
+    kalau ya, pindah jadi OPEN (posisi resmi aktif, TP/SL mulai berlaku
+    dari sini) dan catat entry_filled_at. Kalau sampai MAX_ENTRY_WAIT_DAYS
+    harga tidak pernah turun ke level itu, jadi EXPIRED_NO_ENTRY -- BUKAN
+    menang, BUKAN kalah: rekomendasinya mungkin saja benar, cuma pasar
+    tidak pernah kasih kesempatan masuk di harga yang disarankan. Baris
+    begini SENGAJA tidak diikutkan hitung win_rate (lihat _compute_stats)
+    sama seperti OPEN -- tidak pernah ada trade sungguhan yang terjadi.
+
+    HANYA menyasar arah BUY (TOP_PICK, satu-satunya sumber yang lewat
+    PENDING_ENTRY saat ini -- SMART_MONEY punya logic entry-nya sendiri
+    dan bisa BUY/SELL, belum diikutkan ke alur ini).
+
+    price_lookup: sama persis kontraknya dgn audit_open_signals (async
+    callable(kode) -> (harga, tanggal_bar) | None).
+
+    SKIP total (return []) di luar jam bursa -- sama alasan dgn
+    audit_open_signals (_is_bursa_trading_hours()), supaya tidak mengklaim
+    entry tersentuh dari harga basi jam-jam sepi."""
+    _ensure_table()
+    if not _is_bursa_trading_hours():
+        return []
+    with get_db() as conn:
+        pending_rows = conn.execute(
+            "SELECT id, kode, recorded_at, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, "
+            "source, pattern, confidence_score, ai_score, recommendation "
+            "FROM signal_history WHERE status = 'PENDING_ENTRY' AND direction = 'BUY'"
+        ).fetchall()
+
+    events = []
+    for row in pending_rows:
+        result = await price_lookup(row["kode"])
+        if result is None:
+            continue
+        price, price_date = result
+        if price is None or price <= 0:
+            continue
+
+        recorded_at = datetime.fromisoformat(row["recorded_at"])
+        is_stale = price_date is not None and price_date < recorded_at.date()
+        age_days = (datetime.now() - recorded_at).days
+
+        if not is_stale and price <= row["entry_price"]:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with get_db() as conn:
+                cur = conn.execute(
+                    "UPDATE signal_history SET status = 'OPEN', entry_filled_at = ? "
+                    "WHERE id = ? AND status = 'PENDING_ENTRY'",
+                    (now_str, row["id"]),
+                )
+                if cur.rowcount == 0:
+                    continue  # sudah diproses task lain (race), lewati
+            events.append({
+                "kind": "entry_filled", "id": row["id"], "kode": row["kode"],
+                "entry_price": row["entry_price"], "fill_price": price,
+                "tp_pct": row["tp_pct"], "tp2_pct": row["tp2_pct"], "tp3_pct": row["tp3_pct"],
+                "sl_pct": row["sl_pct"], "source": row["source"], "pattern": row["pattern"],
+            })
+        elif age_days >= MAX_ENTRY_WAIT_DAYS:
+            with get_db() as conn:
+                cur = conn.execute(
+                    "UPDATE signal_history SET status = 'EXPIRED_NO_ENTRY', resolved_at = datetime('now', 'localtime') "
+                    "WHERE id = ? AND status = 'PENDING_ENTRY'",
+                    (row["id"],),
+                )
+                if cur.rowcount == 0:
+                    continue
+            events.append({
+                "kind": "entry_expired", "id": row["id"], "kode": row["kode"],
+                "entry_price": row["entry_price"], "last_price": price,
+                "source": row["source"], "pattern": row["pattern"],
+            })
+
+    return events
+
+
 async def audit_open_signals(price_lookup) -> list[dict]:
     """Cek ulang semua sinyal berstatus OPEN terhadap harga TERKINI.
 
@@ -915,8 +1122,14 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     (bukan rentang High/Low harian), jadi kalau harga loncat lewat lebih
     dari 1 level TP sekaligus (mis. gap up), level menengah yang mungkin
     "dilewati" tidak bisa dipastikan tersentuh -- diambil level TERTINGGI
-    yang terbukti tercapai dari harga saat ini saja."""
+    yang terbukti tercapai dari harga saat ini saja.
+
+    SKIP total (return []) di luar jam bursa (_is_bursa_trading_hours()) --
+    lihat docstring fungsi itu utk bug NYATA yang ini cegah (ARTO ter-
+    TP_HIT jam 00:01 WIB pakai closing print basi dari sesi sebelumnya)."""
     _ensure_table()
+    if not _is_bursa_trading_hours():
+        return []
     with get_db() as conn:
         open_rows = conn.execute(
             "SELECT id, kode, recorded_at, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, "
@@ -1044,24 +1257,57 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     return just_resolved
 
 
-def _compute_stats(closed: list[dict]) -> dict | None:
-    """Statistik agregat dari sinyal yang SUDAH SELESAI (TP_HIT/SL_HIT/
-    EXPIRED). Returns None kalau daftar kosong -- caller/frontend WAJIB
-    menampilkan ini sebagai "belum cukup data", BUKAN 0% (dipakai baik
-    untuk statistik gabungan maupun per-source di get_signal_report)."""
-    if not closed:
+def _compute_stats(signals: list[dict]) -> dict | None:
+    """Statistik agregat. 'signals' bisa CAMPURAN status OPEN dan sudah
+    selesai (TP_HIT/SL_HIT/EXPIRED) -- lihat penjelasan 'wins' di bawah.
+
+    Permintaan user langsung ("tp1 masuk ke win rate soalnya tp2/tp3 kan
+    optional, jadi ga harus tp3 baru dimasukin"): 'wins' SEKARANG dihitung
+    dari tp_level_hit >= 1 (TP1 SUDAH cukup), BUKAN cuma status=='TP_HIT'
+    (yang berarti sampai TP3). Begitu TP1 tercapai KAPAN PUN -- baik
+    posisi itu akhirnya benar-benar closed sbg TP_HIT, MASIH OPEN
+    menunggu TP2/TP3, ATAU BAHKAN belakangan berbalik jadi SL_HIT -- tetap
+    dihitung MENANG selamanya (SEKALI dihitung menang, TIDAK PERNAH
+    berubah jadi kalah lagi). Alasan: TP1 tercapai adalah FAKTA yang
+    sudah terjadi (skenario teknikalnya sudah terbukti benar mengarah ke
+    sana), tidak bisa "dianulir" cuma krn harga belakangan berbalik --
+    kalau ini tidak dijamin, sinyal yang sama bisa dihitung menang DAN
+    kalah sekaligus tergantung kapan statistik dilihat, yang justru lebih
+    tidak jujur drpd aturan "sekali menang, tetap menang" ini.
+
+    'losses' HANYA baris SL_HIT yang tp_level_hit-nya MASIH 0 (kena SL
+    duluan sebelum sempat menyentuh TP manapun) -- SL_HIT yang tp_level_
+    hit-nya sudah >=1 TIDAK dihitung kalah (sudah kepakai sbg win di atas).
+
+    avg_return_pct/avg_days_to_resolve TETAP HANYA dari baris yang SUDAH
+    BENAR-BENAR selesai (TP_HIT/SL_HIT/EXPIRED) -- return_pct/days_to_
+    resolve NULL utk baris yang masih OPEN, tidak bisa dirata-rata dgn
+    hasil floating yang masih berubah-ubah.
+
+    Returns None kalau TIDAK ADA SAMA SEKALI data utk ditampilkan (tidak
+    ada yang closed DAN tidak ada yang menang/kalah) -- caller/frontend
+    WAJIB menampilkan ini sebagai "belum cukup data", BUKAN 0%."""
+    closed = [s for s in signals if s["status"] in ("TP_HIT", "SL_HIT", "EXPIRED")]
+    # status=='TP_HIT' SELALU dihitung menang terlepas dari tp_level_hit
+    # (baris lama/manual yang tidak eksplisit set tp_level_hit -- default
+    # 0 -- tetap harus dihitung menang, closed sbg TP_HIT sudah cukup
+    # membuktikan tp_level_hit>=1 SECARA IMPLISIT meski tidak tercatat).
+    wins = [s for s in signals if s["status"] == "TP_HIT" or (s.get("tp_level_hit") or 0) >= 1]
+    losses = [s for s in signals if s["status"] == "SL_HIT" and (s.get("tp_level_hit") or 0) == 0]
+    decided = wins + losses
+
+    if not closed and not decided:
         return None
-    wins = [s for s in closed if s["status"] == "TP_HIT"]
-    losses = [s for s in closed if s["status"] == "SL_HIT"]
-    decided = wins + losses  # EXPIRED sengaja di luar win-rate (bukan menang atau kalah jelas)
+
     win_rate = round(len(wins) / len(decided) * 100, 1) if decided else None
-    avg_return = round(sum(s["return_pct"] for s in closed) / len(closed), 2)
-    avg_days = round(sum(s["days_to_resolve"] for s in closed) / len(closed), 1)
+    avg_return = round(sum(s["return_pct"] for s in closed) / len(closed), 2) if closed else None
+    avg_days = round(sum(s["days_to_resolve"] for s in closed) / len(closed), 1) if closed else None
+    n_expired = len([s for s in closed if s["status"] == "EXPIRED"])
     return {
         "n_closed": len(closed),
         "n_tp_hit": len(wins),
         "n_sl_hit": len(losses),
-        "n_expired": len(closed) - len(wins) - len(losses),
+        "n_expired": n_expired,
         "win_rate": win_rate,
         "avg_return_pct": avg_return,
         "avg_days_to_resolve": avg_days,
@@ -1106,15 +1352,240 @@ def get_signal_report() -> dict:
                           if s.get("tp3_pct") is not None else None)
 
     closed = [s for s in signals if s["status"] in ("TP_HIT", "SL_HIT", "EXPIRED")]
-    stats = _compute_stats(closed)
+    # Sinyal OPEN yang sudah kena TP1/TP2 (permintaan user: "tp1 masuk ke
+    # win rate") ikut disertakan sbg kandidat 'win' di _compute_stats --
+    # digabung dgn closed SUPAYA stats_by_source juga tidak melewatkan
+    # source yang cuma punya baris open-with-progress (belum ada satupun
+    # yang benar-benar closed).
+    open_with_progress = [s for s in signals if s["status"] == "OPEN" and (s.get("tp_level_hit") or 0) >= 1]
+    stats_input = closed + open_with_progress
+    stats = _compute_stats(stats_input)
     stats_by_source = {}
-    for source in sorted({s["source"] for s in closed}):
-        source_stats = _compute_stats([s for s in closed if s["source"] == source])
+    for source in sorted({s["source"] for s in stats_input}):
+        source_stats = _compute_stats([s for s in stats_input if s["source"] == source])
         if source_stats is not None:
             stats_by_source[source] = source_stats
 
+    # Statistik TERPISAH utk sinyal yang MASIH OPEN tapi sudah kena TP1/
+    # TP2 (permintaan user: "TP1/TP2 juga ikut dihitung sebagian ke
+    # statistik") -- SENGAJA tidak dicampur ke win_rate/stats di atas
+    # (yang HARUS murni dari hasil FINAL) krn posisi ini masih bisa
+    # berbalik turun sebelum ditutup -- ini murni info "lagi bagus
+    # progresnya", BUKAN klaim menang, jadi frontend WAJIB memberi label
+    # yang jelas beda dari Win Rate (lihat "belum final" di UI).
+    open_signals = [s for s in signals if s["status"] == "OPEN"]
+    tp_progress_signals = [s for s in open_signals if (s.get("tp_level_hit") or 0) > 0]
+    partial_progress = {
+        "n_open": len(open_signals),
+        "n_tp_progress": len(tp_progress_signals),
+        "pct_tp_progress": round(len(tp_progress_signals) / len(open_signals) * 100, 1),
+    } if open_signals else None
+
     n_open = sum(1 for s in signals if s["status"] == "OPEN")
+    # PENDING_ENTRY/EXPIRED_NO_ENTRY (migrasi ke-16) SENGAJA dihitung
+    # terpisah dari n_open & dari win_rate -- bukan posisi aktif (belum
+    # ada entry yang benar-benar kena), jadi bukan "menang/kalah/berjalan"
+    # dalam arti trading yang sama. Lihat audit_pending_entries().
+    n_pending_entry = sum(1 for s in signals if s["status"] == "PENDING_ENTRY")
+    n_expired_no_entry = sum(1 for s in signals if s["status"] == "EXPIRED_NO_ENTRY")
     return {
         "signals": signals, "stats": stats, "stats_by_source": stats_by_source,
+        "partial_progress": partial_progress,
         "n_open": n_open, "n_total": len(signals),
+        "n_pending_entry": n_pending_entry, "n_expired_no_entry": n_expired_no_entry,
+    }
+
+
+async def record_daily_snapshots(price_lookup) -> int:
+    """Catat snapshot HARIAN (harga & progres saat ini) utk SEMUA sinyal
+    OPEN -- permintaan user langsung: "track sinyalnya, hari ini wr
+    berapa loss berapa yg berjalan apa aja, besoknya yg lanjut naik apa
+    yg turun apa DIBANDING kemarin". Tanpa ini, signal_history cuma py
+    SATU snapshot 'status saat ini' per sinyal -- tidak bisa menjawab
+    "gimana progresnya DARI KEMARIN" krn tidak ada histori harian yang
+    tersimpan.
+
+    Idempotent per hari (skema py UNIQUE(signal_id, tanggal)) -- AMAN
+    dipanggil berkali-kali sehari (siklus auto jalan tiap 10 menit),
+    INSERT OR IGNORE membuat cuma panggilan PERTAMA hari itu yang benar-
+    benar menyimpan baris baru.
+
+    SKIP di akhir pekan (_is_bursa_weekend(), SAMA alasan dgn
+    record_top_picks()) -- harga masih closing Jumat yang sama, snapshot
+    'baru' di Sabtu/Minggu cuma menduplikasi angka tanpa progres
+    sungguhan.
+
+    price_lookup: async callable(kode) -> float | None -- SENGAJA
+    kontrak SEDERHANA (bukan tuple dgn tanggal spt audit_open_signals),
+    caller (web/app.py) diharapkan pakai _signal_entry_price_lookup yang
+    SAMA dipakai entry recording & floating P&L (pelajaran sesi ini:
+    sumber "harga sekarang" yang berbeda-beda utk hal yang seharusnya
+    sama pernah menyebabkan bug SL_HIT palsu -- jangan diulang di sini).
+
+    Returns jumlah baris BARU yang benar-benar tersimpan (0 kalau
+    dipanggil lagi di hari yang sama -- bukan error, memang idempotent)."""
+    _ensure_table()
+    if _is_bursa_weekend():
+        return 0
+
+    with get_db() as conn:
+        open_rows = conn.execute(
+            "SELECT id, kode, entry_price, direction, status, tp_level_hit FROM signal_history WHERE status = 'OPEN'"
+        ).fetchall()
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    n_saved = 0
+    for row in open_rows:
+        try:
+            price = await price_lookup(row["kode"])
+        except Exception:
+            continue
+        if price is None or price <= 0:
+            continue
+        entry = row["entry_price"]
+        is_sell = row["direction"] == "SELL"
+        floating_pct = (entry / price - 1) * 100 if is_sell else (price / entry - 1) * 100
+        with get_db() as conn:
+            cur = conn.execute('''
+                INSERT OR IGNORE INTO signal_daily_snapshot
+                    (signal_id, tanggal, price, floating_return_pct, status, tp_level_hit)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (row["id"], today, price, round(floating_pct, 2), row["status"], row["tp_level_hit"] or 0))
+            if cur.rowcount > 0:
+                n_saved += 1
+    return n_saved
+
+
+def _reconstruct_signals_as_of(conn, tanggal: str, today_str: str) -> list[dict]:
+    """Bentuk ulang status/tp_level_hit TIAP sinyal SEPERTI ADANYA pada
+    tanggal tertentu (bukan status TERKINI) -- dipakai utk hitung win
+    rate KUMULATIF s/d tanggal itu. User protes ("itu harusnya sama
+    dong") saat Win Rate 'hari ini' (50%, cuma dari 2 sinyal yang RESOLVE
+    tepat hari itu) beda dgn Win Rate keseluruhan (93,3%) -- padahal utk
+    HARI INI keduanya seharusnya SAMA PERSIS (hari ini = keadaan
+    terkini), sengaja dipisah sebelumnya jadi bikin bingung.
+
+    - Sinyal yang SUDAH resolve PADA/SEBELUM tanggal ini: pakai status/
+      tp_level_hit FINAL apa adanya (sudah stabil, tidak berubah lagi).
+    - Sinyal yang BELUM resolve pada tanggal ini:
+      - Kalau tanggal == HARI INI: pakai tp_level_hit LIVE dari
+        signal_history langsung (paling akurat, TIDAK lewat snapshot --
+        snapshot harian cuma direkam SEKALI di awal siklus per hari &
+        bisa basi kalau tp_level_hit naik lagi di hari yang sama).
+      - Kalau tanggal itu HISTORIS (bukan hari ini): tp_level_hit LIVE
+        sekarang tidak relevan (bisa sudah berubah SETELAH tanggal itu)
+        -- pakai snapshot HARIAN paling akhir PADA/SEBELUM tanggal itu.
+        JUJUR: kalau tidak ada snapshot sama sekali (mis. direkam sebelum
+        signal_daily_snapshot ada), dianggap tp_level_hit 0/undecided,
+        TIDAK ditebak menang/kalah."""
+    rows = conn.execute(
+        "SELECT * FROM signal_history WHERE date(recorded_at) <= ?", (tanggal,)
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        resolved_date = (d["resolved_at"] or "")[:10] if d["resolved_at"] else None
+        already_resolved_by_then = resolved_date is not None and resolved_date <= tanggal
+        if not already_resolved_by_then:
+            d["status"] = "OPEN"
+            if tanggal != today_str:
+                snap = conn.execute('''
+                    SELECT tp_level_hit FROM signal_daily_snapshot
+                    WHERE signal_id = ? AND tanggal <= ?
+                    ORDER BY tanggal DESC LIMIT 1
+                ''', (d["id"], tanggal)).fetchone()
+                d["tp_level_hit"] = snap["tp_level_hit"] if snap else 0
+            # else: tanggal==hari ini -- biarkan tp_level_hit LIVE apa adanya.
+        out.append(d)
+    return out
+
+
+def get_daily_recap(tanggal: str | None = None) -> dict:
+    """Ringkasan HARIAN: sinyal yang SELESAI (menang/kalah/kadaluarsa)
+    PADA tanggal itu, dan sinyal yang MASIH OPEN dibandingkan snapshot
+    hari SEBELUMNYA (naik/turun/stabil) -- permintaan user: "hari ini wr
+    berapa loss berapa yg berjalan apa aja, besoknya yg lanjut naik apa
+    yg turun apa".
+
+    tanggal: 'YYYY-MM-DD', default HARI INI (WIB). Klasifikasi menang/
+    kalah SAMA PERSIS dgn _compute_stats (tp_level_hit>=1 SELALU menang
+    permanen, SL_HIT cuma kalah kalau tp_level_hit MASIH 0) -- SATU
+    sumber kebenaran, bukan aturan kedua yang bisa diam-diam berbeda.
+
+    Dua skop angka dikembalikan, SENGAJA dipisah biar jujur:
+    - n_win/n_loss/n_expired/win_rate_hari_ini/wins/losses/expired: HANYA
+      sinyal yang RESOLVE tepat PADA tanggal ini (event harian spesifik).
+    - n_win_kumulatif/n_loss_kumulatif/n_expired_kumulatif/
+      win_rate_kumulatif: SEMUA sinyal yang sudah menang/kalah PER
+      tanggal itu (termasuk yang masih OPEN tapi sudah TP1+) -- utk HARI
+      INI ini akan SAMA PERSIS dgn Win Rate keseluruhan (get_signal_report)
+      krn memang menghitung hal yang sama (lihat _reconstruct_signals_as_of).
+
+    JUJUR: perbandingan naik/turun BUTUH snapshot hari SEBELUMNYA --
+    utk sinyal yang BARU OPEN hari itu (belum py snapshot kemarin) atau
+    utk tanggal SEBELUM signal_daily_snapshot mulai dicatat, ditandai
+    'belum_ada_pembanding' (bukan ditebak sbg naik/turun)."""
+    _ensure_table()
+    if tanggal is None:
+        tanggal = datetime.now().strftime("%Y-%m-%d")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        resolved_rows = conn.execute(
+            "SELECT * FROM signal_history WHERE date(resolved_at) = ?", (tanggal,)
+        ).fetchall()
+        resolved = [dict(r) for r in resolved_rows]
+
+        today_snap_rows = conn.execute('''
+            SELECT s.tanggal, s.floating_return_pct, s.tp_level_hit, s.signal_id,
+                   h.kode, h.source, h.entry_price, h.direction
+            FROM signal_daily_snapshot s
+            JOIN signal_history h ON h.id = s.signal_id
+            WHERE s.tanggal = ?
+        ''', (tanggal,)).fetchall()
+        today_snaps = [dict(r) for r in today_snap_rows]
+
+        cum_stats = _compute_stats(_reconstruct_signals_as_of(conn, tanggal, today_str))
+
+    wins = [s for s in resolved if s["status"] == "TP_HIT" or (s.get("tp_level_hit") or 0) >= 1]
+    losses = [s for s in resolved if s["status"] == "SL_HIT" and (s.get("tp_level_hit") or 0) == 0]
+    win_ids = {s["id"] for s in wins}
+    loss_ids = {s["id"] for s in losses}
+    expired = [s for s in resolved if s["status"] == "EXPIRED" and s["id"] not in win_ids and s["id"] not in loss_ids]
+
+    decided = len(wins) + len(losses)
+    win_rate_hari_ini = round(len(wins) / decided * 100, 1) if decided else None
+
+    comparisons = []
+    for snap in today_snaps:
+        with get_db() as conn:
+            prev = conn.execute('''
+                SELECT floating_return_pct, tanggal FROM signal_daily_snapshot
+                WHERE signal_id = ? AND tanggal < ?
+                ORDER BY tanggal DESC LIMIT 1
+            ''', (snap["signal_id"], tanggal)).fetchone()
+        if prev is None:
+            arah, delta, prev_pct = "belum_ada_pembanding", None, None
+        else:
+            prev_pct = prev["floating_return_pct"]
+            delta = round(snap["floating_return_pct"] - prev_pct, 2)
+            arah = "naik" if delta > 0.05 else "turun" if delta < -0.05 else "stabil"
+        comparisons.append({
+            "kode": snap["kode"], "source": snap["source"], "direction": snap["direction"],
+            "floating_return_pct": snap["floating_return_pct"],
+            "floating_return_pct_kemarin": prev_pct,
+            "delta": delta, "arah": arah, "tp_level_hit": snap["tp_level_hit"],
+        })
+    comparisons.sort(key=lambda c: c["floating_return_pct"] if c["floating_return_pct"] is not None else 0, reverse=True)
+
+    return {
+        "tanggal": tanggal,
+        "n_win": len(wins), "n_loss": len(losses), "n_expired": len(expired),
+        "win_rate_hari_ini": win_rate_hari_ini,
+        "wins": wins, "losses": losses, "expired": expired,
+        "masih_berjalan": comparisons,
+        "n_win_kumulatif": cum_stats["n_tp_hit"] if cum_stats else 0,
+        "n_loss_kumulatif": cum_stats["n_sl_hit"] if cum_stats else 0,
+        "n_expired_kumulatif": cum_stats["n_expired"] if cum_stats else 0,
+        "win_rate_kumulatif": cum_stats["win_rate"] if cum_stats else None,
     }

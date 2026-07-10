@@ -251,13 +251,21 @@ DYOR & Manage Your Risk.
 
 
 def format_screener_results(results: list[dict]) -> str:
-    """Format hasil run_screener() (list of dict) jadi pesan teks /signal."""
+    """Format hasil run_screener() (list of dict) jadi pesan teks /signal.
+
+    REVISI: run_screener() dulu mengirim field 'signal' SUDAH berisi emoji
+    ("🔥 STRONG BUY"/"✅ BUY") -- diubah jadi teks bersih ("STRONG BUY"/"BUY")
+    supaya web UI (yang tidak lagi pakai emoji sbg ikon) tidak perlu strip
+    emoji dari data. Emoji utk pesan Telegram ini (medium yang MEMANG cocok
+    pakai emoji) ditambahkan DI SINI saja, di lapisan format pesan -- bukan
+    dibakar ke field data mentahnya."""
     if not results:
         return "❌ Tidak ada saham sesuai signal"
 
     msg = "🔥 SIGNAL SAHAM 🔥\n\n"
     for r in results[:15]:
-        msg += f"{r['signal']}\n{r['ticker']} | {r['price']}\n\n"
+        emoji = "🔥" if r["signal"] == "STRONG BUY" else "✅"
+        msg += f"{emoji} {r['signal']}\n{r['ticker']} | {r['price']}\n\n"
     return msg
 
 

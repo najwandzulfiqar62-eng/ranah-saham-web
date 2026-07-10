@@ -18,6 +18,9 @@ os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6399/0")
 # cache tidak menulis ke ranah_saham.db pemakaian sungguhan (lihat pola
 # yang sama untuk REDIS_URL di atas).
 os.environ.setdefault("DATABASE_URL", os.path.join(tempfile.gettempdir(), "ranah_saham_test.db"))
+# Kode admin forum tetap tersedia utk tes _forum_is_admin/endpoint admin --
+# TIDAK PERNAH nilai produksi sungguhan, cuma string tetap khusus pytest.
+os.environ.setdefault("FORUM_ADMIN_SECRET", "test-secret-for-pytest-only")
 
 import numpy as np
 import pandas as pd
@@ -136,9 +139,10 @@ def client():
 
 @pytest.fixture
 def clean_signal_db(monkeypatch):
-    """Kosongkan tabel signal_history sebelum & sesudah tes -- supaya
-    assertion statistik (win rate, avg return, dst) tidak terpengaruh sisa
-    baris dari tes lain yang jalan lebih dulu di sesi pytest yang sama.
+    """Kosongkan tabel signal_history & signal_daily_snapshot sebelum &
+    sesudah tes -- supaya assertion statistik (win rate, avg return, dst)
+    tidak terpengaruh sisa baris dari tes lain yang jalan lebih dulu di
+    sesi pytest yang sama.
 
     Juga mem-patch _is_bursa_weekend() di core.signal_history supaya
     SELALU False (hari kerja) -- record_top_picks()/record_macd_cross_
@@ -153,10 +157,20 @@ def clean_signal_db(monkeypatch):
     yang KHUSUS menguji perilaku akhir pekan (lihat
     test_record_top_picks_and_macd_skip_on_weekend) mem-patch ulang
     _is_bursa_weekend() jadi True sendiri setelah fixture ini, jadi tetap
-    bisa override."""
+    bisa override.
+
+    SAMA ALASANNYA, juga patch _is_bursa_trading_hours() supaya SELALU
+    True -- audit_open_signals() SEKARANG skip total di luar jam bursa
+    (lihat fix bug ARTO "ter-TP_HIT jam 00:01 WIB pakai harga basi"),
+    jadi tanpa ini SEMUA tes audit_open_signals yang ada akan gagal kalau
+    `pytest` kebetulan dijalankan di luar jam 09:00-16:00 WIB (siang/sore/
+    malam hari kerja biasa, bukan cuma akhir pekan). Tes KHUSUS yang
+    menguji gate ini sendiri mem-patch ulang jadi False setelah fixture
+    ini, sama pola dgn _is_bursa_weekend()."""
     import core.signal_history as _sh
 
     monkeypatch.setattr(_sh, "_is_bursa_weekend", lambda: False)
+    monkeypatch.setattr(_sh, "_is_bursa_trading_hours", lambda: True)
 
     from core.signal_history import _ensure_table
     from core.database import get_db
@@ -164,6 +178,26 @@ def clean_signal_db(monkeypatch):
     _ensure_table()
     with get_db() as conn:
         conn.execute("DELETE FROM signal_history")
+        conn.execute("DELETE FROM signal_daily_snapshot")
     yield
     with get_db() as conn:
         conn.execute("DELETE FROM signal_history")
+        conn.execute("DELETE FROM signal_daily_snapshot")
+
+
+@pytest.fixture
+def clean_forum_db():
+    """Kosongkan forum_thread & forum_reply sebelum & sesudah tes -- sama
+    pola dgn clean_signal_db, mencegah baris sisa dari tes lain mengganggu
+    assertion count/urutan."""
+    from core.forum import _ensure_table
+    from core.database import get_db
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute("DELETE FROM forum_reply")
+        conn.execute("DELETE FROM forum_thread")
+    yield
+    with get_db() as conn:
+        conn.execute("DELETE FROM forum_reply")
+        conn.execute("DELETE FROM forum_thread")

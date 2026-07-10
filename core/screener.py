@@ -112,7 +112,7 @@ async def run_screener(tickers: list[str]) -> list[dict]:
 
             if cond5:
                 score = c["score_partial"]
-                signal = "🔥 STRONG BUY" if score == 3 else "✅ BUY"
+                signal = "STRONG BUY" if score == 3 else "BUY"
                 results.append({
                     "ticker": c["ticker"].replace(".JK", ""),
                     "price": int(c["price"]),
