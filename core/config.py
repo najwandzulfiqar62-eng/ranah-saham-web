@@ -6,6 +6,15 @@
 
 import os
 
+# Muat .env (kalau ada) ke os.environ SEBELUM baris os.environ.get() di
+# bawah dibaca -- .env.example sudah menjanjikan alur "salin ke .env, isi
+# nilainya", tapi sebelum ini TIDAK ADA kode yang benar2 memuatnya (cuma
+# jalan di Railway krn platform itu set env var asli, bukan file .env).
+# override=False -- env var yang sudah di-set eksplisit di shell/platform
+# deployment TETAP menang, .env cuma fallback utk dev lokal.
+from dotenv import load_dotenv
+load_dotenv(override=False)
+
 # ---- Database (cache fundamental + riwayat sinyal Top Pick) ----
 # Satu file SQLite untuk semua kebutuhan penyimpanan lokal aplikasi ini --
 # nama digeneralisasi dari "fundamental_cache.db" karena sekarang juga
@@ -37,3 +46,12 @@ FALLBACK_TICKERS = [
 # Yahoo Finance dan terkena rate-limit / pemblokiran IP.
 YF_BATCH_SIZE = 40            # jumlah ticker per batch
 YF_BATCH_DELAY_SECONDS = 0.8  # jeda antar batch
+
+# ---- Forum komunitas ----
+# Kode rahasia admin Forum (badge "Admin" + hak hapus thread/balasan).
+# Diverifikasi di SERVER (web/app.py::_forum_is_admin, hmac.compare_digest)
+# -- TIDAK PERNAH dipercaya dari klaim klien begitu saja, konsisten dgn
+# prinsip "tidak ada kunci/token di sisi browser" (lihat web/app.py).
+# Kosong = fitur admin forum nonaktif total (fail-closed) -- forum tetap
+# jalan normal tanpa admin, cuma badge/hapus tidak pernah bisa didapat.
+FORUM_ADMIN_SECRET = os.environ.get("FORUM_ADMIN_SECRET", "")
