@@ -13,9 +13,9 @@
 # tetap terlihat sebagai ikon di chart, bukan kotak kosong.
 #
 # CATATAN: mapping ini HANYA dipakai untuk CHART (gambar PNG/matplotlib).
-# Emoji di pesan teks Telegram TIDAK terpengaruh -- Telegram app di HP/
-# desktop user punya font emoji sendiri yang berfungsi normal, jadi emoji
-# di pesan teks (msg = f"...") TETAP memakai emoji asli, tidak diubah.
+# Teks lain (web UI, PDF) TIDAK terpengaruh -- browser/PDF renderer punya
+# font emoji sendiri yang berfungsi normal, jadi emoji di teks biasa
+# TETAP memakai emoji asli, tidak diubah.
 
 CHART_SYMBOLS = {
     "📊": "■",   # bar chart -> filled square
@@ -41,7 +41,7 @@ def to_chart_safe(text: str) -> str:
     """Ganti semua emoji yang dikenal dalam teks dengan simbol monokrom
     yang aman dirender matplotlib. Dipakai HANYA untuk teks yang akan
     ditempelkan ke chart (ax.text, suptitle, table, dll) -- BUKAN untuk
-    pesan Telegram biasa."""
+    teks biasa (web UI, PDF)."""
     result = text
     for emoji, symbol in CHART_SYMBOLS.items():
         result = result.replace(emoji, symbol)

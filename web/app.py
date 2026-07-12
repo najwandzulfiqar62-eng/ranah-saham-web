@@ -3,7 +3,7 @@
 # =========================
 # Lapisan web yang MEMBUNGKUS fungsi core/ yang sudah ada jadi HTTP API.
 # TIDAK ada logika analisis baru di sini -- semua tetap di core/ (sumber
-# kebenaran tunggal), jadi web & bot Telegram memberi hasil identik.
+# kebenaran tunggal).
 #
 # PRINSIP KEAMANAN (penting untuk web publik):
 # - Semua logika & data (yfinance, perhitungan) di SERVER. Frontend cuma
@@ -1756,48 +1756,27 @@ async def _signal_audit_price_lookup(kode: str):
         return None
 
 
-async def _run_pending_entry_audit_and_notify() -> list[dict]:
+async def _run_pending_entry_audit() -> list[dict]:
     """Audit semua sinyal PENDING_ENTRY (entry tersentuh -> OPEN, atau
-    kadaluarsa -> EXPIRED_NO_ENTRY) + kirim notifikasi Telegram. Dipanggil
-    SEBELUM _run_signal_audit_and_notify (audit posisi OPEN) di satu
-    putaran auto-cycle -- urutan ini sengaja: entry yang baru saja tersentuh
-    di siklus INI belum perlu dicek TP/SL sampai siklus BERIKUTNYA (posisi
-    baru saja aktif, wajar belum kemana-mana)."""
+    kadaluarsa -> EXPIRED_NO_ENTRY). Dipanggil SEBELUM _run_signal_audit
+    (audit posisi OPEN) di satu putaran auto-cycle -- urutan ini sengaja:
+    entry yang baru saja tersentuh di siklus INI belum perlu dicek TP/SL
+    sampai siklus BERIKUTNYA (posisi baru saja aktif, wajar belum
+    kemana-mana)."""
     from core.signal_history import audit_pending_entries
-    from core.telegram_notify import send_message, format_signal_entry_filled, format_signal_entry_expired
 
-    events = await audit_pending_entries(_signal_audit_price_lookup)
-    for ev in events:
-        try:
-            if ev.get("kind") == "entry_filled":
-                await send_message(format_signal_entry_filled(ev))
-            else:
-                await send_message(format_signal_entry_expired(ev))
-        except Exception as e:
-            print(f"⚠️ Gagal kirim notifikasi pending-entry: {type(e).__name__}: {e}")
-    return events
+    return await audit_pending_entries(_signal_audit_price_lookup)
 
 
-async def _run_signal_audit_and_notify() -> list[dict]:
-    """Audit semua sinyal OPEN + kirim notifikasi Telegram (kalau
-    dikonfigurasi -- lihat core/telegram_notify.py, no-op aman kalau
-    tidak) utk yang BARU selesai. Dipakai bersama oleh /api/signals
-    (dipicu user membuka halaman Audit Sinyal) DAN oleh siklus otomatis
-    berkala (_run_signal_auto_cycle) -- satu sumber logic, tidak ada
-    duplikasi antara jalur manual dan jalur background."""
+async def _run_signal_audit() -> list[dict]:
+    """Audit semua sinyal OPEN, kembalikan yang BARU selesai. Dipakai
+    bersama oleh /api/signals (dipicu user membuka halaman Audit Sinyal)
+    DAN oleh siklus otomatis berkala (_run_signal_auto_cycle) -- satu
+    sumber logic, tidak ada duplikasi antara jalur manual dan jalur
+    background."""
     from core.signal_history import audit_open_signals
-    from core.telegram_notify import send_message, format_signal_resolved, format_signal_tp_progress
 
-    resolved = await audit_open_signals(_signal_audit_price_lookup)
-    for sig in resolved:
-        try:
-            if sig.get("kind") == "tp_progress":
-                await send_message(format_signal_tp_progress(sig))
-            else:
-                await send_message(format_signal_resolved(sig))
-        except Exception as e:
-            print(f"⚠️ Gagal kirim notifikasi sinyal selesai: {type(e).__name__}: {e}")
-    return resolved
+    return await audit_open_signals(_signal_audit_price_lookup)
 
 
 # Interval siklus auto-audit background (detik) -- default 600 (10 menit),
@@ -1808,17 +1787,17 @@ SIGNAL_AUTO_INTERVAL_SECONDS = int(os.getenv("SIGNAL_AUTO_INTERVAL_SECONDS", "60
 
 async def _run_signal_auto_cycle():
     """Satu putaran auto-audit: (1) refresh Top Pick -- otomatis mencatat
-    sinyal baru & mengirim notifikasi Telegram utk itu (logic ada di
-    dalam confidence(), dipanggil LANGSUNG sebagai fungsi biasa, pola yang
-    sama dipakai /api/insight/{kode} memanggil ihsg()); (2) scan & catat
-    anomali Smart Money (source ketiga, reuse items confidence() yang
-    SAMA utk TP/SL/likuiditas -- lihat _record_smart_money_cycle); (3)
-    audit semua sinyal OPEN + notifikasi utk yang baru selesai; (4) catat
-    snapshot harian (permintaan user: "track sinyalnya, besok yg lanjut
-    naik apa yg turun apa" -- lihat record_daily_snapshots, idempotent
-    per hari jadi aman dipanggil tiap 10 menit). Dipisah dari loop-nya
-    sendiri (bukan langsung di dalam while True) supaya SATU putaran bisa
-    dipanggil & ditest langsung tanpa perlu menunggu interval sungguhan."""
+    sinyal baru (logic ada di dalam confidence(), dipanggil LANGSUNG
+    sebagai fungsi biasa, pola yang sama dipakai /api/insight/{kode}
+    memanggil ihsg()); (2) scan & catat anomali Smart Money (source
+    ketiga, reuse items confidence() yang SAMA utk TP/SL/likuiditas --
+    lihat _record_smart_money_cycle); (3) audit semua sinyal OPEN utk
+    yang baru selesai; (4) catat snapshot harian (permintaan user: "track
+    sinyalnya, besok yg lanjut naik apa yg turun apa" -- lihat
+    record_daily_snapshots, idempotent per hari jadi aman dipanggil tiap
+    10 menit). Dipisah dari loop-nya sendiri (bukan langsung di dalam
+    while True) supaya SATU putaran bisa dipanggil & ditest langsung
+    tanpa perlu menunggu interval sungguhan."""
     confidence_items = []
     try:
         confidence_result = await confidence()
@@ -1830,11 +1809,11 @@ async def _run_signal_auto_cycle():
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal catat Smart Money: {type(e).__name__}: {e}")
     try:
-        await _run_pending_entry_audit_and_notify()
+        await _run_pending_entry_audit()
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal audit pending-entry: {type(e).__name__}: {e}")
     try:
-        await _run_signal_audit_and_notify()
+        await _run_signal_audit()
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal audit sinyal: {type(e).__name__}: {e}")
     try:
@@ -2144,20 +2123,11 @@ async def confidence():
     # signals) -- SEBELUM user tahu hasilnya, supaya track record kredibel
     # (lihat catatan lengkap di core/signal_history.py). Dibungkus try/except
     # supaya kegagalan/lambatnya SQLite atau lookup harga real-time TIDAK
-    # PERNAH menggagalkan respons Top Pick itu sendiri. Notifikasi Telegram
-    # (kalau dikonfigurasi -- lihat core/telegram_notify.py, no-op aman
-    # kalau tidak) dikirim utk tiap sinyal yang BENAR-BENAR baru dicatat
-    # (bukan yang di-skip krn dedup harian).
+    # PERNAH menggagalkan respons Top Pick itu sendiri.
     try:
         from core.signal_history import record_top_picks
-        from core.telegram_notify import send_message, format_signal_new
 
-        newly_recorded = await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
-        for sig in newly_recorded:
-            try:
-                await send_message(format_signal_new(sig))
-            except Exception as e:
-                print(f"⚠️ Gagal kirim notifikasi sinyal baru: {type(e).__name__}: {e}")
+        await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
     except Exception as e:
         print(f"⚠️ Gagal mencatat signal history (Top Pick): {type(e).__name__}: {e}")
 
@@ -2208,11 +2178,11 @@ async def signals():
     from core.signal_history import get_signal_report
 
     try:
-        await _run_pending_entry_audit_and_notify()
+        await _run_pending_entry_audit()
     except Exception as e:
         print(f"⚠️ Gagal audit pending-entry: {type(e).__name__}: {e}")
     try:
-        await _run_signal_audit_and_notify()
+        await _run_signal_audit()
     except Exception as e:
         print(f"⚠️ Gagal audit signal history: {type(e).__name__}: {e}")
 
@@ -3967,7 +3937,6 @@ async def _record_smart_money_cycle(confidence_items: list[dict]):
     if not confidence_items:
         return
     from core.signal_history import record_smart_money_signals, SMART_MONEY_BUY_POLA
-    from core.telegram_notify import send_message, format_signal_new
 
     tasks = [_scan_one_sm(k) for k in _SM_UNIVERSE]
     sm_items = [r for r in await asyncio.gather(*tasks, return_exceptions=False) if r]
@@ -4005,12 +3974,7 @@ async def _record_smart_money_cycle(confidence_items: list[dict]):
             "ai_rating": ringkasan.get("overall"),
         })
 
-    newly = await record_smart_money_signals(enriched, price_lookup=_signal_entry_price_lookup)
-    for sig in newly:
-        try:
-            await send_message(format_signal_new(sig))
-        except Exception as e:
-            print(f"⚠️ Gagal kirim notifikasi sinyal Smart Money: {type(e).__name__}: {e}")
+    await record_smart_money_signals(enriched, price_lookup=_signal_entry_price_lookup)
 
 
 @app.get("/api/foreign-flow")
@@ -4153,6 +4117,25 @@ def _parse_ksei_pdf(pdf_bytes: bytes) -> dict:
     }
 
 
+# WIB sebagai offset TETAP (UTC+7, tidak ada DST) -- BUKAN ZoneInfo("Asia/
+# Jakarta") yang di Windows/container minimal butuh package tzdata terpasang
+# (kalau tidak ada, ZoneInfoNotFoundError). Bug nyata yang ini perbaiki:
+# server produksi berjam UTC menganggap "hari ini" masih kemarin (mis. sudah
+# 13 Jul WIB tapi hari=0 dihitung 12 Jul) -- tanggal filing IDX itu tanggal
+# WIB, jadi acuan "hari ini" HARUS WIB, bukan jam lokal server.
+from datetime import timezone as _tz, timedelta as _td_wib
+_WIB = _tz(_td_wib(hours=7))
+
+
+class X15FetchError(RuntimeError):
+    """idx.co.id tidak terjangkau/menolak (429, blokir Cloudflare thd IP
+    datacenter, dst). SENGAJA exception sendiri -- kegagalan fetch TIDAK
+    BOLEH menyamar jadi list kosong "tidak ada filing" (bug nyata di
+    deploy VPS: halaman Pemegang tampil 'Tidak ada data' berhari-hari,
+    padahal sebenarnya IDX memblokir IP servernya -- user tidak bisa
+    membedakan itu dari hari yang memang sepi filing)."""
+
+
 async def _fetch_x15_today(days_back: int = 0) -> list:
     """Fetch SEMUA laporan kepemilikan saham (X-15/POJK 4-2024) dari IDX +
     parse PDF KSEI, TANPA filter jenis pemegang -- filtering (≥5% & pengendali
@@ -4185,7 +4168,8 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
 
     def _sync():
         sc = _cs.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
-        today = (_dt.now() - _td(days=days_back)).strftime("%Y%m%d")
+        # Tanggal acuan = WIB (lihat _WIB di atas), bukan jam lokal server.
+        today = (_dt.now(_WIB) - _td(days=days_back)).strftime("%Y%m%d")
         r = sc.get(
             "https://www.idx.co.id/primary/ListedCompany/GetAnnouncement",
             params={"emitenType": "*", "indexFrom": 0, "pageSize": 100,
@@ -4193,11 +4177,17 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
             timeout=15,
         )
         if r.status_code != 200:
-            # Termasuk 429 (rate-limited idx.co.id sendiri) -- JANGAN cache
-            # kegagalan sbg "tidak ada filing", biar dicoba lagi nanti
-            # (bukan "basi" selama _CACHE_TTL_HISTORICAL/24 jam).
-            return None
-        replies = r.json().get("Replies", [])
+            # Termasuk 429 (rate-limited idx.co.id sendiri) -- raise, JANGAN
+            # return kosong (kosong = "tidak ada filing", ini beda kasus) dan
+            # JANGAN cache, biar dicoba lagi nanti.
+            raise X15FetchError(f"idx.co.id membalas HTTP {r.status_code}")
+        try:
+            replies = r.json().get("Replies", [])
+        except ValueError:
+            # 200 tapi bukan JSON = halaman challenge/blokir Cloudflare
+            # (umum menimpa IP datacenter/VPS) -- sama: bukan "tidak ada
+            # filing", jangan menyamar jadi list kosong.
+            raise X15FetchError("respons idx.co.id bukan JSON (kemungkinan challenge/blokir Cloudflare thd IP server)")
         results = []
         for rep in replies:
             p = rep["pengumuman"]
@@ -4229,8 +4219,6 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
 
     loop = asyncio.get_event_loop()
     results = await loop.run_in_executor(None, _sync)
-    if results is None:
-        return []
     _cache_set(cache_key, results, ttl=_CACHE_TTL if days_back == 0 else _CACHE_TTL_HISTORICAL)
     return results
 
@@ -4386,6 +4374,10 @@ async def api_x15(hari: int = 0):
 
     try:
         raw_items = await _fetch_x15_today(days_back=hari)
+    except X15FetchError as e:
+        # Pesan eksplisit: kegagalan sumber ≠ hari sepi filing -- frontend
+        # menampilkan ini sbg error box, BUKAN "Tidak ada data".
+        raise HTTPException(502, f"Sumber data IDX tidak terjangkau dari server ({e}) — bukan berarti tidak ada laporan hari ini.")
     except Exception as e:
         raise HTTPException(502, f"Gagal fetch X-15: {e}")
 
@@ -4396,7 +4388,7 @@ async def api_x15(hari: int = 0):
     akumulasi, distribusi, aksi_korporasi = _split_x15_items(items)
 
     from datetime import timedelta as _td, datetime as _dt
-    tgl_str = (_dt.now() - _td(days=hari)).strftime("%d %b %Y")
+    tgl_str = (_dt.now(_WIB) - _td(days=hari)).strftime("%d %b %Y")
 
     payload = _py({
         "akumulasi": akumulasi,
@@ -4427,6 +4419,8 @@ async def api_insider(hari: int = 0):
 
     try:
         raw_items = await _fetch_x15_today(days_back=hari)
+    except X15FetchError as e:
+        raise HTTPException(502, f"Sumber data IDX tidak terjangkau dari server ({e}) — bukan berarti tidak ada laporan hari ini.")
     except Exception as e:
         raise HTTPException(502, f"Gagal fetch data insider: {e}")
 
@@ -4434,7 +4428,7 @@ async def api_insider(hari: int = 0):
     akumulasi, distribusi, aksi_korporasi = _split_x15_items(items)
 
     from datetime import timedelta as _td, datetime as _dt
-    tgl_str = (_dt.now() - _td(days=hari)).strftime("%d %b %Y")
+    tgl_str = (_dt.now(_WIB) - _td(days=hari)).strftime("%d %b %Y")
 
     payload = _py({
         "akumulasi": akumulasi,

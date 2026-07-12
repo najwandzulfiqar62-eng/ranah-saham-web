@@ -130,14 +130,11 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
     fib_500 = low_50 + fib_range * 0.5
     fib_618 = low_50 + fib_range * 0.618
 
-    # CATATAN PENTING: nilai fib_position SENGAJA tidak memakai underscore
-    # (mis. dulu "BELOW_382") -- ditemukan bug nyata: underscore tunggal
-    # dalam pesan Telegram parse_mode='Markdown' dianggap pembuka format
-    # italic, dan kalau jumlah underscore di SELURUH pesan jadi ganjil,
-    # Telegram gagal parsing TOTAL pesan dengan error "Can't parse
-    # entities: can't find end of the entity" -- user tidak dapat pesan
-    # sama sekali, cuma error generic. Pakai "-" sebagai pemisah, bukan
-    # underscore, supaya aman di semua mode Markdown Telegram.
+    # CATATAN: nilai fib_position pakai "-" sbg pemisah (mis. "BELOW-382"),
+    # bukan underscore -- konvensi ini dipertahankan dari versi bot
+    # Telegram lama (underscore ganjil bikin parse_mode='Markdown' gagal
+    # total), tidak ada alasan diubah krn format ini tetap valid & sudah
+    # dipakai konsisten oleh frontend web saat ini.
     if current_price > fib_618:
         fib_position = "ABOVE-618"
     elif current_price > fib_500:
@@ -262,10 +259,9 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
     is_bullish_candle = close_c > open_c
     is_bearish_candle = close_c < open_c
 
-    # CATATAN: nama pattern pakai SPASI bukan underscore (lihat catatan
-    # lengkap soal bug Telegram Markdown parsing di definisi fib_position
-    # di atas) -- nama pattern ini ditampilkan LANGSUNG ke pesan Telegram
-    # di handlers/ihsg_handlers.py ("🕯️ CANDLESTICK PATTERNS").
+    # CATATAN: nama pattern pakai SPASI bukan underscore, konsisten dgn
+    # alasan yang sama di fib_position di atas (warisan dari versi bot
+    # Telegram lama, tetap dipertahankan krn masih valid utk web).
     if (lower_shadow > body * 2) and (upper_shadow < body * 0.5) and is_bearish_candle:
         candle_patterns.append(("HAMMER", 15))
     if (upper_shadow > body * 2) and (lower_shadow < body * 0.5) and is_bullish_candle:

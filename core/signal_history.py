@@ -24,13 +24,11 @@
 # REVISI (Juli 2026): audit SEKARANG juga jalan otomatis via background
 # task periodik di web/app.py (_signal_auto_loop), TIDAK LAGI cuma
 # on-demand saat /api/signals dipanggil -- permintaan eksplisit user
-# supaya status sinyal & notifikasi Telegram ter-update walau tidak ada
-# yang sedang membuka halaman. record_top_picks() & audit_open_signals()
-# sekarang mengembalikan LIST sinyal yang baru dicatat/diselesaikan
-# (bukan cuma jumlah/None) supaya caller bisa mengirim notifikasi berisi
-# detail sinyalnya -- fungsi ini SENDIRI tetap tidak melakukan I/O
-# jaringan (kirim notifikasi jadi tanggung jawab caller di web/app.py),
-# supaya tetap mudah ditest tanpa mock network/Telegram.
+# supaya status sinyal ter-update walau tidak ada yang sedang membuka
+# halaman. record_top_picks() & audit_open_signals() mengembalikan LIST
+# sinyal yang baru dicatat/diselesaikan (bukan cuma jumlah/None) supaya
+# caller (web/app.py) bisa memakai detail sinyalnya -- fungsi ini SENDIRI
+# tetap tidak melakukan I/O jaringan, supaya tetap mudah ditest.
 #
 # REVISI KEDUA (Juli 2026): ditambah kolom 'source' -- signal_history
 # sekarang punya DUA sumber entry point independen: 'TOP_PICK' (skor
@@ -691,8 +689,7 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     muncul", ditampilkan di Audit Sinyal/kartu Signal Confirmed.
 
     Returns LIST sinyal yang baru disimpan (bukan cuma jumlah) -- caller
-    (web/app.py) pakai ini utk kirim notifikasi Telegram berisi detail
-    entry/TP/SL, bukan sekadar angka."""
+    (web/app.py) pakai ini utk detail entry/TP/SL, bukan sekadar angka."""
     _ensure_table()
     if _is_bursa_weekend():
         return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
@@ -1116,9 +1113,8 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     Returns LIST kejadian yang BARU SAJA terjadi di pemanggilan ini, tiap
     dict punya key "kind": "resolved" (status akhir, sama seperti dulu)
     atau "tp_progress" (TP1/TP2 baru tercapai, posisi masih OPEN) --
-    caller pakai field ini utk memilih format notifikasi Telegram yang
-    sesuai (lihat format_signal_resolved vs format_signal_tp_progress di
-    core/telegram_notify.py). price_lookup HANYA memberi satu titik harga
+    caller (web/app.py) pakai field ini utk membedakan keduanya di Audit
+    Sinyal. price_lookup HANYA memberi satu titik harga
     (bukan rentang High/Low harian), jadi kalau harga loncat lewat lebih
     dari 1 level TP sekaligus (mis. gap up), level menengah yang mungkin
     "dilewati" tidak bisa dipastikan tersentuh -- diambil level TERTINGGI

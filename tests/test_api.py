@@ -3360,7 +3360,7 @@ def test_run_signal_auto_cycle_runs_refresh_and_audit_independently(monkeypatch)
     """Regresi fitur auto-audit berkala: _run_signal_auto_cycle() (satu
     putaran, dipakai baik oleh _signal_auto_loop maupun langsung ditest di
     sini) HARUS menjalankan refresh Top Pick (confidence(), yang otomatis
-    mencatat sinyal baru) DAN audit sinyal OPEN (_run_signal_audit_and_notify())
+    mencatat sinyal baru) DAN audit sinyal OPEN (_run_signal_audit())
     -- dan kegagalan salah satu TIDAK BOLEH menghalangi yang lain jalan,
     supaya siklus background tetap berguna sebagian walau mis. Yahoo
     Finance sedang down saat refresh Top Pick."""
@@ -3378,85 +3378,10 @@ def test_run_signal_auto_cycle_runs_refresh_and_audit_independently(monkeypatch)
         calls.append("audit")
 
     monkeypatch.setattr(app_module, "confidence", fake_confidence)
-    monkeypatch.setattr(app_module, "_run_signal_audit_and_notify", fake_audit)
+    monkeypatch.setattr(app_module, "_run_signal_audit", fake_audit)
 
     asyncio.run(app_module._run_signal_auto_cycle())
     assert calls == ["confidence", "audit"]
-
-
-def test_telegram_send_message_fail_open_when_unconfigured(monkeypatch):
-    """Tanpa TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID dikonfigurasi (_ENABLED
-    False), send_message() harus diam-diam return False -- BUKAN raise --
-    supaya pencatatan/audit sinyal tidak pernah gagal gara-gara notifikasi
-    belum di-setup (fail-open, sama disiplinnya dengan Redis/DB)."""
-    import asyncio
-
-    import core.telegram_notify as tg
-
-    monkeypatch.setattr(tg, "_ENABLED", False)
-    assert asyncio.run(tg.send_message("halo")) is False
-
-
-def test_telegram_format_signal_new_contains_key_fields():
-    from core.telegram_notify import format_signal_new
-
-    sig = {
-        "kode": "BBCA", "entry_price": 9500.0, "tp_pct": 6.0, "sl_pct": 3.0,
-        "tp_price": 10070.0, "sl_price": 9215.0, "confidence_score": 78.5,
-        "pattern": "DOUBLE BOTTOM",
-    }
-    msg = format_signal_new(sig)
-    assert "BBCA" in msg
-    assert "Rp10,070" in msg
-    assert "DOUBLE BOTTOM" in msg
-    assert "bukan rekomendasi investasi" in msg
-
-
-def test_telegram_format_signal_resolved_labels_each_status():
-    """Regresi kejujuran: SL_HIT (rugi) harus dilaporkan dengan bahasa &
-    format yang SAMA transparannya dengan TP_HIT (untung) -- bukan
-    disamarkan -- supaya track record yang dikirim ke Telegram kredibel."""
-    from core.telegram_notify import format_signal_resolved
-
-    base = {
-        "kode": "BBCA", "entry_price": 9500.0, "resolved_price": 10000.0,
-        "return_pct": 5.0, "days_to_resolve": 7, "recorded_at": "2026-06-01 10:00:00",
-    }
-
-    tp_msg = format_signal_resolved({**base, "status": "TP_HIT"})
-    assert "Target tercapai" in tp_msg and "BBCA" in tp_msg
-
-    sl_msg = format_signal_resolved({**base, "status": "SL_HIT", "return_pct": -3.0})
-    assert "Kena stop loss" in sl_msg
-
-    exp_msg = format_signal_resolved({**base, "status": "EXPIRED"})
-    assert "Kadaluarsa" in exp_msg
-
-
-def test_telegram_messages_include_source_label():
-    """Regresi: signal_history sekarang punya 3 sumber entry independen
-    (TOP_PICK, MACD_CROSS, SMART_MONEY) -- pesan Telegram HARUS selalu
-    menyebut sumbernya supaya user tidak salah kira teori-teori itu sama."""
-    from core.telegram_notify import format_signal_new, format_signal_resolved
-
-    new_sig = {
-        "kode": "BBCA", "entry_price": 9500.0, "tp_pct": 6.0, "sl_pct": 3.0,
-        "tp_price": 10070.0, "sl_price": 9215.0, "source": "MACD_CROSS",
-    }
-    assert "MACD Histogram Cross" in format_signal_new(new_sig)
-
-    resolved_sig = {
-        "kode": "BBCA", "entry_price": 9500.0, "resolved_price": 10000.0,
-        "return_pct": 5.0, "days_to_resolve": 7, "recorded_at": "2026-06-01 10:00:00",
-        "status": "TP_HIT", "source": "TOP_PICK",
-    }
-    assert "Top Pick" in format_signal_resolved(resolved_sig)
-
-    sm_sig = {
-        "kode": "BBCA", "entry_price": 9500.0, "tp_pct": 6.0, "sl_pct": 3.0,
-        "tp_price": 10070.0, "sl_price": 9215.0, "source": "SMART_MONEY",
-    }
-    assert "Smart Money" in format_signal_new(sm_sig)
 
 
 def _fake_sm_item(kode, pola, harga=1000.0, likuiditas="Sangat Likuid",
