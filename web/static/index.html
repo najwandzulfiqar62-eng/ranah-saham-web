@@ -18,12 +18,18 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
+  /* SATU sumber kebenaran palet (dulu ADA DUA blok :root -- basis biru di
+     sini + override hijau-emas ~700 baris di bawah; yang aktif selalu yang
+     kedua, tapi keberadaan dua blok bikin nilai "meleset" gampang lolos.
+     Sudah di-merge: nilai final = tema hijau-emas). */
   :root{
-    --bg:#0A0E15; --panel:#10151E; --panel2:#161D29; --elev:#1B2330;
-    --line:#1F2731; --line-soft:#161C26;
-    --gold:#C8A24B; --gold-soft:rgba(200,162,75,.12); --gold-dim:rgba(200,162,75,.55);
-    --text:#E7EDF5; --muted:#8492A6; --faint:#5A6678;
-    --bull:#3FB07E; --bear:#DB5A56; --neutral:#5A6B86; --radius:12px;
+    --bg:#06110F; --panel:#0B1714; --panel2:#101F1B; --elev:#142721;
+    --line:#213832; --line-soft:#172924;
+    --gold:#C79A2A; --gold-soft:rgba(199,154,42,.12); --gold-dim:rgba(199,154,42,.48);
+    --text:#F2EFE7; --muted:#9AA69F; --faint:#66736C;
+    --bull:#2FB57E; --bear:#D65A4A; --neutral:#6E8178; --radius:8px;
+    --accent:var(--gold); --green:var(--bull); --red:var(--bear);
+    --fg:var(--text); --text2:var(--muted);
     /* sistem shadow berlapis (ambient jauh + contact dekat) supaya elemen
        terasa "terangkat" dari background, bukan cuma garis 1px flat */
     --shadow-inset-top:0 1px 0 rgba(255,255,255,.035) inset;
@@ -40,11 +46,11 @@
     font-feature-settings:"tnum" 1;}
   a{color:var(--gold);text-decoration:none}
   .wrap{max-width:1120px;margin:0 auto;padding:0 22px}
-  ::selection{background:rgba(200,162,75,.32);color:#fff}
+  ::selection{background:rgba(199,154,42,.32);color:#fff}
 
   /* nav */
   header{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--line);
-    background:rgba(10,14,21,.82);backdrop-filter:blur(12px) saturate(120%);
+    background:rgba(6,17,15,.72);backdrop-filter:blur(16px) saturate(140%);
     box-shadow:0 8px 24px -12px rgba(0,0,0,.6)}
   .nav{display:flex;align-items:center;gap:8px;padding:13px 0}
   .brand{font-family:"Space Grotesk";font-weight:700;letter-spacing:.04em;font-size:16px;
@@ -52,17 +58,39 @@
   .brand i{display:inline-block;width:5px;height:5px;background:var(--gold);border-radius:1px;margin:0 6px;transform:translateY(-1px)}
   .brand sup{font-family:"JetBrains Mono";font-size:9px;font-weight:700;letter-spacing:.12em;color:var(--gold);
     border:1px solid var(--gold-dim);border-radius:3px;padding:1px 4px;margin-left:9px;top:-1px}
-  .tabs{display:flex;gap:1px;flex:1;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;min-width:0}
-  .tabs::-webkit-scrollbar{display:none}
-  /* indikator scroll horizontal saat tab terlalu banyak untuk lebar layar (PC) */
-  .tabs.fade-r{mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent 100%);-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent 100%)}
-  .tabs.fade-l{mask-image:linear-gradient(to left,#000 calc(100% - 28px),transparent 100%);-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 28px),transparent 100%)}
-  .tabs.fade-l.fade-r{mask-image:linear-gradient(to right,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);-webkit-mask-image:linear-gradient(to right,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%)}
+  /* Nav digrup jadi ~6 menu dropdown (dulu 18 tab flat sebaris yang meluber
+     & kepotong di layar biasa). overflow HARUS visible -- panel dropdown
+     absolute di dalam .tabs, overflow-x:auto lama akan MEMOTONGNYA. */
+  .tabs{display:flex;gap:2px;flex:1;align-items:center;min-width:0;overflow:visible}
   .tab{background:transparent;border:0;color:var(--muted);padding:8px 13px;border-radius:7px;
     cursor:pointer;font-size:13.5px;font-weight:500;font-family:inherit;transition:color .15s,background .15s;position:relative;white-space:nowrap}
   .tab:hover{color:var(--text)}
   .tab.active{color:var(--text)}
   header .tab.active::after{content:"";position:absolute;left:13px;right:13px;bottom:0;height:2px;background:var(--gold)}
+  .nav-group{position:relative}
+  .nav-group-btn{display:inline-flex;align-items:center;gap:5px}
+  .nav-caret{transition:transform .18s var(--ease-premium);opacity:.55}
+  .nav-group:hover .nav-caret,.nav-group:focus-within .nav-caret{transform:rotate(180deg);opacity:1}
+  .nav-dd{position:absolute;top:calc(100% + 9px);left:0;min-width:216px;z-index:40;
+    background:rgba(13,25,21,.92);backdrop-filter:blur(18px) saturate(1.4);
+    border:1px solid var(--line);border-radius:12px;padding:6px;
+    box-shadow:var(--shadow-inset-top),var(--shadow-lg);
+    display:flex;flex-direction:column;gap:1px;
+    opacity:0;visibility:hidden;transform:translateY(6px) scale(.985);transform-origin:top left;
+    transition:opacity .16s var(--ease-premium),transform .16s var(--ease-premium),visibility .16s}
+  /* jembatan hover tak kasat mata menutup celah 9px antara tombol & panel,
+     supaya kursor yang turun pelan tidak bikin dropdown kedip tutup */
+  .nav-dd::before{content:"";position:absolute;top:-10px;left:0;right:0;height:10px}
+  .nav-group:hover .nav-dd,.nav-group:focus-within .nav-dd{opacity:1;visibility:visible;transform:none}
+  .nav-dd .tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 12px;border-radius:8px;font-size:13px}
+  .nav-dd .tab .icon{color:var(--faint);flex-shrink:0;transition:color .15s}
+  .nav-dd .tab:hover{background:var(--gold-soft)}
+  .nav-dd .tab:hover .icon{color:var(--gold)}
+  .nav-dd .tab.active{color:var(--gold);background:rgba(199,154,42,.09)}
+  .nav-dd .tab.active .icon{color:var(--gold)}
+  .nav-dd .tab.active::after{display:none}
+  /* pemisah grup terakhir sedikit ke kanan supaya tidak mepet tombol Cari */
+  .nav-group:last-child .nav-dd{left:auto;right:0;transform-origin:top right}
   .kbd{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
     color:var(--muted);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;transition:.15s;white-space:nowrap}
   .kbd:hover{border-color:var(--gold-dim);color:var(--text)}
@@ -88,10 +116,16 @@
     transform:translateX(100%);transition:transform .25s cubic-bezier(.16,1,.3,1);z-index:31}
   .mob-drawer.on .mob-menu{transform:none}
   .mob-menu .tab{text-align:left;padding:11px 14px;border-radius:8px;font-size:14px;width:100%;
-    color:var(--text);border:none;background:transparent;cursor:pointer;transition:.12s}
+    color:var(--text);border:none;background:transparent;cursor:pointer;transition:.12s;
+    display:flex;align-items:center;gap:11px}
+  .mob-menu .tab .icon{color:var(--faint);flex-shrink:0}
   .mob-menu .tab:hover{background:var(--panel2)}
-  .mob-menu .tab.active{background:rgba(200,162,75,.13);color:var(--gold)}
+  .mob-menu .tab.active{background:rgba(199,154,42,.13);color:var(--gold)}
+  .mob-menu .tab.active .icon{color:var(--gold)}
   .mob-divider{height:1px;background:var(--line);margin:6px 4px;flex-shrink:0}
+  /* header seksi grup di drawer (ikut struktur NAV_GROUPS yang sama dgn desktop) */
+  .mob-sec{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--faint);
+    text-transform:uppercase;padding:14px 14px 5px;flex-shrink:0}
 
   @media(max-width:768px){
     .tabs,.kbd,.tour-btn{display:none}
@@ -165,10 +199,10 @@
   #chart,#ihsgChart{width:100%;height:380px;border-radius:12px;overflow:hidden;
     border:1px solid var(--line);background:var(--panel);box-shadow:var(--shadow-inset-top), var(--shadow-md)}
 
-  .btn{background:var(--gold);color:#15100A;border:0;padding:11px 18px;border-radius:8px;
+  .btn{background:linear-gradient(180deg,#DCB14A,var(--gold) 60%,#B58A20);color:#15100A;border:0;padding:11px 18px;border-radius:8px;
     font-weight:600;cursor:pointer;font-size:14px;font-family:inherit;transition:transform .18s var(--ease-premium),box-shadow .18s var(--ease-premium),filter .15s;display:inline-block;letter-spacing:.01em;
-    box-shadow:0 1px 2px rgba(0,0,0,.3)}
-  .btn:hover{filter:brightness(1.07);transform:translateY(-2px);box-shadow:0 10px 22px -8px rgba(200,162,75,.4), 0 2px 6px rgba(0,0,0,.3)}
+    box-shadow:0 1px 0 rgba(255,255,255,.22) inset,0 1px 2px rgba(0,0,0,.3)}
+  .btn:hover{filter:brightness(1.07);transform:translateY(-2px);box-shadow:0 10px 22px -8px rgba(199,154,42,.4), 0 2px 6px rgba(0,0,0,.3)}
   .btn:active{transform:translateY(0) scale(.98);box-shadow:0 1px 2px rgba(0,0,0,.3)}
   .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:500;box-shadow:none}
   .btn.ghost:hover{border-color:var(--gold-dim);background:var(--panel2);box-shadow:var(--shadow-sm)}
@@ -187,7 +221,7 @@
   .news-src-chip{background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:20px;
     padding:5px 12px;font-size:11.5px;cursor:pointer;transition:.15s;font-family:inherit;font-weight:600;white-space:nowrap}
   .news-src-chip:hover{color:var(--text);border-color:var(--gold-dim)}
-  .news-src-chip.on{background:rgba(200,162,75,.13);border-color:var(--gold);color:var(--gold)}
+  .news-src-chip.on{background:rgba(199,154,42,.13);border-color:var(--gold);color:var(--gold)}
   .news-headline-card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;
     padding:22px 24px;margin-bottom:12px;color:var(--text);text-decoration:none;transition:.18s;position:relative;overflow:hidden}
   .news-headline-card:hover{border-color:var(--gold);box-shadow:0 6px 30px rgba(0,0,0,.35)}
@@ -195,7 +229,7 @@
   .news-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px;margin-bottom:12px}
   .news-card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
     padding:15px 16px;color:var(--text);text-decoration:none;transition:.18s;position:relative;overflow:hidden}
-  .news-card:hover{border-color:rgba(200,162,75,.45);box-shadow:0 4px 20px rgba(0,0,0,.28);transform:translateY(-1px)}
+  .news-card:hover{border-color:rgba(199,154,42,.45);box-shadow:0 4px 20px rgba(0,0,0,.28);transform:translateY(-1px)}
   .news-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--news-src-color,var(--gold))}
   .news-list-wrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px}
   .news-list-item{display:flex;align-items:flex-start;gap:12px;padding:11px 16px;
@@ -205,9 +239,9 @@
   .news-src-badge{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:4px;
     letter-spacing:.04em;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif}
   .news-time{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);white-space:nowrap}
-  .news-emiten-tag{display:inline-block;background:rgba(200,162,75,.1);border:1px solid rgba(200,162,75,.25);
+  .news-emiten-tag{display:inline-block;background:rgba(199,154,42,.1);border:1px solid rgba(199,154,42,.25);
     color:var(--gold);font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:4px;font-family:'JetBrains Mono',monospace;cursor:pointer}
-  .news-emiten-tag:hover{background:rgba(200,162,75,.22)}
+  .news-emiten-tag:hover{background:rgba(199,154,42,.22)}
   .news-src-search{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:9px;
     padding:7px 12px;font-size:13px;font-family:inherit;outline:none;transition:.15s;min-width:0;width:180px}
   .news-src-search:focus{border-color:var(--gold)}
@@ -216,7 +250,8 @@
 
   /* compare */
   .ctable{width:100%;border-collapse:collapse;font-size:14px}
-  .ctable th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;
+  .ctable th{text-align:left;color:var(--faint);font-weight:600;font-size:10.5px;
+    text-transform:uppercase;letter-spacing:.09em;
     padding:10px 12px;border-bottom:1px solid var(--line)}
   .ctable td{padding:10px 12px;border-bottom:1px solid var(--line);font-family:"JetBrains Mono";transition:background .15s var(--ease-premium), box-shadow .15s var(--ease-premium)}
   .ctable tbody tr:nth-child(even) td{background:rgba(255,255,255,.018)}
@@ -267,12 +302,12 @@
   .fld input:focus{outline:2px solid var(--gold);outline-offset:0}
   .fld textarea{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:10px 13px;border-radius:9px;font-family:inherit;font-size:14px;width:100%;box-sizing:border-box;resize:vertical;min-height:90px}
   .fld textarea:focus{outline:2px solid var(--gold);outline-offset:0}
-  .tkr-link{color:var(--gold);font-weight:700;cursor:pointer;text-decoration:underline;text-decoration-color:rgba(200,162,75,.4)}
+  .tkr-link{color:var(--gold);font-weight:700;cursor:pointer;text-decoration:underline;text-decoration-color:rgba(199,154,42,.4)}
   .tkr-link:hover{text-decoration-color:var(--gold)}
   .forum-vote-btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:inherit}
   .forum-vote-btn:hover{border-color:var(--gold)}
   .forum-vote-btn[disabled]{color:var(--gold);border-color:var(--gold)66;cursor:default;opacity:.85}
-  .forum-best{border-color:var(--gold)66!important;box-shadow:0 0 0 1px rgba(200,162,75,.3)}
+  .forum-best{border-color:var(--gold)66!important;box-shadow:0 0 0 1px rgba(199,154,42,.3)}
   .bigval{font-family:"JetBrains Mono";font-weight:700;font-size:34px;line-height:1}
   /* sector tags (warna per sektor, gaya pill) */
   .sectag{display:inline-block;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:600;
@@ -300,7 +335,7 @@
 
   /* 1. Panel: hover lift + shadow glow */
   .panel{transition:border-color .18s, box-shadow .18s, transform .18s}
-  .panel:hover{border-color:rgba(200,162,75,.32);box-shadow:0 4px 24px rgba(0,0,0,.35),0 0 0 1px rgba(200,162,75,.08) inset}
+  .panel:hover{border-color:rgba(199,154,42,.32);box-shadow:0 4px 24px rgba(0,0,0,.35),0 0 0 1px rgba(199,154,42,.08) inset}
   .ctable tbody tr{transition:background .12s}
 
   /* 2. Cell: subtle lift on hover */
@@ -328,7 +363,7 @@
   header .tab.active::after{transition:left .2s ease, right .2s ease}
 
   /* 8. Btn: shimmer pulse saat loading */
-  @keyframes btnPulse{0%,100%{box-shadow:0 0 0 0 rgba(200,162,75,.5)}50%{box-shadow:0 0 0 6px rgba(200,162,75,0)}}
+  @keyframes btnPulse{0%,100%{box-shadow:0 0 0 0 rgba(199,154,42,.5)}50%{box-shadow:0 0 0 6px rgba(199,154,42,0)}}
   .btn-loading{animation:btnPulse .9s ease infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
@@ -451,27 +486,35 @@
 .sm-panel-head{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-bottom:10px}
 .sm-empty{font-size:13px;color:var(--muted);padding:10px 0}
 /* ---- X-15 Dashboard (IDXRadar-style) ---- */
-.x15-live-tag{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--bull);background:rgba(63,176,126,.08);padding:4px 10px;border-radius:20px;border:1px solid rgba(63,176,126,.15);white-space:nowrap}
+.x15-live-tag{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--bull);background:rgba(47,181,126,.08);padding:4px 10px;border-radius:20px;border:1px solid rgba(47,181,126,.15);white-space:nowrap}
 .x15-live-dot{width:7px;height:7px;border-radius:50%;background:var(--bull);animation:liveRing 2s infinite;flex-shrink:0}
 /* Ring hijau yang melebar & memudar (efek "ping" radar) -- lebih hidup drpd
    sekadar opacity pulse, dot-nya sendiri tetap solid/jelas terbaca "LIVE". */
-@keyframes liveRing{0%{box-shadow:0 0 0 0 rgba(63,176,126,.55)}70%{box-shadow:0 0 0 7px rgba(63,176,126,0)}100%{box-shadow:0 0 0 0 rgba(63,176,126,0)}}
+@keyframes liveRing{0%{box-shadow:0 0 0 0 rgba(47,181,126,.55)}70%{box-shadow:0 0 0 7px rgba(47,181,126,0)}100%{box-shadow:0 0 0 0 rgba(47,181,126,0)}}
 /* ---- Live price badge (dipakai di mstrip, Analisis, IHSG, Makro) ---- */
-.live-badge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:var(--bull);background:rgba(63,176,126,.08);padding:2px 8px;border-radius:20px;border:1px solid rgba(63,176,126,.15);white-space:nowrap;vertical-align:middle}
+.live-badge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:var(--bull);background:rgba(47,181,126,.08);padding:2px 8px;border-radius:20px;border:1px solid rgba(47,181,126,.15);white-space:nowrap;vertical-align:middle}
 .live-badge .x15-live-dot{width:6px;height:6px}
 .ma-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px;vertical-align:middle}
 .x15-date-tabs-wrap{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:3px;scrollbar-width:none}
 .x15-date-tabs-wrap::-webkit-scrollbar{display:none}
 .x15-date-tab{padding:5px 13px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:all .15s;letter-spacing:.02em;white-space:nowrap;flex-shrink:0}
-.x15-date-tab:hover{border-color:rgba(200,162,75,.45);color:var(--text)}
-.x15-date-tab.active{background:var(--gold);color:#0A0E15;border-color:var(--gold)}
+.x15-date-tab:hover{border-color:rgba(199,154,42,.45);color:var(--text)}
+.x15-date-tab.active{background:var(--gold);color:#06110F;border-color:var(--gold)}
+/* Akhir pekan: bursa libur, tidak mungkin ada filing -- diredupkan supaya
+   user tidak mengira tanggal itu "kosong data" karena error. */
+.x15-date-tab.wknd{opacity:.45;border-style:dashed}
+.x15-date-tab.wknd.active{opacity:.8}
 .x15-dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .x15-panel{padding:14px 16px;min-width:0}
 .x15-top-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)}
-.x15-top-row{display:flex;align-items:center;gap:6px;padding:7px 0;border-bottom:1px solid var(--line-soft)}
-.x15-top-row:last-child{border-bottom:none;padding-bottom:0}
-.x15-top-ticker{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13.5px;cursor:pointer;color:var(--text);min-width:44px;flex-shrink:0}
+.x15-top-row{display:flex;align-items:center;gap:6px;padding:8px 6px;margin:0 -6px;border-radius:7px;border-bottom:1px solid var(--line-soft);transition:background .13s}
+.x15-top-row:hover{background:rgba(255,255,255,.025)}
+.x15-top-row:last-child{border-bottom:none}
+.x15-top-ticker{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13.5px;cursor:pointer;color:var(--text);min-width:44px;flex-shrink:0;transition:color .13s}
 .x15-top-ticker:hover{color:var(--gold)}
+/* aksen tepi kiri tipis warna sentimen di panel Top Akumulasi/Distribusi */
+#pnl-top-aku{border-left:2px solid rgba(47,181,126,.4)}
+#pnl-top-dis{border-left:2px solid rgba(214,90,74,.4)}
 .x15-top-name{flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .x15-top-chg{font-size:12.5px;font-weight:700;font-family:'JetBrains Mono',monospace;white-space:nowrap;min-width:50px;text-align:right}
 .x15-top-kep{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;white-space:nowrap;min-width:42px;text-align:right}
@@ -481,13 +524,13 @@
 .berulang-hdr{display:flex;align-items:center;gap:7px;margin-bottom:3px;overflow:hidden}
 .berulang-ticker{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;cursor:pointer;color:var(--text);flex-shrink:0}
 .berulang-ticker:hover{color:var(--gold)}
-.berulang-days{font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;background:rgba(63,176,126,.15);color:var(--bull);white-space:nowrap;flex-shrink:0}
+.berulang-days{font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;background:rgba(47,181,126,.15);color:var(--bull);white-space:nowrap;flex-shrink:0}
 .berulang-holder{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .berulang-tl{display:flex;align-items:center;margin:7px 0 3px}
 .b-dot{width:10px;height:10px;border-radius:50%;background:var(--panel2);border:2px solid var(--line);flex-shrink:0;z-index:1}
 .b-dot.on{background:var(--bull);border-color:var(--bull)}
 .b-line{flex:1;height:2px;background:var(--line)}
-.b-line.on{background:rgba(63,176,126,.4)}
+.b-line.on{background:rgba(47,181,126,.4)}
 .berulang-range{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);font-family:'JetBrains Mono',monospace}
 .berulang-range .end{color:var(--bull);font-weight:700}
 /* ── Mobile overrides (selaras dengan breakpoint utama 768px) ── */
@@ -536,12 +579,12 @@
 .edu-term{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15px;margin-bottom:7px}
 .edu-abbr{font-family:'Inter',sans-serif;font-weight:400;font-size:12px;color:var(--muted)}
 .edu-def{font-size:13.5px;line-height:1.6;color:var(--text)}
-.edu-note{margin-top:9px;font-size:12px;line-height:1.55;color:var(--gold);background:rgba(200,162,75,.08);border-left:2px solid var(--gold);padding:7px 10px;border-radius:0 6px 6px 0;display:flex;align-items:flex-start;gap:6px}
+.edu-note{margin-top:9px;font-size:12px;line-height:1.55;color:var(--gold);background:rgba(199,154,42,.08);border-left:2px solid var(--gold);padding:7px 10px;border-radius:0 6px 6px 0;display:flex;align-items:flex-start;gap:6px}
 .edu-note .icon{margin-top:2px;flex-shrink:0}
 .watch-btn{display:inline-block;margin:6px 0;background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:20px;padding:6px 14px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:transform .15s var(--ease-premium),box-shadow .15s var(--ease-premium),border-color .15s,color .15s}
 .watch-btn:hover{border-color:var(--gold);color:var(--text);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
 .watch-btn:active{transform:translateY(0)}
-.watch-btn.on{background:rgba(200,162,75,.14);border-color:var(--gold);color:var(--gold);font-weight:600}
+.watch-btn.on{background:rgba(199,154,42,.14);border-color:var(--gold);color:var(--gold);font-weight:600}
 /* ---- bandingkan side-by-side ---- */
 .cmp-wrap{overflow-x:auto}
 .cmp-table{min-width:100%}
@@ -550,7 +593,7 @@
 .cmp-table .cmp-h{cursor:pointer;font-family:'JetBrains Mono',monospace;color:var(--gold);font-size:15px}
 .cmp-table .cmp-h:hover{text-decoration:underline}
 .cmp-table tbody tr{border-top:1px solid var(--line)}
-.cmp-best{background:rgba(200,162,75,.12);border-radius:6px;font-weight:700}
+.cmp-best{background:rgba(199,154,42,.12);border-radius:6px;font-weight:700}
 /* ---- tur singkat (onboarding) ---- */
 .tour-btn{width:32px;height:32px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:15px;font-weight:700;cursor:pointer;transition:.15s;flex-shrink:0}
 .tour-btn:hover{border-color:var(--gold);color:var(--gold)}
@@ -574,7 +617,7 @@
 .tour-nav .btn{padding:11px 22px}
 /* ---- POLES PROFESIONAL (additive, aman) ---- */
 /* tab sub-mode (di dalam panel: Screener/Pasar/Sektor) lebih jelas saat aktif */
-.panel .tab.active{background:rgba(200,162,75,.14);color:var(--gold);box-shadow:inset 0 0 0 1px rgba(200,162,75,.35)}
+.panel .tab.active{background:rgba(199,154,42,.14);color:var(--gold);box-shadow:inset 0 0 0 1px rgba(199,154,42,.35)}
 .panel .tab:hover:not(.active){background:var(--panel2);color:var(--text)}
 /* umpan balik tekan tombol */
 .btn:active{transform:translateY(0) scale(.98)}
@@ -582,13 +625,13 @@
 /* fokus keyboard yang jelas (aksesibilitas) */
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 /* seleksi teks bernuansa brand */
-::selection{background:rgba(200,162,75,.32);color:#fff}
+::selection{background:rgba(199,154,42,.32);color:#fff}
 /* scrollbar gelap */
 *{scrollbar-width:thin;scrollbar-color:#26344b transparent}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#26344b;border-radius:8px;border:2px solid transparent;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover{background:#3a4a63;background-clip:content-box}
+::-webkit-scrollbar-thumb{background:#2A423A;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#3B5A4E;background-clip:content-box}
 /* kedalaman halus pada panel */
 .panel{box-shadow:var(--shadow-inset-top), var(--shadow-sm)}
 /* baris tabel yang bisa diklik: kursor + sorot konsisten + aksen kiri emas
@@ -619,7 +662,7 @@ html{scroll-behavior:smooth}
 .toast.show{opacity:1;transform:none}
 .toast.ok{border-color:rgba(74,222,128,.35);background:rgba(14,30,20,.9)}
 .toast.err{border-color:rgba(248,113,113,.35);background:rgba(30,14,14,.9)}
-.toast.info{border-color:rgba(200,162,75,.35);background:rgba(28,22,10,.9)}
+.toast.info{border-color:rgba(199,154,42,.35);background:rgba(28,22,10,.9)}
 .toast-icon{font-size:16px;flex:none}
 .toast.ok .toast-icon{color:var(--bull)}
 .toast.err .toast-icon{color:var(--bear)}
@@ -741,30 +784,9 @@ html{scroll-behavior:smooth}
   #v-pasar [style*="minmax(130px"]{grid-template-columns:1fr 1fr!important}
 }
 
-/* ===== RANAH SAHAM UI REFRESH: disciplined, not decorative ===== */
-:root{
-  --bg:#06110F;
-  --panel:#0B1714;
-  --panel2:#101F1B;
-  --elev:#142721;
-  --line:#213832;
-  --line-soft:#172924;
-  --gold:#C79A2A;
-  --gold-soft:rgba(199,154,42,.12);
-  --gold-dim:rgba(199,154,42,.48);
-  --text:#F2EFE7;
-  --muted:#9AA69F;
-  --faint:#66736C;
-  --bull:#2FB57E;
-  --bear:#D65A4A;
-  --neutral:#6E8178;
-  --accent:var(--gold);
-  --green:var(--bull);
-  --red:var(--bear);
-  --fg:var(--text);
-  --text2:var(--muted);
-  --radius:8px;
-}
+/* ===== RANAH SAHAM UI REFRESH: disciplined, not decorative =====
+   (blok :root override yang dulu di sini sudah di-MERGE ke :root utama di
+   atas file -- jangan tambah :root kedua lagi, satu sumber kebenaran.) */
 body{
   background:
     linear-gradient(180deg,rgba(199,154,42,.035),transparent 260px),
@@ -787,7 +809,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .panel:hover{border-color:rgba(199,154,42,.22);box-shadow:var(--shadow-inset-top), var(--shadow-md);transform:translateY(-2px)}
 .tab{border-radius:6px}
 .btn{border-radius:7px}
-.btn:hover{filter:none;background:#D7A83A}
+.btn:hover{filter:none;background:linear-gradient(180deg,#E5BC55,#D7A83A 60%,#BD9226)}
 .btn.ghost:hover{background:rgba(199,154,42,.08);border-color:var(--gold-dim)}
 .eyebrow{letter-spacing:.18em;color:#B8B0A0}
 .eyebrow::before{background:var(--gold);width:18px}
@@ -820,6 +842,13 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   z-index:0;
 }
 .rs-research-hero>*{position:relative;z-index:1}
+/* glow radial emas SANGAT halus dari kiri-atas hero -- kedalaman ambient,
+   bukan spotlight yang minta perhatian */
+.rs-research-hero::after{
+  content:"";position:absolute;top:-140px;left:-180px;width:640px;height:520px;
+  background:radial-gradient(closest-side,rgba(199,154,42,.10),transparent 70%);
+  pointer-events:none;z-index:0;
+}
 @keyframes heroLogoDrift{
   0%,100%{transform:translateY(-50%) rotate(0deg) scale(1)}
   50%{transform:translateY(-54%) rotate(8deg) scale(1.06)}
@@ -828,12 +857,18 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .home-brandline{display:flex;align-items:center;gap:12px;margin-bottom:18px;color:var(--text);font-family:"Space Grotesk";font-weight:700;letter-spacing:.16em}
 .home-brandline .rs-mark{width:46px;height:46px;display:inline-flex;align-items:center;justify-content:center;flex:none}
 .home-brandline .rs-mark img{width:100%;height:100%;object-fit:contain;display:block}
-.home-kicker{font-size:12px;color:var(--gold);letter-spacing:.22em;text-transform:uppercase;margin:0 0 8px;font-family:"JetBrains Mono"}
-.rs-research-hero .home-title{margin:0 0 12px;max-width:760px;font-size:clamp(30px,5vw,56px);line-height:1.02;letter-spacing:0}
+.home-kicker{font-size:12px;color:var(--gold);letter-spacing:.22em;text-transform:uppercase;margin:0 0 8px;font-family:"JetBrains Mono";display:flex;align-items:center;gap:10px}
+.home-kicker::before{content:"";width:26px;height:1px;background:linear-gradient(90deg,var(--gold),transparent);flex:none}
+.rs-research-hero .home-title{margin:0 0 12px;max-width:760px;font-size:clamp(30px,5vw,58px);line-height:1.02;letter-spacing:-1px}
+/* aksen gradient-text emas utk kata kunci judul -- satu titik "mahal",
+   bukan seluruh judul (seluruh judul gradient = norak) */
+.grad-gold{background:linear-gradient(105deg,#EFD083 0%,var(--gold) 48%,#8A6B14 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
 .rs-research-hero .home-sub{margin:0;max-width:690px;font-size:15px;color:#B9C3BD}
 .home-search-card{
-  background:rgba(11,23,20,.78);border:1px solid rgba(199,154,42,.2);border-radius:8px;
-  padding:16px;box-shadow:0 16px 40px rgba(0,0,0,.18);
+  background:linear-gradient(180deg,rgba(199,154,42,.055),transparent 55%),rgba(11,23,20,.82);
+  border:1px solid rgba(199,154,42,.24);border-radius:12px;
+  padding:18px;box-shadow:var(--shadow-inset-top),0 20px 48px -12px rgba(0,0,0,.5);
 }
 .home-search-title{font-family:"Space Grotesk";font-weight:700;font-size:16px;margin:0 0 10px;color:var(--text)}
 .home-search{max-width:none;margin:0}
@@ -991,37 +1026,21 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
    -- kartu yang jelas mewakili untung/rugi (Menang/Kalah, Naik/Turun) dapat
    glow HIJAU/MERAH saat hover, bukan selalu emas generik -- warnanya jadi
    informasi tambahan (nuansa hasilnya), bukan dekorasi acak. */
-.decision-card.glow-bull:hover{box-shadow:0 6px 22px rgba(63,176,126,.22);border-color:rgba(63,176,126,.45)}
-.decision-card.glow-bear:hover{box-shadow:0 6px 22px rgba(219,90,86,.22);border-color:rgba(219,90,86,.45)}
+.decision-card.glow-bull:hover{box-shadow:0 6px 22px rgba(47,181,126,.22);border-color:rgba(47,181,126,.45)}
+.decision-card.glow-bear:hover{box-shadow:0 6px 22px rgba(214,90,74,.22);border-color:rgba(214,90,74,.45)}
 .breadth-card{transition:transform .18s var(--ease-premium), box-shadow .18s var(--ease-premium)}
 .breadth-card:hover{transform:translateY(-2px)}
-.breadth-card.glow-bull:hover{box-shadow:0 6px 22px rgba(63,176,126,.22)}
-.breadth-card.glow-bear:hover{box-shadow:0 6px 22px rgba(219,90,86,.22)}
+.breadth-card.glow-bull:hover{box-shadow:0 6px 22px rgba(47,181,126,.22)}
+.breadth-card.glow-bear:hover{box-shadow:0 6px 22px rgba(214,90,74,.22)}
 </style>
 </head>
 <body>
 <header><div class="wrap nav">
   <div class="brand" onclick="route('beranda')" style="cursor:pointer"><span class="brand-mark"><img src="logo-mark.png" alt="Ranah Saham"></span><span>RANAH SAHAM</span><sup>IDX</sup></div>
-  <div class="tabs" id="tabs">
-    <button class="tab active" data-v="beranda">Beranda</button>
-    <button class="tab" data-v="analisis">Analisis</button>
-    <button class="tab" data-v="ihsg">IHSG</button>
-    <button class="tab" data-v="screener">Screener</button>
-    <button class="tab" data-v="toppick">Top Pick</button>
-    <button class="tab" data-v="audit">Audit Sinyal</button>
-    <button class="tab" data-v="heatmap">Heatmap</button>
-    <button class="tab" data-v="pasar">Pasar</button>
-    <button class="tab" data-v="sektor">Sektor</button>
-    <button class="tab" data-v="banding">Bandingkan</button>
-    <button class="tab" data-v="risk">Risk</button>
-    <button class="tab" data-v="makro">Makro</button>
-    <button class="tab" data-v="asing">Smart $</button>
-    <button class="tab" data-v="pemegang">Pemegang</button>
-    <button class="tab" data-v="berita">Berita</button>
-    <button class="tab" data-v="edukasi">Edukasi</button>
-    <button class="tab" data-v="backtest">Backtest</button>
-    <button class="tab" data-v="forum">Forum</button>
-  </div>
+  <!-- diisi renderNav() dari NAV_GROUPS -- SATU sumber utk desktop & drawer
+       mobile, jangan tulis tab statis lagi di sini (dulu 2 salinan 18 tab
+       yang gampang tidak sinkron) -->
+  <div class="tabs" id="tabs"></div>
   <div class="kbd" id="openCmd">Cari saham <kbd>Ctrl K</kbd></div>
   <button class="tour-btn" id="tourBtn" title="Tur singkat" aria-label="Tur singkat">?</button>
   <button class="hbg" id="hbg" aria-label="Menu" onclick="toggleMobMenu()">
@@ -1029,31 +1048,9 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   </button>
 </div></header>
 
-<!-- Mobile drawer -->
+<!-- Mobile drawer -- isinya dirender renderNav() dari NAV_GROUPS -->
 <div class="mob-drawer" id="mobDrawer" onclick="closeMobMenu()">
-  <nav class="mob-menu" onclick="event.stopPropagation()" id="mobMenu">
-    <button class="tab active" data-v="beranda">Beranda</button>
-    <div class="mob-divider"></div>
-    <button class="tab" data-v="analisis">Analisis</button>
-    <button class="tab" data-v="ihsg">IHSG</button>
-    <button class="tab" data-v="screener">Screener</button>
-    <button class="tab" data-v="toppick">Top Pick</button>
-    <button class="tab" data-v="audit">Audit Sinyal</button>
-    <button class="tab" data-v="heatmap">Heatmap</button>
-    <button class="tab" data-v="pasar">Pasar</button>
-    <button class="tab" data-v="sektor">Sektor</button>
-    <button class="tab" data-v="banding">Bandingkan</button>
-    <button class="tab" data-v="risk">Risk</button>
-    <button class="tab" data-v="makro">Makro</button>
-    <button class="tab" data-v="asing">Smart $</button>
-    <button class="tab" data-v="pemegang">Pemegang</button>
-    <button class="tab" data-v="berita">Berita</button>
-    <button class="tab" data-v="edukasi">Edukasi</button>
-    <button class="tab" data-v="backtest">Backtest</button>
-    <button class="tab" data-v="forum">Forum</button>
-    <div class="mob-divider"></div>
-    <button class="tab" onclick="closeMobMenu();openCmd()">Cari Saham</button>
-  </nav>
+  <nav class="mob-menu" onclick="event.stopPropagation()" id="mobMenu"></nav>
 </div>
 <div class="mstrip" id="mstrip"><div class="wrap" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;width:100%">
   <span class="mi">IHSG <b id="ms-ihsg">memuat…</b></span></div></div>
@@ -1067,7 +1064,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <div>
         <div class="home-brandline"><span class="rs-mark"><img src="logo-mark.png" alt="Ranah Saham"></span><span>RANAH SAHAM</span></div>
         <p class="home-kicker">Discipline. Strategy. Growth.</p>
-        <h1 class="home-title">Research cockpit saham IDX.</h1>
+        <h1 class="home-title">Research cockpit <span class="grad-gold">saham IDX</span>.</h1>
         <p class="home-sub">Baca kondisi pasar, cari peluang, lalu cek alasan dan risikonya dalam satu alur yang rapi. Transparan, edukatif, dan tanpa klaim profit instan.</p>
       </div>
       <div class="home-search-card">
@@ -1783,7 +1780,7 @@ function recIcon(recommendation,size=12){const name=REC_ICON[recommendation]; re
 const SECTOR_COLORS={Financials:['#2FB57E','rgba(47,181,126,.13)'],Infrastructure:['#3FA7C4','rgba(63,167,196,.13)'],
   Industrials:['#9B8CFF','rgba(155,140,255,.13)'],'Consumer Non-Cyclical':['#E0913B','rgba(224,145,59,.13)'],
   Healthcare:['#E05B8A','rgba(224,91,138,.13)'],Energy:['#E0566B','rgba(224,86,107,.13)'],
-  'Basic Materials':['#C8A24B','rgba(200,162,75,.14)'],'Consumer Cyclical':['#46C2A8','rgba(70,194,168,.13)'],
+  'Basic Materials':['#C79A2A','rgba(199,154,42,.14)'],'Consumer Cyclical':['#46C2A8','rgba(70,194,168,.13)'],
   Technology:['#5B8DEF','rgba(91,141,239,.13)'],Lainnya:['#8593AC','rgba(133,147,172,.13)']};
 function secTag(s){const c=SECTOR_COLORS[s]||SECTOR_COLORS.Lainnya;return `<span class="sectag" style="color:${c[0]};background:${c[1]}">${s}</span>`}
 async function loadMarketStrip(){
@@ -1825,17 +1822,55 @@ setInterval(_tickLiveBadges,1000);
 setInterval(loadMarketStrip,30000);
 let _currentView='beranda';
 
-/* ---------- indikator scroll tab nav (PC, saat tab kepanjangan) ---------- */
-function _updateTabsFade(){
-  const t=document.getElementById('tabs'); if(!t)return;
-  const atStart=t.scrollLeft<=2;
-  const atEnd=t.scrollLeft+t.clientWidth>=t.scrollWidth-2;
-  t.classList.toggle('fade-l',!atStart);
-  t.classList.toggle('fade-r',!atEnd);
+/* ---------- NAV GRUP DROPDOWN ----------
+   SATU sumber (NAV_GROUPS) merender nav desktop (#tabs, grup + dropdown)
+   DAN drawer mobile (#mobMenu, seksi ber-header) -- dulu 18 tab flat
+   ditulis statis 2x (desktop & drawer) dan meluber/kepotong di layar
+   biasa. route()/_applyRoute TIDAK berubah: item tetap .tab[data-v]. */
+const NAV_GROUPS=[
+  {label:'Beranda',view:'beranda'},
+  {label:'Analisis',items:[
+    {v:'analisis',l:'Analisis Saham',icon:'activity'},
+    {v:'ihsg',l:'IHSG',icon:'trending-up'},
+    {v:'banding',l:'Bandingkan',icon:'layers'},
+    {v:'backtest',l:'Backtest',icon:'repeat'},
+    {v:'risk',l:'Risk Kalkulator',icon:'sliders'}]},
+  {label:'Sinyal',items:[
+    {v:'screener',l:'Screener',icon:'search'},
+    {v:'toppick',l:'Top Pick',icon:'trophy'},
+    {v:'audit',l:'Audit Sinyal',icon:'check-circle'}]},
+  {label:'Pasar',items:[
+    {v:'pasar',l:'Pasar Harian',icon:'bar-chart'},
+    {v:'heatmap',l:'Heatmap',icon:'layers'},
+    {v:'sektor',l:'Sektor',icon:'activity'},
+    {v:'makro',l:'Makro Global',icon:'zap'}]},
+  {label:'Data',items:[
+    {v:'asing',l:'Smart Money',icon:'gem'},
+    {v:'pemegang',l:'Pemegang Saham',icon:'user'},
+    {v:'berita',l:'Berita',icon:'bell'}]},
+  {label:'Komunitas',items:[
+    {v:'forum',l:'Forum',icon:'message-square'},
+    {v:'edukasi',l:'Edukasi',icon:'sparkles'}]},
+];
+function renderNav(){
+  const tabs=$('#tabs');
+  if(tabs)tabs.innerHTML=NAV_GROUPS.map(g=>{
+    if(g.view)return `<button class="tab${g.view===_currentView?' active':''}" data-v="${g.view}">${g.label}</button>`;
+    return `<div class="nav-group">
+      <button class="tab nav-group-btn" type="button" aria-haspopup="true">${g.label} ${icon('chevron-down',{size:12,className:'nav-caret'})}</button>
+      <div class="nav-dd">${g.items.map(i=>`<button class="tab${i.v===_currentView?' active':''}" data-v="${i.v}">${icon(i.icon,{size:14})}<span>${i.l}</span></button>`).join('')}</div>
+    </div>`;
+  }).join('');
+  const mm=$('#mobMenu');
+  if(mm)mm.innerHTML=NAV_GROUPS.map(g=>{
+    if(g.view)return `<button class="tab${g.view===_currentView?' active':''}" data-v="${g.view}">${g.label}</button>`;
+    return `<div class="mob-sec">${g.label}</div>`+
+      g.items.map(i=>`<button class="tab${i.v===_currentView?' active':''}" data-v="${i.v}">${icon(i.icon,{size:14})} ${i.l}</button>`).join('');
+  }).join('')+`<div class="mob-divider"></div><button class="tab" onclick="closeMobMenu();openCmd()">${icon('search',{size:14})} Cari Saham</button>`;
+  if(tabs)tabs.querySelectorAll('.tab[data-v]').forEach(t=>t.addEventListener('click',()=>{route(t.dataset.v);document.activeElement&&document.activeElement.blur()}));
+  if(mm)mm.querySelectorAll('.tab[data-v]').forEach(t=>t.addEventListener('click',()=>{route(t.dataset.v);closeMobMenu()}));
 }
-window.addEventListener('resize',_updateTabsFade);
-document.getElementById('tabs')?.addEventListener('scroll',_updateTabsFade,{passive:true});
-setTimeout(_updateTabsFade,0);
+renderNav();
 async function api(p){const r=await fetch(p);if(!r.ok){let m='Gagal memuat data.';try{m=(await r.json()).detail||m}catch{}throw new Error(m)}return r.json()}
 function vColor(r){r=(r||'').toUpperCase();if(/BAGUS|BULLISH|KUAT|AKUMULASI/.test(r))return'var(--bull)';if(/BURUK|BEARISH|LEMAH|AVOID/.test(r))return'var(--bear)';if(/CUKUP|WATCH/.test(r))return'#ff8c00';return'var(--gold)'}
 function errBox(m){return `<div class="err">${m}</div>`}
@@ -1909,7 +1944,7 @@ function closeMobMenu(){
   $('#hbg').classList.remove('on');
   document.body.style.overflow='';
 }
-$('#mobMenu').querySelectorAll('.tab[data-v]').forEach(t=>t.addEventListener('click',()=>{route(t.dataset.v);closeMobMenu()}));
+/* (wiring klik item nav desktop & drawer sekarang di dalam renderNav()) */
 
 /* ---------- ROUTER ---------- */
 // Token navigasi -- kalau user pindah tab LAGI sebelum fade-out tab
@@ -1919,7 +1954,11 @@ let _routeToken=0;
 function _applyRoute(v){
   const view=$('#v-'+v); if(!view)return;
   document.querySelectorAll('.tab[data-v]').forEach(t=>t.classList.toggle('active',t.dataset.v===v));
-  document.querySelector(`.tabs .tab[data-v="${v}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
+  // Tombol grup nav ikut menyala saat salah satu item di dropdown-nya aktif
+  // (tombol grup tidak punya data-v, jadi loop di atas melewatkannya).
+  document.querySelectorAll('.nav-group').forEach(gr=>{
+    gr.querySelector('.nav-group-btn')?.classList.toggle('active',!!gr.querySelector(`.nav-dd .tab[data-v="${v}"]`));
+  });
 
   const prev=document.querySelector('.view.on');
   const token=++_routeToken;
@@ -1966,7 +2005,8 @@ function route(v){
 }
 window.addEventListener('popstate',e=>{_applyRoute((e.state&&e.state.view)||'beranda')});
 if(!history.state)history.replaceState({view:_currentView||'beranda'},'','#'+(_currentView||'beranda'));
-document.querySelectorAll('.tab[data-v]').forEach(t=>t.addEventListener('click',()=>route(t.dataset.v)));
+/* (wiring klik .tab[data-v] nav sudah di renderNav() -- jangan wiring ulang
+   di sini, dulu bikin item drawer ter-wiring dobel) */
 
 /* ---------- TILT 3D HALUS (kartu terpilih saja) ----------
    Cuma dipasang di kartu besar/menonjol yang memang pantas dilihat satu-satu
@@ -2081,7 +2121,7 @@ async function analyze(kode){
     <div class="analysis-main">
       <section class="panel chart-panel"><p class="eyebrow">Grafik Interaktif</p><div id="chart"></div>
         <div id="phaseRibbon"></div>
-        <div class="chart-meta"><span><span class="ma-dot" style="background:#C8A24B"></span>MA20 · <span class="ma-dot" style="background:#2FB57E"></span>MA50</span><span>Seret untuk zoom/geser</span></div></section>
+        <div class="chart-meta"><span><span class="ma-dot" style="background:#C79A2A"></span>MA20 · <span class="ma-dot" style="background:#2FB57E"></span>MA50</span><span>Seret untuk zoom/geser</span></div></section>
       <section class="panel panel-primary"><p class="eyebrow">Tesis Cepat</p>
         <div class="ma-chips">
           <span class="chip">MA20 Rp${fmt(d.ma20)}</span>
@@ -2200,11 +2240,11 @@ function loadSmcCharts(kode,containerId,btnId){
     const cont=$('#'+containerId+'-c'); if(!cont||!window.LightweightCharts)return;
     const chart=LightweightCharts.createChart(cont,{width:cont.clientWidth,height:420,
       layout:{background:{color:'transparent'},textColor:'#8593AC',fontFamily:'JetBrains Mono'},
-      grid:{vertLines:{color:'rgba(200,162,75,.06)'},horzLines:{color:'rgba(200,162,75,.06)'}},
-      rightPriceScale:{borderColor:'rgba(200,162,75,.16)'},timeScale:{borderColor:'rgba(200,162,75,.16)'}});
+      grid:{vertLines:{color:'rgba(199,154,42,.06)'},horzLines:{color:'rgba(199,154,42,.06)'}},
+      rightPriceScale:{borderColor:'rgba(199,154,42,.16)'},timeScale:{borderColor:'rgba(199,154,42,.16)'}});
     const cs=chart.addCandlestickSeries({upColor:'#2FB57E',downColor:'#E0566B',wickUpColor:'#2FB57E',wickDownColor:'#E0566B',borderVisible:false});
     cs.setData(d.candles);
-    chart.addLineSeries({color:'#C8A24B',lineWidth:1,lastValueVisible:false,priceLineVisible:false}).setData(d.ma20);
+    chart.addLineSeries({color:'#C79A2A',lineWidth:1,lastValueVisible:false,priceLineVisible:false}).setData(d.ma20);
     chart.timeScale().fitContent();
     new ResizeObserver(()=>chart.applyOptions({width:cont.clientWidth})).observe(cont);
     const lines=[],active={bos:true,ob:true,fvg:true,liq:true},DASH=2,DOT=1;
@@ -2214,7 +2254,7 @@ function loadSmcCharts(kode,containerId,btnId){
       const add=(p,c,st,t)=>{if(p==null)return;lines.push(cs.createPriceLine({price:p,color:c,lineWidth:1,lineStyle:st,axisLabelVisible:true,title:t||''}))};
       if(active.ob)d.ob.slice(-3).forEach(o=>{const c=o.type==='BULLISH'?'#2FB57E':'#E0566B';add(o.high,c,DASH,'OB');add(o.low,c,DASH,'')});
       if(active.fvg)d.fvg.slice(-3).forEach(f=>{add(f.high,'#3FA7C4',DOT,'FVG');add(f.low,'#3FA7C4',DOT,'')});
-      if(active.liq)d.liq.slice(-5).forEach(l=>{const c=l.type==='HIGH'?'#C8A24B':'#5B8DEF';add(l.price,c,DASH,l.swept?'Liq✓':'Liq')});
+      if(active.liq)d.liq.slice(-5).forEach(l=>{const c=l.type==='HIGH'?'#C79A2A':'#5B8DEF';add(l.price,c,DASH,l.swept?'Liq✓':'Liq')});
     }
     apply();
     box.querySelectorAll('[data-l]').forEach(b=>b.addEventListener('click',()=>{active[b.dataset.l]=!active[b.dataset.l];b.classList.toggle('active');apply()}));
@@ -2230,8 +2270,8 @@ async function drawChart(kode){
   if(chartObj){try{chartObj.remove()}catch{}}
   chartObj=LightweightCharts.createChart(cont,{
     width:cont.clientWidth,height:cont.clientHeight,layout:{background:{color:'transparent'},textColor:'#8593AC',fontFamily:'JetBrains Mono'},
-    grid:{vertLines:{color:'rgba(200,162,75,.06)'},horzLines:{color:'rgba(200,162,75,.06)'}},
-    rightPriceScale:{borderColor:'rgba(200,162,75,.16)'},timeScale:{borderColor:'rgba(200,162,75,.16)'},
+    grid:{vertLines:{color:'rgba(199,154,42,.06)'},horzLines:{color:'rgba(199,154,42,.06)'}},
+    rightPriceScale:{borderColor:'rgba(199,154,42,.16)'},timeScale:{borderColor:'rgba(199,154,42,.16)'},
     crosshair:{mode:0}
   });
   const cs=chartObj.addCandlestickSeries({upColor:'#2FB57E',downColor:'#E0566B',wickUpColor:'#2FB57E',wickDownColor:'#E0566B',borderVisible:false});
@@ -2239,7 +2279,7 @@ async function drawChart(kode){
   const vol=chartObj.addHistogramSeries({priceScaleId:'',priceFormat:{type:'volume'}});
   vol.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});
   vol.setData(o.volume);
-  chartObj.addLineSeries({color:'#C8A24B',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma20);
+  chartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma20);
   chartObj.addLineSeries({color:'#2FB57E',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma50);
   chartObj.timeScale().fitContent();
   new ResizeObserver(()=>{if(chartObj)chartObj.applyOptions({width:cont.clientWidth})}).observe(cont);
@@ -2266,7 +2306,7 @@ function _updateChartLive(o){
     cont.parentNode.insertBefore(tag,cont.nextSibling);}
   if(o&&o.last_price!=null){
     const lp=Number(o.last_price).toLocaleString('id-ID',{maximumFractionDigits:2});
-    tag.innerHTML=`Harga terakhir <b style="color:#C8A24B">${lp}</b> · per ${o.as_of||'-'} WIB · ${o.realtime?'real-time (delayed ~15 mnt)':'data harian'}`;
+    tag.innerHTML=`Harga terakhir <b style="color:#C79A2A">${lp}</b> · per ${o.as_of||'-'} WIB · ${o.realtime?'real-time (delayed ~15 mnt)':'data harian'}`;
   }
 }
 
@@ -2306,8 +2346,10 @@ async function showIhsg(){
   body.innerHTML=`
   <section class="panel">
     <p class="eyebrow">Indeks Harga Saham Gabungan ${liveBadge('ihsg')}</p>
+    <p class="muted" style="font-size:11px;margin-bottom:2px;letter-spacing:.03em">PREDIKSI TEKNIKAL BEBERAPA HARI KE DEPAN -- BUKAN status pergerakan hari ini</p>
     <div class="ihsg-head"><div class="big" style="color:${vColor(d.prediction)}">${d.prediction||'–'}</div>
       <div class="muted">Keyakinan: ${d.confidence||'–'}</div>${d.target_move?`<div class="muted">Target: ${d.target_move}</div>`:''}</div>
+    <p class="muted" style="font-size:12px;margin-top:4px">Hari ini indeks ${d.daily_change>=0?'naik':'turun'} <b style="color:${d.daily_change>=0?'var(--bull)':'var(--bear)'}">${d.daily_change>=0?'+':''}${fmt(d.daily_change,2)}%</b> -- prediksi di atas bisa berbeda arah dari pergerakan hari ini karena melihat struktur teknikal (posisi vs MA, RSI, dst), bukan cuma angka hari ini.</p>
     ${d.bandar?`<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
       <span class="chip" style="color:${bandarColor(d.bandar.label)}">${d.bandar.label}</span></div>
       <p class="muted" style="font-size:11px;margin:6px 0 0;line-height:1.5"><b>${d.bandar.label}</b> = proxy tren Chaikin A/D Line pada IHSG (harga vs volume gabungan pasar 20 hari), <u>bukan</u> data transaksi bandar/asing sungguhan.</p>`:''}
@@ -2400,10 +2442,10 @@ async function drawIhsgChart(){
   if(ihsgChartObj){try{ihsgChartObj.remove()}catch{}}
   ihsgChartObj=LightweightCharts.createChart(cont,{width:cont.clientWidth,height:cont.clientHeight,
     layout:{background:{color:'transparent'},textColor:'#8593AC',fontFamily:'JetBrains Mono'},
-    grid:{vertLines:{color:'rgba(200,162,75,.06)'},horzLines:{color:'rgba(200,162,75,.06)'}},
-    rightPriceScale:{borderColor:'rgba(200,162,75,.16)'},timeScale:{borderColor:'rgba(200,162,75,.16)'}});
+    grid:{vertLines:{color:'rgba(199,154,42,.06)'},horzLines:{color:'rgba(199,154,42,.06)'}},
+    rightPriceScale:{borderColor:'rgba(199,154,42,.16)'},timeScale:{borderColor:'rgba(199,154,42,.16)'}});
   ihsgChartObj.addCandlestickSeries({upColor:'#2FB57E',downColor:'#E0566B',wickUpColor:'#2FB57E',wickDownColor:'#E0566B',borderVisible:false}).setData(o.candles);
-  ihsgChartObj.addLineSeries({color:'#C8A24B',lineWidth:1.5,lastValueVisible:false,priceLineVisible:false}).setData(o.ma20);
+  ihsgChartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,lastValueVisible:false,priceLineVisible:false}).setData(o.ma20);
   ihsgChartObj.timeScale().fitContent();
   new ResizeObserver(()=>{if(ihsgChartObj)ihsgChartObj.applyOptions({width:cont.clientWidth})}).observe(cont);
   renderPhaseRibbon(o.phases,'ihsgRibbon');
@@ -2609,12 +2651,12 @@ function _xlCap(v){if(!v)return '\u2013';if(v>=1e12)return (v/1e12).toFixed(2)+'
 function _xlRp(v){if(v==null||v==='')return '';return 'Rp'+Number(v).toLocaleString('id-ID')}
 
 function _xlHeader(cols){
-  return '<tr>'+cols.map(c=>`<th style="background:#16243C;color:#C8A24B;font-weight:700;font-size:11pt;padding:8px 12px;border:1px solid #22304A;white-space:nowrap">${c}</th>`).join('')+'</tr>'
+  return '<tr>'+cols.map(c=>`<th style="background:#16243C;color:#C79A2A;font-weight:700;font-size:11pt;padding:8px 12px;border:1px solid #22304A;white-space:nowrap">${c}</th>`).join('')+'</tr>'
 }
 function _xlTitle(title,subtitle,ncol){
   return `<tr><td colspan="${ncol}" style="background:#16243C;color:#ffffff;font-size:14pt;font-weight:700;padding:12px 16px;letter-spacing:.02em">${title}</td></tr>`+
-         `<tr><td colspan="${ncol}" style="background:#22304A;color:#C8A24B;font-size:9pt;padding:6px 16px">${subtitle}</td></tr>`+
-         `<tr><td colspan="${ncol}" style="background:#22304A;color:#8b949e;font-size:8.5pt;padding:4px 16px;border-bottom:2px solid #C8A24B">Digenerate: ${nowStr()} &nbsp;\u00b7&nbsp; Sumber data: Yahoo Finance &nbsp;\u00b7&nbsp; Bukan nasihat keuangan \u2014 DYOR</td></tr>`
+         `<tr><td colspan="${ncol}" style="background:#22304A;color:#C79A2A;font-size:9pt;padding:6px 16px">${subtitle}</td></tr>`+
+         `<tr><td colspan="${ncol}" style="background:#22304A;color:#8b949e;font-size:8.5pt;padding:4px 16px;border-bottom:2px solid #C79A2A">Digenerate: ${nowStr()} &nbsp;\u00b7&nbsp; Sumber data: Yahoo Finance &nbsp;\u00b7&nbsp; Bukan nasihat keuangan \u2014 DYOR</td></tr>`
 }
 function _xlFooter(ncol){
   return `<tr><td colspan="${ncol}" style="background:#f4f5f7;color:#5B6470;font-size:8pt;font-style:italic;padding:6px 12px;border-top:1px solid #DDE1E7">\u26a0\ufe0f Data historis untuk referensi. Analisis teknikal tidak menjamin pergerakan harga ke depan. Keputusan investasi sepenuhnya tanggung jawab investor. RANAH SAHAM \u00a9 ${new Date().getFullYear()}</td></tr>`
@@ -4066,8 +4108,8 @@ function _buildInvestorProfiles(d,tech){
   function card(title,rating,horizon,desc,metrics,journal){
     const sg=rating==='STRONG',md=rating==='MEDIUM';
     const bc=sg?'var(--green)':md?'var(--gold)':'var(--muted)';
-    const bg=sg?'rgba(74,222,128,.05)':md?'rgba(200,162,75,.05)':'transparent';
-    const bbg=sg?'rgba(74,222,128,.13)':md?'rgba(200,162,75,.13)':'rgba(100,100,100,.09)';
+    const bg=sg?'rgba(74,222,128,.05)':md?'rgba(199,154,42,.05)':'transparent';
+    const bbg=sg?'rgba(74,222,128,.13)':md?'rgba(199,154,42,.13)':'rgba(100,100,100,.09)';
     const jc=sg?'var(--fg)':md?'var(--fg)':'var(--muted)';
     return`<div style="background:${bg};border:1px solid ${bc}33;border-left:3px solid ${bc};border-radius:10px;padding:14px 15px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:5px">
@@ -4307,7 +4349,7 @@ function _buildInvestorProfiles(d,tech){
     <p class="muted" style="font-size:12px;margin-bottom:2px">Fundamental + Teknikal — ${hasTech?'data analisis saham ini dipakai':'analisis dulu di tab Analisis untuk sinyal teknikal'}.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;margin-top:8px">
       <span style="background:rgba(74,222,128,.12);color:var(--green);border-radius:6px;padding:3px 12px;font-size:11px;font-weight:700">${counts.STRONG} Strong</span>
-      <span style="background:rgba(200,162,75,.12);color:var(--gold);border-radius:6px;padding:3px 12px;font-size:11px;font-weight:700">${counts.MEDIUM} Medium</span>
+      <span style="background:rgba(199,154,42,.12);color:var(--gold);border-radius:6px;padding:3px 12px;font-size:11px;font-weight:700">${counts.MEDIUM} Medium</span>
       <span style="background:rgba(100,100,100,.09);color:var(--muted);border-radius:6px;padding:3px 12px;font-size:11px;font-weight:700">${counts.WEAK} Weak</span>
       ${techBadge}
     </div>
@@ -4421,7 +4463,7 @@ async function loadFundamental(kode,containerId,btnId){
           <span style="color:var(--text);font-weight:600">Harga kini Rp${fmt(pr)}</span>
           <span>Ceiling Rp${fmt(hi)}</span>
         </div>
-        <div style="position:relative;height:6px;background:linear-gradient(90deg,rgba(74,222,128,.3),rgba(200,162,75,.3),rgba(248,113,113,.3));border-radius:3px">
+        <div style="position:relative;height:6px;background:linear-gradient(90deg,rgba(74,222,128,.3),rgba(199,154,42,.3),rgba(248,113,113,.3));border-radius:3px">
           <div style="position:absolute;left:${pricePct}%;top:-4px;width:3px;height:14px;background:var(--text);border-radius:2px;transform:translateX(-50%)"></div>
         </div>
         <div style="text-align:center;margin-top:8px">
@@ -4819,13 +4861,24 @@ function _setPemegangMode(mode){
 }
 document.querySelectorAll('[data-pmode]').forEach(b=>b.addEventListener('click',()=>_setPemegangMode(b.dataset.pmode)));
 
+// "13 Jul 2026" (format tanggal payload X-15) -> true kalau Sabtu/Minggu.
+// Dipakai chip tanggal & empty state supaya hari libur bursa TIDAK terbaca
+// sebagai "data kosong/error" -- memang tidak pernah ada filing di akhir pekan.
+function _x15IsWeekend(tanggal){
+  const d=new Date(tanggal||'');
+  if(isNaN(d))return false;
+  const day=d.getDay();
+  return day===0||day===6;
+}
+
 function _buildDateTabs(days){
   const el=$('#x15DateTabs');
   if(!el)return;
   el.innerHTML=days.map((d,i)=>{
     const lbl=d.tanggal||('H-'+i);
     const short=lbl.replace(/\d{4}/,'').replace(/^-/,'').trim()||lbl;
-    return`<button class="x15-date-tab${i===0?' active':''}" onclick="selectX15Date(${i})" data-hari="${i}">${short}</button>`;
+    const wknd=_x15IsWeekend(d.tanggal);
+    return`<button class="x15-date-tab${i===0?' active':''}${wknd?' wknd':''}" onclick="selectX15Date(${i})" data-hari="${i}"${wknd?' title="Akhir pekan — bursa libur, tidak ada laporan"':''}>${short}</button>`;
   }).join('');
 }
 
@@ -4858,7 +4911,9 @@ function _topRow(item,type){
 }
 
 function _renderTopPanels(d){
-  const noData=`<p class="muted" style="font-size:13px;padding:14px 0 4px">Tidak ada data untuk tanggal ini.</p>`;
+  const noData=d&&_x15IsWeekend(d.tanggal)
+    ?`<p class="muted" style="font-size:13px;padding:14px 0 4px">Akhir pekan (bursa libur) — memang tidak ada laporan di tanggal ini.</p>`
+    :`<p class="muted" style="font-size:13px;padding:14px 0 4px">Tidak ada laporan untuk tanggal ini.</p>`;
   const colLabel=_pemegangMode==='insider'?'INSIDER (JABATAN)':'PEMEGANG SAHAM';
   const colHdr=`<div style="display:flex;gap:6px;padding-bottom:7px;border-bottom:1px solid var(--line);font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--faint)">
     <span style="min-width:44px">SAHAM</span><span style="flex:1">${colLabel}</span>
@@ -4873,7 +4928,7 @@ function _renderTopPanels(d){
     <div class="x15-top-head">
       <span style="color:var(--bull)">▲</span>
       <span style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--bull)">TOP AKUMULASI</span>
-      <span style="margin-left:auto;background:rgba(63,176,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${aku.length}</span>
+      <span style="margin-left:auto;background:rgba(47,181,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${aku.length}</span>
     </div>
     ${colHdr}
     ${aku.slice(0,6).map(r=>_topRow(r,'aku')).join('')||noData}`;
@@ -4881,7 +4936,7 @@ function _renderTopPanels(d){
     <div class="x15-top-head">
       <span style="color:var(--bear)">▼</span>
       <span style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--bear)">TOP DISTRIBUSI</span>
-      <span style="margin-left:auto;background:rgba(219,90,86,.13);color:var(--bear);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${dis.length}</span>
+      <span style="margin-left:auto;background:rgba(214,90,74,.13);color:var(--bear);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${dis.length}</span>
     </div>
     ${colHdr}
     ${dis.slice(0,6).map(r=>_topRow(r,'dis')).join('')||noData}`;
@@ -5035,7 +5090,7 @@ async function loadBerulang(){
   panel.innerHTML=`
     <div class="x15-top-head" style="margin-bottom:12px">
       <span style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--bull)">AKUMULASI BERULANG</span>
-      <span style="margin-left:auto;background:rgba(63,176,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${repeats.length} saham</span>
+      <span style="margin-left:auto;background:rgba(47,181,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${repeats.length} saham</span>
     </div>
     ${cards}
     <p class="muted" style="font-size:10.5px;margin-top:12px;line-height:1.6">Saham yang dibeli ${_pemegangMode==='insider'?'direksi/komisaris':'pemegang ≥5%'} (siapa pun pelapornya) di 2+ sesi dari ${N} hari terakhir. Titik hijau = hari aktif. Tap ticker untuk analisis.</p>`;
@@ -5279,7 +5334,7 @@ const NEWS_SRC_COLORS={
   'Kumparan':         ['#2E86AB','rgba(46,134,171,.13)'],
   'iNews':            ['#F39C12','rgba(243,156,18,.13)'],
   'Suara.com':        ['#27AE60','rgba(39,174,96,.13)'],
-  'IDX Channel':      ['#C8A24B','rgba(200,162,75,.14)'],
+  'IDX Channel':      ['#C79A2A','rgba(199,154,42,.14)'],
   'Beritasatu':       ['#1ABC9C','rgba(26,188,156,.13)'],
   'Market Bisnis':    ['#4A90D9','rgba(74,144,217,.13)'],
 };
