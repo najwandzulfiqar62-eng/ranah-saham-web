@@ -13,6 +13,19 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ranah Saham">
 <meta name="description" content="Analisis saham IDX: teknikal, IHSG, screener, fundamental & valuasi. Untuk edukasi, bukan nasihat keuangan.">
+<!-- Open Graph / Twitter card: preview rapi saat link di-share ke WhatsApp/
+     Telegram/X -- tanpa ini share cuma tampil link polos. og:image WAJIB
+     URL absolut (scraper eksternal tidak bisa resolve path relatif). -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Ranah Saham">
+<meta property="og:title" content="Ranah Saham — Terminal Analisis Saham IDX">
+<meta property="og:description" content="Research cockpit saham IDX: analisis teknikal, prediksi IHSG, screener, Top Pick dgn audit sinyal transparan, forum komunitas. Edukasi, bukan nasihat keuangan.">
+<meta property="og:url" content="https://ranahsaham.com/">
+<meta property="og:image" content="https://ranahsaham.com/logo-mark.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Ranah Saham — Terminal Analisis Saham IDX">
+<meta name="twitter:description" content="Research cockpit saham IDX: analisis teknikal, prediksi IHSG, screener, Top Pick dgn audit sinyal transparan. Edukasi, bukan nasihat keuangan.">
+<meta name="twitter:image" content="https://ranahsaham.com/logo-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -2062,7 +2075,13 @@ function route(v){
   _applyRoute(v);
 }
 window.addEventListener('popstate',e=>{_applyRoute((e.state&&e.state.view)||'beranda')});
-if(!history.state)history.replaceState({view:_currentView||'beranda'},'','#'+(_currentView||'beranda'));
+/* Deep-link: hormati hash di URL saat load (mis. share link /#pemegang
+   harus mendarat di Pemegang, BUKAN Beranda) -- dulu hash langsung
+   ditimpa #beranda tanpa pernah dibaca, jadi semua link share bentuk
+   /#view diam2 nyasar ke Beranda utk pengunjung baru. */
+const _initView=(()=>{const h=(location.hash||'').slice(1);return h&&document.getElementById('v-'+h)?h:'beranda'})();
+if(!history.state)history.replaceState({view:_initView},'','#'+_initView);
+if(_initView!=='beranda')_applyRoute(_initView);
 /* (wiring klik .tab[data-v] nav sudah di renderNav() -- jangan wiring ulang
    di sini, dulu bikin item drawer ter-wiring dobel) */
 
