@@ -842,13 +842,22 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   z-index:0;
 }
 .rs-research-hero>*{position:relative;z-index:1}
-/* glow radial emas SANGAT halus dari kiri-atas hero -- kedalaman ambient,
-   bukan spotlight yang minta perhatian */
+/* Aurora: dua glow radial (emas + hijau tipis) yang bergeser SANGAT pelan
+   (26 detik, bolak-balik) -- kedalaman ambient yang hidup, bukan spotlight
+   yang minta perhatian. Dimatikan total di prefers-reduced-motion. */
 .rs-research-hero::after{
-  content:"";position:absolute;top:-140px;left:-180px;width:640px;height:520px;
-  background:radial-gradient(closest-side,rgba(199,154,42,.10),transparent 70%);
+  content:"";position:absolute;top:-140px;left:-180px;width:720px;height:560px;
+  background:
+    radial-gradient(closest-side at 35% 40%,rgba(199,154,42,.10),transparent 70%),
+    radial-gradient(closest-side at 75% 75%,rgba(47,181,126,.05),transparent 70%);
   pointer-events:none;z-index:0;
+  animation:auroraDrift 26s ease-in-out infinite alternate;
 }
+@keyframes auroraDrift{
+  from{transform:translate(0,0) scale(1);opacity:.9}
+  to{transform:translate(70px,26px) scale(1.14);opacity:1}
+}
+@media(prefers-reduced-motion:reduce){.rs-research-hero::after{animation:none}}
 @keyframes heroLogoDrift{
   0%,100%{transform:translateY(-50%) rotate(0deg) scale(1)}
   50%{transform:translateY(-54%) rotate(8deg) scale(1.06)}
@@ -1032,6 +1041,49 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .breadth-card:hover{transform:translateY(-2px)}
 .breadth-card.glow-bull:hover{box-shadow:0 6px 22px rgba(47,181,126,.22)}
 .breadth-card.glow-bear:hover{box-shadow:0 6px 22px rgba(214,90,74,.22)}
+
+/* ===== GERAK PREMIUM (lanjutan makeover): spotlight kursor, kilau, stagger ===== */
+/* Spotlight: sorotan emas SANGAT halus yang mengikuti posisi kursor di
+   dalam panel yang sedang di-hover (koordinat --mx/--my di-set JS, lihat
+   "SPOTLIGHT KURSOR PANEL") -- kesan kedalaman ala produk premium, bukan
+   animasi liar. HANYA utk pointer halus (mouse); layar sentuh tidak kena. */
+@media(pointer:fine){
+  /* varian panel dgn background khusus dikecualikan/diberi versi sendiri --
+     tanpa ini background gradient .panel-primary & transparansi .panel-quiet
+     "melompat" ke var(--panel) polos tiap hover */
+  .panel:hover:not(.panel-quiet):not(.panel-primary){background:radial-gradient(560px circle at var(--mx,50%) var(--my,50%),rgba(199,154,42,.055),transparent 42%),var(--panel)}
+  .panel-primary:hover{background:radial-gradient(560px circle at var(--mx,50%) var(--my,50%),rgba(199,154,42,.06),transparent 42%),linear-gradient(180deg,rgba(199,154,42,.045),transparent),var(--panel)}
+}
+/* Kilau menyapu tombol emas SEKALI tiap hover (bukan loop) -- .btn sudah
+   position:relative+overflow:hidden dari efek ripple, aman utk ::before. */
+.btn::before{content:"";position:absolute;top:0;bottom:0;width:38%;left:0;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.32),transparent);
+  transform:translateX(-150%) skewX(-18deg);transition:transform .55s ease;pointer-events:none}
+.btn:hover::before{transform:translateX(340%) skewX(-18deg)}
+.btn.ghost::before{display:none}
+/* Item dropdown nav masuk berurutan (fade+slide 30ms per item) saat menu
+   terbuka -- transition-delay per nth-child, murni CSS. */
+.nav-dd .tab{opacity:0;transform:translateY(-5px);
+  transition:opacity .18s var(--ease-premium),transform .18s var(--ease-premium),background .15s,color .15s}
+.nav-group:hover .nav-dd .tab,.nav-group:focus-within .nav-dd .tab{opacity:1;transform:none}
+.nav-group:hover .nav-dd .tab:nth-child(2),.nav-group:focus-within .nav-dd .tab:nth-child(2){transition-delay:.03s}
+.nav-group:hover .nav-dd .tab:nth-child(3),.nav-group:focus-within .nav-dd .tab:nth-child(3){transition-delay:.06s}
+.nav-group:hover .nav-dd .tab:nth-child(4),.nav-group:focus-within .nav-dd .tab:nth-child(4){transition-delay:.09s}
+.nav-group:hover .nav-dd .tab:nth-child(5),.nav-group:focus-within .nav-dd .tab:nth-child(5){transition-delay:.12s}
+/* Logo brand mengangguk kecil saat hover */
+.brand-mark img{transition:transform .3s var(--ease-premium)}
+.brand:hover .brand-mark img{transform:rotate(-7deg) scale(1.07)}
+/* Ikon empty-state mengambang pelan (tanda "hidup", bukan rusak) */
+.empty-state .icon{animation:emptyFloat 3.4s ease-in-out infinite alternate}
+@keyframes emptyFloat{from{transform:translateY(-2px)}to{transform:translateY(3px)}}
+/* Flash emas sekejap di strip IHSG saat angkanya BERUBAH (di-set JS) */
+.ms-flash{animation:msFlash .9s ease-out}
+@keyframes msFlash{0%{background:rgba(199,154,42,.22);border-radius:5px}100%{background:transparent}}
+@media(prefers-reduced-motion:reduce){
+  .empty-state .icon{animation:none}
+  .btn::before{display:none}
+  .ms-flash{animation:none}
+}
 </style>
 </head>
 <body>
@@ -1786,7 +1838,13 @@ function secTag(s){const c=SECTOR_COLORS[s]||SECTOR_COLORS.Lainnya;return `<span
 async function loadMarketStrip(){
   try{const d=await api('/api/ihsg');const node=$('#ms-ihsg');if(!node)return;
     const col=vColor(d.prediction);
+    // Flash emas sekejap HANYA saat harganya benar2 berubah dari render
+    // sebelumnya (bukan tiap refresh 30 detik) -- sinyal "hidup" yang
+    // informatif, bukan kedip-kedip konstan.
+    const changed=node.dataset.last&&node.dataset.last!==String(d.current_price);
     node.innerHTML=`<span class="dot" style="background:${col}"></span><span class="mv" style="color:${col}">${d.prediction||'–'}</span> · ${fmt(d.current_price)} <span class="${d.daily_change>=0?'up':'down'}">(${d.daily_change>=0?'+':''}${fmt(d.daily_change,2)}%)</span> ${liveBadge('ms')}`;
+    node.dataset.last=String(d.current_price);
+    if(changed){node.classList.remove('ms-flash');void node.offsetWidth;node.classList.add('ms-flash')}
     markLive('ms');
   }catch{const n=$('#ms-ihsg');if(n)n.textContent='—'}
 }
@@ -2017,7 +2075,7 @@ if(!history.state)history.replaceState({view:_currentView||'beranda'},'','#'+(_c
    dibuat ulang lewat innerHTML (banyak view di-render ulang setiap load). */
 (function(){
   if(!matchMedia('(pointer:fine)').matches||matchMedia('(prefers-reduced-motion:reduce)').matches)return;
-  const SEL='.news-headline-card,.pulse-card,.analysis-score-card';
+  const SEL='.news-headline-card,.pulse-card,.analysis-score-card,.home-search-card';
   const MAX_DEG=3.5;
   let active=null;
   function clear(el){el.style.transform='';el.style.transition='transform .4s '+getComputedStyle(document.documentElement).getPropertyValue('--ease-premium')}
@@ -2031,6 +2089,29 @@ if(!history.state)history.replaceState({view:_currentView||'beranda'},'','#'+(_c
   });
   document.addEventListener('scroll',()=>{if(active){clear(active);active=null}},{passive:true});
   window.addEventListener('blur',()=>{if(active){clear(active);active=null}});
+})();
+
+/* ---------- SPOTLIGHT KURSOR PANEL ----------
+   Set koordinat kursor (--mx/--my) relatif thd panel yang sedang di-hover;
+   CSS .panel:hover memakainya utk radial highlight emas halus yang ikut
+   bergerak (lihat blok "GERAK PREMIUM"). Delegasi di document + rAF
+   throttle -- satu listener utk semua panel (yang banyak & sering
+   dirender ulang via innerHTML), bukan listener per elemen. */
+(function(){
+  if(!matchMedia('(pointer:fine)').matches)return;
+  let raf=0,ev=null;
+  document.addEventListener('pointermove',e=>{
+    ev=e;
+    if(raf)return;
+    raf=requestAnimationFrame(()=>{
+      raf=0;
+      const p=ev.target&&ev.target.closest?ev.target.closest('.panel'):null;
+      if(!p)return;
+      const r=p.getBoundingClientRect();
+      p.style.setProperty('--mx',(ev.clientX-r.left)+'px');
+      p.style.setProperty('--my',(ev.clientY-r.top)+'px');
+    });
+  },{passive:true});
 })();
 
 /* ---------- COMMAND PALETTE ---------- */
