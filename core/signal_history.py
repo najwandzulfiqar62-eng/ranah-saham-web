@@ -1299,6 +1299,64 @@ def _compute_stats(signals: list[dict]) -> dict | None:
     avg_return = round(sum(s["return_pct"] for s in closed) / len(closed), 2) if closed else None
     avg_days = round(sum(s["days_to_resolve"] for s in closed) / len(closed), 1) if closed else None
     n_expired = len([s for s in closed if s["status"] == "EXPIRED"])
+
+    # ---- Rata-rata return SKENARIO DISIPLIN TP1 ----
+    # avg_return_pct di atas menyesatkan dilihat sendirian: posisi RUGI
+    # selesai CEPAT (SL tersentuh 2-5 hari) sementara posisi MENANG
+    # selesai LAMBAT (nunggu TP3) / masih OPEN dgn TP1-2 tercapai -- jadi
+    # "rata-rata dari yang selesai" strukturalnya selalu berat ke sisi
+    # rugi walau win rate tinggi (ditemukan nyata: win rate 78.6% tapi
+    # avg +0.66% krn 16 pemenang TP1/TP2 masih OPEN, tidak terhitung).
+    # Metrik ini menjawab "berapa return per sinyal KALAU selalu ambil
+    # untung di TP1" -- populasi SAMA persis dgn win_rate (+ kadaluarsa
+    # tanpa TP), TANPA hindsight bias (bukan "exit di level terbaik yang
+    # ternyata tercapai"): menang -> +tp_pct (terkunci di TP1), kalah/
+    # kadaluarsa tanpa TP -> return_pct aktual. BUKAN pengganti
+    # avg_return_pct (realisasi penuh tetap ditampilkan) -- pelengkap yang
+    # konsisten dgn doktrin "TP1 = menang" pada win_rate.
+    expired_no_tp = [s for s in closed
+                     if s["status"] == "EXPIRED" and (s.get("tp_level_hit") or 0) == 0]
+    scenario_contrib = []
+    for s in wins:
+        v = s.get("tp_pct") if s.get("tp_pct") is not None else s.get("return_pct")
+        if v is not None:
+            scenario_contrib.append(abs(v))  # profit terkunci: BUY & SELL sama2 positif
+    for s in losses + expired_no_tp:
+        if s.get("return_pct") is not None:
+            scenario_contrib.append(s["return_pct"])
+    avg_return_tp1 = (round(sum(scenario_contrib) / len(scenario_contrib), 2)
+                      if scenario_contrib else None)
+
+    # ---- Rata-rata return TERKUNCI di level TP tertinggi yang TERBUKTI
+    # tercapai ---- Pemenang menyumbang level yang SUDAH tersentuh nyata
+    # (TP1 -> +tp_pct, TP2 -> +tp2_pct, tuntas TP3/TP_HIT -> return aktual),
+    # kalah/kadaluarsa-tanpa-TP tetap hasil aktual (negatif ikut dihitung).
+    # SENGAJA BUKAN "asumsikan semua pemenang sampai TP3" -- itu angka
+    # bohong (faktanya ada yang TP1 lalu berbalik SL); level di bawah TP1
+    # tidak pernah diklaim, level di atas yang TERBUKTI tidak dibuang.
+    def _locked_return(s):
+        if s["status"] == "TP_HIT" and s.get("return_pct") is not None:
+            return s["return_pct"]  # tuntas penuh -- angka realisasi aktual
+        lvl = s.get("tp_level_hit") or 0
+        if lvl >= 2 and s.get("tp2_pct") is not None:
+            return abs(s["tp2_pct"])
+        if s.get("tp_pct") is not None:
+            return abs(s["tp_pct"])
+        return s.get("return_pct")
+
+    locked_contrib = [v for v in (_locked_return(s) for s in wins) if v is not None]
+    locked_contrib += [s["return_pct"] for s in losses + expired_no_tp
+                       if s.get("return_pct") is not None]
+    avg_return_locked = (round(sum(locked_contrib) / len(locked_contrib), 2)
+                         if locked_contrib else None)
+
+    # Deskriptif murni: rata-rata realisasi pemenang yang TUNTAS sampai
+    # TP3 (status TP_HIT) -- menunjukkan "sebesar apa kemenangan penuh
+    # itu" tanpa mengklaim semua sinyal akan sampai sana.
+    tp3_full = [s["return_pct"] for s in closed
+                if s["status"] == "TP_HIT" and s.get("return_pct") is not None]
+    avg_return_tp3 = round(sum(tp3_full) / len(tp3_full), 2) if tp3_full else None
+
     return {
         "n_closed": len(closed),
         "n_tp_hit": len(wins),
@@ -1306,6 +1364,11 @@ def _compute_stats(signals: list[dict]) -> dict | None:
         "n_expired": n_expired,
         "win_rate": win_rate,
         "avg_return_pct": avg_return,
+        "avg_return_tp1_pct": avg_return_tp1,
+        "n_tp1_scenario": len(scenario_contrib),
+        "avg_return_locked_pct": avg_return_locked,
+        "avg_return_tp3_pct": avg_return_tp3,
+        "n_tp3_full": len(tp3_full),
         "avg_days_to_resolve": avg_days,
     }
 

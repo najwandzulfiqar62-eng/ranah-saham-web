@@ -2855,6 +2855,51 @@ def test_signal_report_open_signal_with_tp1_counts_as_win_in_stats(clean_signal_
     assert stats["avg_return_pct"] == pytest.approx(-3.0)
 
 
+def test_signal_report_avg_return_tp1_scenario_includes_open_winners(clean_signal_db):
+    """Regresi utk bug tampilan nyata (win rate 78.6% tapi 'rata-rata
+    return' cuma +0.66%): avg_return_pct hanya dari sinyal yang BENAR-
+    BENAR selesai, padahal posisi rugi selesai CEPAT (SL 2-5 hari) dan
+    pemenang TP1/TP2 masih OPEN berhari-hari nunggu TP3 -- rata-ratanya
+    struktural condong ke sisi rugi. avg_return_tp1_pct menjawab 'berapa
+    return per sinyal KALAU selalu ambil untung di TP1': populasi SAMA
+    dgn win_rate -- pemenang (termasuk yang MASIH OPEN) menyumbang
+    +tp_pct terkunci, kalah/kadaluarsa-tanpa-TP menyumbang return aktual."""
+    from core.database import get_db
+    from core.signal_history import _ensure_table, get_signal_report
+
+    _ensure_table()
+    with get_db() as conn:
+        # Pemenang MASIH OPEN (TP1 tercapai) -- menyumbang +5.0 (tp_pct).
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, tp_level_hit) "
+                     "VALUES ('ZZSCN1', 1000, 5, 3, 'OPEN', 1)")
+        # Pemenang closed penuh di TP3 (+9 aktual) -- skenario TP1 TETAP
+        # pakai +tp_pct (4.0), bukan +9: konsisten 'selalu exit di TP1'.
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, tp_level_hit, resolved_at, return_pct, days_to_resolve)
+            VALUES ('ZZSCN2', 1000, 4, 3, 'TP_HIT', 3, datetime('now'), 9.0, 6)''')
+        # Kalah murni -- menyumbang return aktual -3.0.
+        conn.execute('''INSERT INTO signal_history
+            (kode, entry_price, tp_pct, sl_pct, status, tp_level_hit, resolved_at, return_pct, days_to_resolve)
+            VALUES ('ZZSCN3', 1000, 5, 3, 'SL_HIT', 0, datetime('now'), -3.0, 2)''')
+        # Pemenang MASIH OPEN yang sudah sampai TP2 -- return terkunci
+        # pakai tp2_pct (+8), skenario TP1 tetap tp_pct (+4).
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, sl_pct, status, tp_level_hit) "
+                     "VALUES ('ZZSCN4', 1000, 4, 8, 3, 'OPEN', 2)")
+
+    stats = get_signal_report()["stats"]
+
+    assert stats["n_tp1_scenario"] == 4
+    assert stats["avg_return_tp1_pct"] == pytest.approx((5.0 + 4.0 - 3.0 + 4.0) / 4, abs=0.01)
+    # Return terkunci di level TERCAPAI: TP1-open=+5, TP_HIT penuh=+9
+    # aktual, SL murni=-3 aktual, TP2-open=+8 (tp2_pct).
+    assert stats["avg_return_locked_pct"] == pytest.approx((5.0 + 9.0 - 3.0 + 8.0) / 4, abs=0.01)
+    # Deskriptif pemenang tuntas TP3: cuma ZZSCN2.
+    assert stats["n_tp3_full"] == 1
+    assert stats["avg_return_tp3_pct"] == pytest.approx(9.0)
+    # avg_return_pct realisasi TIDAK berubah perilakunya (hanya 2 closed).
+    assert stats["avg_return_pct"] == pytest.approx((9.0 - 3.0) / 2, abs=0.01)
+
+
 def test_signal_report_sl_after_tp1_still_counts_as_win_not_loss(clean_signal_db):
     """Regresi kasus tepi PALING PENTING (dikonfirmasi eksplisit ke user
     sebelum diimplementasi): kalau posisi SUDAH sempat kena TP1 lalu
