@@ -1030,6 +1030,15 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
         is_stale = price_date is not None and price_date < recorded_at.date()
         age_days = (datetime.now() - recorded_at).days
 
+        # Level TP1 sbg ambang "harga lari terlalu jauh": setup ini beli-saat-
+        # pullback (entry DI BAWAH harga sinyal), jadi kalau harga malah NAIK
+        # sampai/melewati TP1 tanpa pernah turun ke entry, dip-nya jelas tidak
+        # datang -- peluang masuk TERLEWAT (permintaan user: "kalo udah jauh
+        # gitu tandain jadi ga kena area entry, buat entry baru lagi kalo
+        # masuk sinyal"). runaway_price None kalau tp_pct tidak wajar (jaga2).
+        tp_pct = row["tp_pct"]
+        runaway_price = row["entry_price"] * (1 + tp_pct / 100) if tp_pct and tp_pct > 0 else None
+
         if not is_stale and price <= row["entry_price"]:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with get_db() as conn:
@@ -1046,6 +1055,27 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
                 "tp_pct": row["tp_pct"], "tp2_pct": row["tp2_pct"], "tp3_pct": row["tp3_pct"],
                 "sl_pct": row["sl_pct"], "source": row["source"], "pattern": row["pattern"],
             })
+        elif runaway_price is not None and not is_stale and price >= runaway_price:
+            # Harga capai/lewati TP1 TANPA entry pernah tersentuh -> terlewat.
+            # PENTING: ini BUKAN menang -- tidak pernah ada posisi yang dibuka
+            # (entry tak pernah kena), jadi TETAP EXPIRED_NO_ENTRY, tidak
+            # dihitung win_rate (jaga kejujuran track record). Begitu ini
+            # resolve, dedup lepas -> saham bisa dapat rekomendasi entry BARU
+            # kalau masuk sinyal lagi (besoknya), persis yang user minta.
+            with get_db() as conn:
+                cur = conn.execute(
+                    "UPDATE signal_history SET status = 'EXPIRED_NO_ENTRY', resolved_at = datetime('now', 'localtime') "
+                    "WHERE id = ? AND status = 'PENDING_ENTRY'",
+                    (row["id"],),
+                )
+                if cur.rowcount == 0:
+                    continue
+            events.append({
+                "kind": "entry_expired", "id": row["id"], "kode": row["kode"],
+                "entry_price": row["entry_price"], "last_price": price,
+                "reason": "runaway",  # terlewat krn harga lari ke TP1 (beda dari timeout)
+                "source": row["source"], "pattern": row["pattern"],
+            })
         elif age_days >= MAX_ENTRY_WAIT_DAYS:
             with get_db() as conn:
                 cur = conn.execute(
@@ -1058,6 +1088,7 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
             events.append({
                 "kind": "entry_expired", "id": row["id"], "kode": row["kode"],
                 "entry_price": row["entry_price"], "last_price": price,
+                "reason": "timeout",  # terlewat krn 5 hari tak tersentuh
                 "source": row["source"], "pattern": row["pattern"],
             })
 

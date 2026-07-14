@@ -2539,9 +2539,10 @@ def test_audit_pending_entries_fills_when_price_reaches_entry(clean_signal_db):
 
 
 def test_audit_pending_entries_stays_pending_when_price_above_entry(clean_signal_db):
-    """Kalau harga BELUM turun ke level entry (masih di atas), status
-    HARUS tetap PENDING_ENTRY -- belum ada kesempatan masuk, jangan
-    diklaim sudah jadi posisi aktif."""
+    """Kalau harga di ATAS entry TAPI belum sampai TP1 (masih di zona
+    tunggu), status HARUS tetap PENDING_ENTRY -- belum tersentuh entry,
+    belum pula lari ke TP1. Entry 1000, tp 5% -> TP1 1050; harga 1020 =
+    di antara keduanya, jadi TETAP menunggu."""
     import asyncio
     from datetime import date
 
@@ -2556,7 +2557,7 @@ def test_audit_pending_entries_stays_pending_when_price_above_entry(clean_signal
         )
 
     async def fake_lookup(kode):
-        return 1050.0, date.today()  # masih jauh di atas entry 1000
+        return 1020.0, date.today()  # di atas entry 1000 tapi di bawah TP1 (1050)
 
     events = asyncio.run(audit_pending_entries(fake_lookup))
 
@@ -2564,6 +2565,71 @@ def test_audit_pending_entries_stays_pending_when_price_above_entry(clean_signal
         row = conn.execute("SELECT status FROM signal_history WHERE kode='ZZWAIT'").fetchone()
     assert row["status"] == "PENDING_ENTRY"
     assert events == []
+
+
+def test_audit_pending_entries_expires_when_price_runs_past_tp1(clean_signal_db):
+    """Permintaan user 'kalo udah jauh gitu tandain jadi ga kena area
+    entry': setup beli-saat-pullback, tapi harga malah NAIK sampai/melewati
+    TP1 tanpa pernah turun ke entry -> dip tidak datang, peluang TERLEWAT.
+    Jadi EXPIRED_NO_ENTRY LEBIH AWAL (tidak nunggu 5 hari). PENTING: ini
+    BUKAN menang -- tidak pernah ada posisi (entry tak tercapai), return_pct
+    TETAP NULL, tidak masuk win_rate."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_pending_entries
+
+    _ensure_table()
+    with get_db() as conn:
+        # entry 1000, tp 5% -> TP1 = 1050. Baru dicatat hari ini (age 0),
+        # jadi kalau BUKAN krn runaway, harusnya masih PENDING (belum timeout).
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZRUN', 1000, 5, 3, 'PENDING_ENTRY', 'BUY')"
+        )
+
+    async def fake_lookup(kode):
+        return 1080.0, date.today()  # sudah LEWAT TP1 (1050), entry tak pernah kena
+
+    events = asyncio.run(audit_pending_entries(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, resolved_at, return_pct FROM signal_history WHERE kode='ZZRUN'"
+        ).fetchone()
+    assert row["status"] == "EXPIRED_NO_ENTRY", "harga lewat TP1 tanpa entry -> terlewat lebih awal"
+    assert row["resolved_at"] is not None
+    assert row["return_pct"] is None, "tidak pernah ada posisi -> BUKAN menang, return NULL"
+    assert len(events) == 1
+    assert events[0]["kind"] == "entry_expired" and events[0]["reason"] == "runaway"
+
+
+def test_audit_pending_entries_price_at_tp1_boundary_expires(clean_signal_db):
+    """Batas tepat: harga = TP1 (bukan cuma melewatinya) SUDAH dihitung
+    terlewat -- kalau harga sampai di target pertama, move-nya sudah
+    kejadian tanpa kita."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_pending_entries
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZTP1', 1000, 5, 3, 'PENDING_ENTRY', 'BUY')"
+        )
+
+    async def fake_lookup(kode):
+        return 1050.0, date.today()  # persis di TP1 (1000 * 1.05)
+
+    asyncio.run(audit_pending_entries(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status FROM signal_history WHERE kode='ZZTP1'").fetchone()
+    assert row["status"] == "EXPIRED_NO_ENTRY"
 
 
 def test_audit_pending_entries_expires_after_max_wait_days(clean_signal_db):
