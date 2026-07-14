@@ -1189,6 +1189,13 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .ob-wall-chip{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;font-family:'JetBrains Mono',monospace;display:inline-flex;align-items:center;gap:4px}
 .ob-wall-chip.bid{background:rgba(47,181,126,.14);color:var(--bull);border:1px solid rgba(47,181,126,.3)}
 .ob-wall-chip.offer{background:rgba(214,90,74,.14);color:var(--bear);border:1px solid rgba(214,90,74,.3)}
+/* Alert wall palsu (spoofing) -- wall ditarik tanpa harga menyentuhnya */
+.ob-spoof{display:flex;align-items:center;gap:6px;margin-top:9px;padding:6px 10px;border-radius:7px;
+  font-size:10.5px;font-weight:700;background:rgba(230,160,40,.13);color:#E6A028;
+  border:1px solid rgba(230,160,40,.35);animation:obSpoofIn .35s var(--ease-premium)}
+.ob-spoof .icon{flex:none}
+@keyframes obSpoofIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.ob-spoof{animation:none}}
 @media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
 </style>
 </head>
@@ -1754,7 +1761,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
         <div>
           <p class="eyebrow" style="margin-bottom:4px">Order Book Live — Kedalaman Pasar</p>
           <p class="insight muted" style="margin:0">Bid/offer 5 level real-time dari feed <b>ShadowStream</b> (bukan Yahoo/delayed). Data langsung dari sumber, web ini hanya menampilkan.</p>
-          <p class="muted" style="margin:6px 0 0;font-size:11px;line-height:1.5"><b>Tekanan Bid/Offer</b> = rasio volume bid vs offer 5 level (konteks tekanan jangka SANGAT pendek). BUKAN prediksi arah harga & BUKAN "deteksi bandar" — order book publik gampang di-spoof (wall palsu ditarik sebelum kena). DYOR.</p>
+          <p class="muted" style="margin:6px 0 0;font-size:11px;line-height:1.5"><b>Tekanan Bid/Offer</b> = rasio volume bid vs offer 5 level (konteks jangka SANGAT pendek). <b>Wall</b> = level volume raksasa (calon support/resistance). <b>Indikasi spoofing</b> = wall yang tadi ada lalu ditarik tanpa harga menyentuhnya — POLA mirip manipulasi, <u>bukan bukti</u> (order bisa dibatalkan dgn alasan sah). Semua ini konteks, BUKAN prediksi/rekomendasi/"deteksi bandar". DYOR.</p>
         </div>
         <span class="ob-status" id="obStatus"><span class="ob-dot"></span><span id="obStatusText">Menyambungkan…</span></span>
       </div>
@@ -6722,6 +6729,12 @@ function _toggleNotifPanel(){
    tampil "menunggu data", BUKAN angka palsu (data murni dari ShadowStream,
    web ini tidak pernah mengarang order book). */
 let _obWS=null,_obState={},_obPrevPrice={},_obReconnectTimer=null,_obBackoff=1000,_obIntentionalClose=false,_obRenderRAF=0;
+// Pelacak spoofing: _obLast simpan order book + wall tick SEBELUMNYA per
+// saham; _obSpoof simpan alert "wall ditarik" terbaru per saham (transient,
+// tampil ~20 detik). Deteksi wall palsu = wall yang tadi ada lalu HILANG/
+// menyusut drastis TANPA harga menyentuhnya (pola mirip spoofing).
+let _obLast={},_obSpoof={};
+const _OB_SPOOF_MS=20000; // lama alert ditampilkan setelah wall ditarik
 function _obSetStatus(cls,text){
   const s=$('#obStatus'),t=$('#obStatusText');
   if(s)s.className='ob-status'+(cls?' '+cls:'');
@@ -6731,12 +6744,42 @@ function _obScheduleRender(){
   if(_obRenderRAF)return;
   _obRenderRAF=requestAnimationFrame(()=>{_obRenderRAF=0;_obRender()});
 }
+// Ringkas order book jadi peta harga->volume + wall terdeteksi (dipakai
+// pelacakan spoof antar-tick).
+function _obBook(d){
+  const bids=d.bid_5||[],offers=d.offer_5||[];
+  const bidMap={},offerMap={};
+  bids.forEach(b=>{bidMap[b.price]=+b.volume||0});
+  offers.forEach(o=>{offerMap[o.price]=+o.volume||0});
+  const bw=_obDetectWall(bids),ow=_obDetectWall(offers);
+  const walls=[];
+  if(bw>=0)walls.push({side:'bid',price:+bids[bw].price,volume:+bids[bw].volume||0});
+  if(ow>=0)walls.push({side:'offer',price:+offers[ow].price,volume:+offers[ow].volume||0});
+  return {bidMap,offerMap,price:+d.price||0,walls};
+}
+// Bandingkan tick baru vs sebelumnya: wall yang tadi ada, sekarang volumenya
+// turun >=65% DAN harga BELUM menembus level itu -> "ditarik" (indikasi
+// spoofing, BUKAN bukti). Kalau harga sudah menembus level wall, hilangnya
+// wajar (kemungkinan kena/tereksekusi) -> TIDAK ditandai spoof.
+function _obTrackSpoof(ticker,d){
+  const cur=_obBook(d),prev=_obLast[ticker];
+  if(prev&&prev.walls){
+    prev.walls.forEach(w=>{
+      const nowVol=w.side==='bid'?(cur.bidMap[w.price]??0):(cur.offerMap[w.price]??0);
+      const traded=w.side==='bid'?(cur.price<=w.price):(cur.price>=w.price);
+      const dropped=w.volume>0&&nowVol<=w.volume*0.35;
+      if(dropped&&!traded)_obSpoof[ticker]={side:w.side,price:w.price,at:Date.now()};
+    });
+  }
+  _obLast[ticker]=cur;
+}
 function _obHandleMsg(raw){
   let data;try{data=JSON.parse(raw)}catch(e){return}
   if(data.type==='snapshot'&&data.data){
     _obState={};
-    Object.values(data.data).forEach(d=>{if(d&&d.ticker)_obState[d.ticker]=d});
+    Object.values(data.data).forEach(d=>{if(d&&d.ticker){_obTrackSpoof(d.ticker,d);_obState[d.ticker]=d}});
   }else if(data.ticker){
+    _obTrackSpoof(data.ticker,data);
     _obState[data.ticker]=data;
   }else return;
   _obScheduleRender();
@@ -6795,6 +6838,11 @@ function _obCard(d){
   if(bidWall>=0)walls+=`<span class="ob-wall-chip bid" title="Volume bid jauh di atas level lain — calon support. Bisa spoofing (ditarik sebelum kena).">${icon('layers',{size:10})} Bid wall · ${fmt(bids[bidWall].price)}</span>`;
   if(offerWall>=0)walls+=`<span class="ob-wall-chip offer" title="Volume offer jauh di atas level lain — calon resistance. Bisa spoofing (ditarik sebelum kena).">${icon('layers',{size:10})} Offer wall · ${fmt(offers[offerWall].price)}</span>`;
   const wallsHtml=walls?`<div class="ob-walls">${walls}</div>`:'';
+  // Alert wall palsu (spoofing) -- tampil kalau ada wall ditarik dlm ~20d
+  const sp=_obSpoof[d.ticker];
+  const spoofHtml=(sp&&Date.now()-sp.at<_OB_SPOOF_MS)
+    ?`<div class="ob-spoof" title="Wall ini tadi ada lalu hilang/menyusut drastis tanpa harga menyentuhnya — POLA mirip spoofing. Bukan bukti: bisa juga order dibatalkan dgn alasan sah.">${icon('alert-triangle',{size:11})} Wall ${sp.side==='bid'?'bid':'offer'} di ${fmt(sp.price)} ditarik — indikasi spoofing</div>`
+    :'';
   const t=d.timestamp?new Date(d.timestamp*1000).toLocaleTimeString('id-ID'):'';
   const imb=_obImbalance(d);
   const imbHtml=imb?`<div class="ob-imb ob-imb-${imb.cls}" title="Rasio total volume bid vs offer 5 level — tekanan jangka sangat pendek, bukan prediksi. Order book bisa di-spoof.">
@@ -6807,6 +6855,7 @@ function _obCard(d){
       <div style="text-align:right"><div class="ob-price">${fmt(d.price)}</div><div class="ob-time">${t}</div></div>
     </div>
     <div class="ob-ladder"><div class="ob-col-h bid">Bid · Vol</div><div class="ob-col-h offer">Offer · Vol</div>${rows}</div>
+    ${spoofHtml}
     ${wallsHtml}
     ${imbHtml}
   </div>`;
