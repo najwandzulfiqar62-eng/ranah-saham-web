@@ -714,6 +714,10 @@ async def api_notif_forum(request: Request):
 # buatan; data di sini datang dari feed asli user). Redis pub/sub jadi
 # perantara -- ShadowStream & app ini tidak perlu saling tahu alamat.
 _IHSG_WS_CLIENTS: set = set()
+# Snapshot penuh TERAKHIR yang diterima dari sumber -- dikirim ke klien
+# browser yang BARU connect supaya tidak layar kosong sampai tick berikutnya
+# (ShadowStream kirim snapshot berkala; kita simpan yang terakhir).
+_ihsg_snapshot_cache: "str | None" = None
 
 
 async def _ws_broadcast(text: str):
@@ -729,46 +733,86 @@ async def _ws_broadcast(text: str):
         _IHSG_WS_CLIENTS.discard(ws)
 
 
+def _ihsg_note_snapshot(text: str):
+    """Simpan pesan sbg snapshot terakhir kalau ia bertipe snapshot (cek
+    murah di awal string, tanpa parse JSON penuh tiap tick)."""
+    global _ihsg_snapshot_cache
+    if '"snapshot"' in text[:64]:
+        _ihsg_snapshot_cache = text
+
+
 async def _ihsg_stream_pump():
-    """Task background TUNGGAL: subscribe channel Redis ShadowStream, fan-out
-    tiap pesan ke semua klien WS (satu subscriber Redis dibagi banyak klien,
-    bukan satu subscription per klien). Loop reconnect -- kalau Redis/
-    ShadowStream mati/putus, task ini tidur lalu coba lagi (self-heal),
-    tidak pernah menjatuhkan app."""
+    """Task background TUNGGAL yang men-fan-out data order book ke semua
+    klien WS. DUA mode sumber (loop reconnect self-heal di keduanya):
+    - SHADOWSTREAM_WS_URL diisi -> konek ke WebSocket ShadowStream itu sbg
+      UPSTREAM CLIENT & relay (ShadowStream ternyata broadcast lewat WS
+      sendiri, bukan publish Redis).
+    - kosong -> fallback subscribe Redis pub/sub (IHSG_STREAM_CHANNEL)."""
+    from core.config import SHADOWSTREAM_WS_URL, IHSG_STREAM_CHANNEL
+    if SHADOWSTREAM_WS_URL:
+        await _ihsg_pump_upstream_ws(SHADOWSTREAM_WS_URL)
+    else:
+        await _ihsg_pump_redis(IHSG_STREAM_CHANNEL)
+
+
+async def _ihsg_pump_upstream_ws(url: str):
+    import websockets
+    while True:
+        try:
+            # ngrok-skip-browser-warning: lewati halaman interstitial ngrok
+            # free (jaga-jaga kalau URL upstream lewat ngrok).
+            async with websockets.connect(
+                url, additional_headers={"ngrok-skip-browser-warning": "1"},
+                open_timeout=10, ping_interval=20, max_size=2 ** 21,
+            ) as ws:
+                async for msg in ws:
+                    text = msg.decode("utf-8", "replace") if isinstance(msg, (bytes, bytearray)) else msg
+                    _ihsg_note_snapshot(text)
+                    await _ws_broadcast(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(3)  # upstream mati/putus -- tunggu, reconnect
+
+
+async def _ihsg_pump_redis(channel: str):
     import redis.asyncio as aioredis
-    from core.config import IHSG_STREAM_CHANNEL
     url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     while True:
         try:
             r = aioredis.from_url(url)
             pubsub = r.pubsub()
-            await pubsub.subscribe(IHSG_STREAM_CHANNEL)
+            await pubsub.subscribe(channel)
             async for msg in pubsub.listen():
                 if msg.get("type") != "message":
-                    continue  # pesan 'subscribe'/'unsubscribe' konfirmasi -- lewati
+                    continue
                 data = msg["data"]
                 if isinstance(data, (bytes, bytearray)):
                     data = data.decode("utf-8", "replace")
+                _ihsg_note_snapshot(data)
                 await _ws_broadcast(data)
         except asyncio.CancelledError:
-            raise  # shutdown app -- jangan ditelan, biarkan task berhenti
+            raise
         except Exception:
-            await asyncio.sleep(3)  # Redis down/putus -- tunggu, lalu reconnect
+            await asyncio.sleep(3)
 
 
 @app.websocket("/ws/ihsg")
 async def ws_ihsg(ws: WebSocket):
     await ws.accept()
     _IHSG_WS_CLIENTS.add(ws)
-    # Snapshot awal (opsional): kalau ShadowStream menyimpan state penuh
-    # terakhir di key Redis, kirim segera supaya klien baru tidak layar
-    # kosong sampai tick berikutnya. Gagal ambil snapshot != gagal koneksi.
+    # Snapshot awal: prefer snapshot in-memory terakhir dari sumber (mode
+    # upstream WS); fallback ke key Redis (mode Redis / ShadowStream simpan
+    # state di sana). Supaya klien baru tidak layar kosong sampai tick
+    # berikutnya. Gagal ambil snapshot != gagal koneksi.
     try:
-        from core.config import IHSG_SNAPSHOT_KEY
-        snap = _redis.get(IHSG_SNAPSHOT_KEY)
+        snap = _ihsg_snapshot_cache
+        if not snap:
+            from core.config import IHSG_SNAPSHOT_KEY
+            s = _redis.get(IHSG_SNAPSHOT_KEY)
+            if s:
+                snap = s.decode("utf-8", "replace") if isinstance(s, (bytes, bytearray)) else s
         if snap:
-            if isinstance(snap, (bytes, bytearray)):
-                snap = snap.decode("utf-8", "replace")
             await ws.send_text(snap)
     except Exception:
         pass

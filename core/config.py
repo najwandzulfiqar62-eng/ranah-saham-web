@@ -67,3 +67,10 @@ FORUM_ADMIN_SECRET = os.environ.get("FORUM_ADMIN_SECRET", "")
 # tidak layar kosong sampai tick berikutnya.
 IHSG_STREAM_CHANNEL = os.environ.get("IHSG_STREAM_CHANNEL", "ihsg:stream")
 IHSG_SNAPSHOT_KEY = os.environ.get("IHSG_SNAPSHOT_KEY", "ihsg:snapshot")
+# Kalau diisi, pump /ws/ihsg konek ke WebSocket ShadowStream INI (mode
+# upstream-relay) alih-alih subscribe Redis. Dipakai karena ShadowStream
+# ternyata broadcast lewat WebSocket-nya sendiri (/ws/ihsg), BUKAN publish
+# ke Redis. Isi mis. "wss://<sub>.ngrok-free.app/ws/ihsg" (atau "ws://
+# localhost:PORT/ws/ihsg" kalau ShadowStream 1 mesin -- lebih hemat, tidak
+# lewat ngrok). Kosong = fallback ke Redis pub/sub (IHSG_STREAM_CHANNEL).
+SHADOWSTREAM_WS_URL = os.environ.get("SHADOWSTREAM_WS_URL", "")

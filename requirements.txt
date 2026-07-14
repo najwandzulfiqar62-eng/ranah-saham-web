@@ -28,7 +28,8 @@ pillow>=10.0
 openpyxl>=3.1
 redis>=5.0.0
 
-# WebSocket: server /ws/ihsg pakai WebSocket bawaan FastAPI/Starlette
-# (tidak butuh paket tambahan); `websockets` di sini HANYA utk menjalankan
-# ws_client.py (client uji stream ShadowStream), bukan utk server-nya.
+# WebSocket: endpoint /ws/ihsg (server) pakai bawaan FastAPI/Starlette,
+# TAPI `websockets` dibutuhkan server juga utk mode upstream-relay
+# (_ihsg_pump_upstream_ws konek ke WebSocket ShadowStream sbg client) --
+# plus utk menjalankan ws_client.py (client uji).
 websockets>=12.0
