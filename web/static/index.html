@@ -1171,7 +1171,17 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .ob-row .ob-v{color:var(--muted)}
 .ob-flash{animation:obFlash .6s ease-out}
 @keyframes obFlash{0%{background:rgba(199,154,42,.28)}100%{background:transparent}}
-@media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}}
+/* Tekanan Bid/Offer (imbalance) -- rasio volume bid vs offer 5 level */
+.ob-imb{margin-top:11px;padding-top:10px;border-top:1px solid var(--line-soft)}
+.ob-imb-bar{height:7px;border-radius:4px;background:var(--bear);overflow:hidden;transition:none}
+.ob-imb-bid{display:block;background:var(--bull);height:100%;transition:width .35s var(--ease-premium)}
+.ob-imb-lbl{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:11px}
+.ob-imb-verdict{font-weight:700;display:inline-flex;align-items:center;gap:5px}
+.ob-imb-pct{font-family:'JetBrains Mono',monospace;color:var(--muted);font-size:10px}
+.ob-imb-buy .ob-imb-verdict,.ob-imb-buysoft .ob-imb-verdict{color:var(--bull)}
+.ob-imb-sell .ob-imb-verdict,.ob-imb-sellsoft .ob-imb-verdict{color:var(--bear)}
+.ob-imb-bal .ob-imb-verdict{color:var(--gold)}
+@media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
 </style>
 </head>
 <body>
@@ -1736,6 +1746,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
         <div>
           <p class="eyebrow" style="margin-bottom:4px">Order Book Live — Kedalaman Pasar</p>
           <p class="insight muted" style="margin:0">Bid/offer 5 level real-time dari feed <b>ShadowStream</b> (bukan Yahoo/delayed). Data langsung dari sumber, web ini hanya menampilkan.</p>
+          <p class="muted" style="margin:6px 0 0;font-size:11px;line-height:1.5"><b>Tekanan Bid/Offer</b> = rasio volume bid vs offer 5 level (konteks tekanan jangka SANGAT pendek). BUKAN prediksi arah harga & BUKAN "deteksi bandar" — order book publik gampang di-spoof (wall palsu ditarik sebelum kena). DYOR.</p>
         </div>
         <span class="ob-status" id="obStatus"><span class="ob-dot"></span><span id="obStatusText">Menyambungkan…</span></span>
       </div>
@@ -6722,6 +6733,27 @@ function _obHandleMsg(raw){
   }else return;
   _obScheduleRender();
 }
+// Tekanan Bid/Offer: rasio total volume bid vs offer 5 level. Metrik
+// mikrostruktur standar (order flow imbalance) -- dihitung dari data
+// ShadowStream ASLI (bukan mengarang), murni aritmetika. JUJUR: ini
+// konteks tekanan JANGKA SANGAT PENDEK & berisik, DAN order book gampang
+// di-spoof (wall/volume palsu ditarik sebelum kena) -- BUKAN prediksi arah
+// harga, BUKAN rekomendasi. Disclaimer ini tampil di panel (lihat header).
+function _obImbalance(d){
+  const bids=d.bid_5||[],offers=d.offer_5||[];
+  const bv=bids.reduce((s,b)=>s+(+b.volume||0),0);
+  const ov=offers.reduce((s,o)=>s+(+o.volume||0),0);
+  const tot=bv+ov;
+  if(tot<=0)return null;
+  const bidPct=bv/tot*100;
+  let verdict,cls;
+  if(bidPct>=60){verdict='Tekanan Beli';cls='buy'}
+  else if(bidPct>=55){verdict='Cenderung Beli';cls='buysoft'}
+  else if(bidPct<=40){verdict='Tekanan Jual';cls='sell'}
+  else if(bidPct<=45){verdict='Cenderung Jual';cls='sellsoft'}
+  else{verdict='Seimbang';cls='bal'}
+  return {bv,ov,bidPct,verdict,cls};
+}
 function _obCard(d){
   const bids=(d.bid_5||[]).slice(0,5),offers=(d.offer_5||[]).slice(0,5);
   const maxV=Math.max(1,...bids.map(b=>+b.volume||0),...offers.map(o=>+o.volume||0));
@@ -6733,12 +6765,18 @@ function _obCard(d){
     rows+=o?`<div class="ob-row offer"><span class="ob-bar" style="width:${(o.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(o.price)}</span><span class="ob-v">${fmt(o.volume)}</span></div>`:`<div class="ob-row offer"></div>`;
   }
   const t=d.timestamp?new Date(d.timestamp*1000).toLocaleTimeString('id-ID'):'';
+  const imb=_obImbalance(d);
+  const imbHtml=imb?`<div class="ob-imb ob-imb-${imb.cls}" title="Rasio total volume bid vs offer 5 level — tekanan jangka sangat pendek, bukan prediksi. Order book bisa di-spoof.">
+    <div class="ob-imb-bar"><span class="ob-imb-bid" style="width:${imb.bidPct.toFixed(0)}%"></span></div>
+    <div class="ob-imb-lbl"><span class="ob-imb-verdict">${imb.verdict}</span><span class="ob-imb-pct">${imb.bidPct.toFixed(0)}% bid · ${(100-imb.bidPct).toFixed(0)}% offer</span></div>
+  </div>`:'';
   return `<div class="ob-card" data-tk="${escHtml(d.ticker||'')}">
     <div class="ob-card-head">
       <div><span class="ob-tk">${escHtml(d.ticker||'?')}</span><span class="ob-chg ${chg>=0?'up':'down'}">${chg>=0?'+':''}${fmt(pct,2)}%</span></div>
       <div style="text-align:right"><div class="ob-price">${fmt(d.price)}</div><div class="ob-time">${t}</div></div>
     </div>
     <div class="ob-ladder"><div class="ob-col-h bid">Bid · Vol</div><div class="ob-col-h offer">Offer · Vol</div>${rows}</div>
+    ${imbHtml}
   </div>`;
 }
 function _obRender(){
