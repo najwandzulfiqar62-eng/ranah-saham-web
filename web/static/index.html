@@ -1097,6 +1097,45 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   .btn::before{display:none}
   .ms-flash{animation:none}
 }
+
+/* ===== LONCENG NOTIFIKASI ===== */
+.notif-btn{position:relative;width:32px;height:32px;border-radius:50%;background:var(--panel2);
+  border:1px solid var(--line);color:var(--muted);cursor:pointer;transition:.15s;flex-shrink:0;
+  display:inline-flex;align-items:center;justify-content:center;padding:0}
+.notif-btn:hover{border-color:var(--gold);color:var(--gold)}
+.notif-btn .icon{width:16px;height:16px}
+.notif-btn.has-new .icon{animation:bellRing 1s var(--ease-premium)}
+@keyframes bellRing{0%,100%{transform:rotate(0)}15%{transform:rotate(14deg)}30%{transform:rotate(-11deg)}45%{transform:rotate(7deg)}60%{transform:rotate(-4deg)}}
+.notif-badge{position:absolute;top:-3px;right:-3px;min-width:16px;height:16px;padding:0 4px;
+  background:var(--bear);color:#fff;border-radius:9px;font-size:10px;font-weight:700;
+  font-family:'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;
+  border:2px solid var(--bg);line-height:1}
+.notif-panel{position:absolute;top:calc(100% + 10px);right:0;width:min(340px,calc(100vw - 32px));z-index:45;
+  background:rgba(13,25,21,.94);backdrop-filter:blur(18px) saturate(1.4);
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  box-shadow:var(--shadow-inset-top),var(--shadow-lg);
+  opacity:0;visibility:hidden;transform:translateY(6px) scale(.985);transform-origin:top right;
+  transition:opacity .16s var(--ease-premium),transform .16s var(--ease-premium),visibility .16s}
+.notif-panel.on{opacity:1;visibility:visible;transform:none}
+.notif-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
+.notif-head b{font-size:13px;font-family:'Space Grotesk',sans-serif}
+.notif-head button{background:none;border:0;color:var(--muted);font-size:11px;cursor:pointer;padding:2px 4px}
+.notif-head button:hover{color:var(--gold)}
+.notif-list{max-height:min(400px,60vh);overflow-y:auto}
+.notif-item{display:flex;gap:11px;padding:11px 14px;border-bottom:1px solid var(--line-soft);
+  cursor:pointer;transition:background .12s;text-align:left;width:100%;background:none;border-left:0;border-right:0;border-top:0;color:var(--text);font-family:inherit}
+.notif-item:hover{background:var(--panel2)}
+.notif-item:last-child{border-bottom:0}
+.notif-item .ni-icon{flex-shrink:0;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center}
+.notif-item .ni-icon.sig{background:rgba(199,154,42,.13);color:var(--gold)}
+.notif-item .ni-icon.reply{background:rgba(47,181,126,.13);color:var(--bull)}
+.notif-item .ni-body{min-width:0;flex:1;display:flex;flex-direction:column}
+.notif-item .ni-title{display:block;font-size:13px;font-weight:600;line-height:1.35}
+.notif-item .ni-sub{display:block;font-size:11px;color:var(--muted);margin-top:2px;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.notif-empty{padding:30px 20px;text-align:center;color:var(--muted);font-size:12.5px}
+.notif-perm{padding:11px 14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted);line-height:1.5}
+.notif-perm button{margin-top:7px;font-size:11px;padding:6px 11px}
+@media(max-width:768px){.notif-btn{display:none}}
 </style>
 </head>
 <body>
@@ -1107,6 +1146,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
        yang gampang tidak sinkron) -->
   <div class="tabs" id="tabs"></div>
   <div class="kbd" id="openCmd">Cari saham <kbd>Ctrl K</kbd></div>
+  <button class="notif-btn" id="notifBtn" title="Notifikasi" aria-label="Notifikasi"><span id="notifBell"></span><span class="notif-badge" id="notifBadge" hidden></span></button>
   <button class="tour-btn" id="tourBtn" title="Tur singkat" aria-label="Tur singkat">?</button>
   <button class="hbg" id="hbg" aria-label="Menu" onclick="toggleMobMenu()">
     <span></span><span></span><span></span>
@@ -3864,7 +3904,9 @@ async function _forumSubmitThread(){
     const resp=await fetch('/api/forum/threads',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({nama,judul,isi,kategori,admin_code:rsGet('rs_forum_admin_code')})});
     if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal mengirim.');
+    const created=await resp.json();
     rsSet('rs_forum_name',nama);
+    if(created&&created.id)_forumFollowThread(created.id,0);// baru, belum ada balasan -> baseline 0
     toast('Pertanyaan terkirim.','ok');
     $('#forumNewBox').innerHTML='';
     loadForum();
@@ -3882,7 +3924,12 @@ async function _forumSubmitReply(threadId){
     const resp=await fetch(`/api/forum/threads/${threadId}/replies`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({nama,isi,admin_code:rsGet('rs_forum_admin_code')})});
     if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal mengirim.');
+    const created=await resp.json();
     rsSet('rs_forum_name',nama);
+    // Ikuti thread yang kita balas -- catat latest_reply_id sbg baseline
+    // supaya balasan BERIKUTNYA (dari orang lain) memicu notifikasi, tapi
+    // balasan kita sendiri barusan tidak.
+    if(created&&created.id)_forumFollowThread(threadId,created.id);
     toast('Balasan terkirim.','ok');
     renderForumThread(threadId);
   }catch(e){toast(e.message,'err')}
@@ -6454,6 +6501,145 @@ async function runBacktest(){
     setBtnLoading(btn,false); btn.innerHTML='<svg class="icon icon-play" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="6 3 20 12 6 21 6 3"/></svg> Jalankan Backtest';
   }
 }
+
+/* ==================== NOTIFIKASI (lonceng) ====================
+   Aplikasi tanpa akun -> notifikasi berbasis POLL dari klien. localStorage
+   menyimpan: baseline id sinyal terakhir (rs_notif_sig_seen), daftar thread
+   forum yang diikuti + latest_reply_id-nya (rs_forum_follows: {id:lastReplyId}),
+   dan antrian notifikasi belum dibaca (rs_notif_queue). Poll tiap 45 detik
+   SELAMA tab terlihat (hemat: pause saat tab di background). */
+const NOTIF_POLL_MS=45000;
+function _notifGetQueue(){try{return JSON.parse(rsGet('rs_notif_queue')||'[]')}catch(e){return[]}}
+function _notifSetQueue(q){rsSet('rs_notif_queue',JSON.stringify(q.slice(0,40)))}
+function _forumFollows(){try{return JSON.parse(rsGet('rs_forum_follows')||'{}')}catch(e){return{}}}
+function _forumFollowThread(tid,lastReplyId){
+  const f=_forumFollows();f[String(tid)]=lastReplyId||0;
+  rsSet('rs_forum_follows',JSON.stringify(f));
+}
+function _notifPushToQueue(items){
+  // items terbaru di depan; dedup via key unik supaya poll berulang tidak
+  // menumpuk notifikasi yang sama.
+  const q=_notifGetQueue();
+  const existing=new Set(q.map(n=>n.key));
+  let added=0;
+  items.forEach(n=>{if(!existing.has(n.key)){q.unshift(n);added++}});
+  if(added)_notifSetQueue(q);
+  return added;
+}
+function _updateNotifBadge(){
+  const q=_notifGetQueue();
+  const badge=$('#notifBadge'),btn=$('#notifBtn');
+  if(!badge||!btn)return;
+  if(q.length){badge.textContent=q.length>9?'9+':q.length;badge.hidden=false;btn.classList.add('has-new')}
+  else{badge.hidden=true;btn.classList.remove('has-new')}
+}
+function _maybeBrowserNotif(title,body){
+  // Notifikasi OS hanya kalau user sudah kasih izin (tombol lonceng) DAN
+  // tab sedang tidak fokus (kalau lagi lihat web, toast in-app sudah cukup).
+  if(rsGet('rs_notif_browser')!=='1')return;
+  if(!('Notification'in window)||Notification.permission!=='granted')return;
+  if(document.visibilityState==='visible')return;
+  try{new Notification(title,{body,icon:'/icon-192.png',silent:false})}catch(e){}
+}
+async function _pollNotifications(silent){
+  // silent=true saat poll pertama pas load: TIDAK memunculkan toast utk
+  // hal yang sudah ada, cuma menetapkan baseline (mencegah banjir toast).
+  try{
+    // --- 1. Sinyal baru ---
+    const sigSeen=parseInt(rsGet('rs_notif_sig_seen')||'0',10)||0;
+    const sd=await api('/api/notifications/signals?since_id='+sigSeen);
+    if(sigSeen===0){
+      // baseline pertama -- simpan latest_id, jangan notif riwayat lama
+      rsSet('rs_notif_sig_seen',String(sd.latest_id||0));
+    }else if(sd.items&&sd.items.length){
+      const fresh=sd.items.map(s=>({
+        key:'sig:'+s.id,type:'signal',view:'audit',
+        title:`Sinyal baru: ${s.kode}`,
+        sub:`${_srcLabel(s.source)} · ${s.direction||'BUY'} · entry Rp${fmt(s.entry_price)}`,
+      }));
+      const added=_notifPushToQueue(fresh);
+      rsSet('rs_notif_sig_seen',String(sd.latest_id||sigSeen));
+      if(added&&!silent){
+        toast(`${added} sinyal baru masuk Audit Sinyal`,'info');
+        _maybeBrowserNotif('Ranah Saham — sinyal baru',`${fresh[0].title} (${fresh[0].sub})`);
+      }
+    }
+    // --- 2. Balasan forum baru di thread yang diikuti ---
+    const follows=_forumFollows();
+    const ids=Object.keys(follows).map(Number).filter(Boolean);
+    if(ids.length){
+      const fr=await fetch('/api/notifications/forum',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({thread_ids:ids})});
+      if(fr.ok){
+        const fdata=await fr.json();
+        const freshReplies=[];
+        Object.entries(fdata.threads||{}).forEach(([tid,info])=>{
+          const baseline=follows[tid]||0;
+          if(info.latest_reply_id&&info.latest_reply_id>baseline){
+            freshReplies.push({key:'reply:'+tid+':'+info.latest_reply_id,type:'reply',view:'forum',threadId:+tid,
+              title:'Ada balasan baru di pertanyaanmu',sub:`Thread #${tid} · ${info.count} balasan`});
+            follows[tid]=info.latest_reply_id;// geser baseline
+          }
+        });
+        if(freshReplies.length){
+          rsSet('rs_forum_follows',JSON.stringify(follows));
+          const added=_notifPushToQueue(freshReplies);
+          if(added&&!silent){
+            toast('Ada balasan baru di forum','info');
+            _maybeBrowserNotif('Ranah Saham — balasan forum',freshReplies[0].sub);
+          }
+        }
+      }
+    }
+    _updateNotifBadge();
+  }catch(e){/* diam -- notifikasi bukan fitur kritis, jangan ganggu UX */}
+}
+function _srcLabel(s){return({TOP_PICK:'Top Pick',SMART_MONEY:'Smart Money',MACD_CROSS:'MACD Cross'})[s]||s||'Sinyal'}
+function _renderNotifPanel(){
+  const q=_notifGetQueue();
+  const perm=('Notification'in window)&&Notification.permission!=='granted'&&rsGet('rs_notif_browser')!=='1'
+    ?`<div class="notif-perm">Mau dapat notifikasi walau tab tidak dibuka? <button class="btn ghost" id="notifPermBtn">Aktifkan notifikasi browser</button></div>`:'';
+  const list=q.length
+    ?q.map((n,i)=>`<button class="notif-item" data-idx="${i}">
+        <span class="ni-icon ${n.type==='reply'?'reply':'sig'}">${icon(n.type==='reply'?'message-square':'zap',{size:15})}</span>
+        <span class="ni-body"><span class="ni-title">${escHtml(n.title)}</span><span class="ni-sub">${escHtml(n.sub)}</span></span>
+      </button>`).join('')
+    :`<div class="notif-empty">Belum ada notifikasi.<br>Sinyal baru & balasan forummu akan muncul di sini.</div>`;
+  return `<div class="notif-head"><b>Notifikasi</b>${q.length?'<button id="notifClear">Tandai terbaca</button>':''}</div>
+    <div class="notif-list">${list}</div>${perm}`;
+}
+let _notifPanelEl=null;
+function _toggleNotifPanel(){
+  if(_notifPanelEl){_notifPanelEl.remove();_notifPanelEl=null;return}
+  const btn=$('#notifBtn');if(!btn)return;
+  const el=document.createElement('div');
+  el.className='notif-panel';el.innerHTML=_renderNotifPanel();
+  btn.appendChild(el);requestAnimationFrame(()=>el.classList.add('on'));
+  _notifPanelEl=el;
+  el.querySelectorAll('.notif-item').forEach(it=>it.addEventListener('click',()=>{
+    const n=_notifGetQueue()[+it.dataset.idx];if(!n)return;
+    // klik notif -> buka view terkait, buang notif itu dari antrian
+    const q=_notifGetQueue().filter((_,i)=>i!==+it.dataset.idx);_notifSetQueue(q);
+    _toggleNotifPanel();route(n.view);
+    if(n.type==='reply'&&n.threadId)setTimeout(()=>renderForumThread(n.threadId),120);
+    _updateNotifBadge();
+  }));
+  const clr=el.querySelector('#notifClear');if(clr)clr.addEventListener('click',()=>{_notifSetQueue([]);_updateNotifBadge();_toggleNotifPanel()});
+  const pb=el.querySelector('#notifPermBtn');if(pb)pb.addEventListener('click',async()=>{
+    try{const p=await Notification.requestPermission();if(p==='granted'){rsSet('rs_notif_browser','1');toast('Notifikasi browser aktif.','ok')}else{toast('Izin notifikasi ditolak.','err')}}catch(e){}
+    _toggleNotifPanel();
+  });
+}
+(function(){
+  const bell=$('#notifBell');if(bell)bell.innerHTML=icon('bell',{size:16});
+  const btn=$('#notifBtn');
+  if(btn)btn.addEventListener('click',e=>{e.stopPropagation();_toggleNotifPanel()});
+  document.addEventListener('click',e=>{if(_notifPanelEl&&!e.target.closest('#notifBtn'))_toggleNotifPanel()});
+  _updateNotifBadge();
+  // poll pertama silent (tetapkan baseline), lalu berkala saat tab terlihat
+  _pollNotifications(true);
+  setInterval(()=>{if(document.visibilityState==='visible')_pollNotifications(false)},NOTIF_POLL_MS);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')_pollNotifications(false)});
+})();
 
 /* init */
 if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{})})}

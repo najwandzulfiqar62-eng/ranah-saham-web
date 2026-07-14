@@ -389,3 +389,58 @@ def test_thread_no_ticker_mentioned_empty_list(client, clean_forum_db):
     created = client.post("/api/forum/threads", json={"nama": "A", "judul": "Tanya umum", "isi": "Ga nyebut kode saham apapun di sini."}).json()
     detail = client.get(f"/api/forum/threads/{created['id']}").json()
     assert detail["thread"]["tickers"] == []
+
+
+# =========================
+# NOTIFIKASI FORUM (lonceng)
+# =========================
+
+
+def test_notif_forum_reply_counts_for_followed_threads(client, clean_forum_db):
+    """Endpoint /api/notifications/forum: klien kirim daftar thread yang
+    diikuti, server balas count + latest_reply_id per thread supaya klien
+    bisa deteksi balasan baru dgn membandingkan latest_reply_id."""
+    t1 = client.post("/api/forum/threads", json={"nama": "A", "judul": "Q1", "isi": "I"}).json()
+    t2 = client.post("/api/forum/threads", json={"nama": "A", "judul": "Q2", "isi": "I"}).json()
+    r1 = client.post(f"/api/forum/threads/{t1['id']}/replies", json={"nama": "B", "isi": "jawab1"}).json()
+    client.post(f"/api/forum/threads/{t1['id']}/replies", json={"nama": "C", "isi": "jawab2"})
+
+    resp = client.post("/api/notifications/forum", json={"thread_ids": [t1["id"], t2["id"]]})
+    assert resp.status_code == 200
+    threads = resp.json()["threads"]
+    # kunci JSON selalu string
+    assert threads[str(t1["id"])]["count"] == 2
+    assert threads[str(t1["id"])]["latest_reply_id"] >= r1["id"]
+    # thread tanpa balasan tetap muncul dgn count 0 (bukan hilang)
+    assert threads[str(t2["id"])]["count"] == 0
+    assert threads[str(t2["id"])]["latest_reply_id"] == 0
+
+
+def test_notif_forum_empty_and_sanitizes_ids(client, clean_forum_db):
+    """thread_ids kosong -> {}. Nilai non-integer/negatif dibuang, tidak
+    error (input dari klien tidak dipercaya mentah)."""
+    assert client.post("/api/notifications/forum", json={"thread_ids": []}).json()["threads"] == {}
+    # id sampah dibuang; id valid yang tidak ada tetap dijawab count 0
+    resp = client.post("/api/notifications/forum", json={"thread_ids": ["abc", -5, 999999]})
+    assert resp.status_code == 200
+    threads = resp.json()["threads"]
+    assert "999999" in threads and threads["999999"]["count"] == 0
+    assert "abc" not in threads and "-5" not in threads
+
+
+def test_notif_signals_since_id_baseline_and_new(client, clean_signal_db):
+    """/api/notifications/signals: since_id=0 -> items kosong (cuma
+    baseline latest_id, tidak membanjiri riwayat); since_id < id sinyal
+    yang ada -> muncul sbg baru."""
+    from core.database import get_db
+    with get_db() as conn:
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status) "
+                     "VALUES ('ZZNOTIF', 1000, 5, 3, 'TOP_PICK', 'PENDING_ENTRY')")
+        new_id = conn.execute("SELECT MAX(id) m FROM signal_history").fetchone()["m"]
+
+    base = client.get("/api/notifications/signals?since_id=0").json()
+    assert base["items"] == [] and base["latest_id"] == new_id
+
+    fresh = client.get(f"/api/notifications/signals?since_id={new_id - 1}").json()
+    assert fresh["n_new"] >= 1
+    assert any(i["kode"] == "ZZNOTIF" for i in fresh["items"])

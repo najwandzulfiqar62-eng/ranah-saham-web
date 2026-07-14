@@ -660,6 +660,48 @@ async def api_forum_report_reply(reply_id: int, request: Request):
     return {"ok": True}
 
 
+# ---------- Notifikasi in-app (lonceng) ----------
+# Aplikasi TIDAK punya akun -- notifikasi jadi POLL berbasis klien: browser
+# menyimpan baseline (id sinyal terakhir + latest_reply_id per thread yang
+# DIA ikuti di localStorage) lalu menanyakan "ada yang baru sejak ini?".
+# Server TIDAK menyimpan state per-user (tidak ada tabel "sudah dibaca"),
+# jadi ringan & stateless. Dua sumber: (1) sinyal Top Pick/Smart Money baru
+# yang otomatis dicatat auto-cycle; (2) balasan baru di thread yang diikuti
+# user. Frontend gabung keduanya jadi satu badge lonceng + toast.
+_FORUM_NOTIF_MAX_THREADS = 50  # cap id thread yang bisa ditanya sekali (anti query IN membengkak)
+
+
+@app.get("/api/notifications/signals")
+async def api_notif_signals(since_id: int = 0):
+    from core.signal_history import get_signal_notifications
+    return _py(await asyncio.to_thread(get_signal_notifications, since_id))
+
+
+@app.post("/api/notifications/forum")
+async def api_notif_forum(request: Request):
+    """Klien kirim {"thread_ids": [..]} (thread yang dia buat/ikuti); server
+    balas jumlah balasan & latest_reply_id per thread. POST (bukan GET)
+    karena daftar id bisa panjang & lebih rapi di body drpd query string."""
+    body = await request.json()
+    ids = body.get("thread_ids") or []
+    # Sanitasi: hanya integer, buang duplikat, cap jumlahnya.
+    clean = []
+    seen = set()
+    for x in ids:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if i > 0 and i not in seen:
+            seen.add(i)
+            clean.append(i)
+        if len(clean) >= _FORUM_NOTIF_MAX_THREADS:
+            break
+    from core.forum import reply_counts_for_threads
+    counts = await asyncio.to_thread(reply_counts_for_threads, clean)
+    return _py({"threads": counts})
+
+
 # ---------- cache chart PNG (Redis) ----------
 # generate_advanced_chart/generate_*_chart (core/charts/) menulis file PNG ke
 # disk dan TIDAK PERNAH menghapusnya -- dipanggil ulang tiap request lewat

@@ -196,6 +196,32 @@ def list_replies(thread_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def reply_counts_for_threads(thread_ids: list[int]) -> dict[int, dict]:
+    """Untuk tiap thread_id yang diminta, kembalikan {thread_id: {count,
+    latest_reply_id}} -- dipakai lonceng notifikasi forum: klien kirim
+    daftar id thread yang dia ikuti (miliknya sendiri atau yang dibalas),
+    server balas jumlah balasan & id balasan terakhir supaya klien bisa
+    deteksi ADA BALASAN BARU dgn membandingkan latest_reply_id thd yang
+    tersimpan. Thread yang tidak punya balasan tetap muncul dgn count=0
+    (bukan hilang dari hasil) supaya klien tidak salah kira thread-nya
+    terhapus. Batas jumlah id di-cap di caller (web/app.py) supaya query
+    IN (...) tidak membengkak."""
+    _ensure_table()
+    if not thread_ids:
+        return {}
+    placeholders = ",".join("?" for _ in thread_ids)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT thread_id, COUNT(*) AS c, MAX(id) AS latest "
+            f"FROM forum_reply WHERE thread_id IN ({placeholders}) GROUP BY thread_id",
+            tuple(thread_ids),
+        ).fetchall()
+    by_thread = {r["thread_id"]: {"count": r["c"], "latest_reply_id": r["latest"]} for r in rows}
+    # Isi thread tanpa balasan dgn count 0 (tidak dilewati) supaya klien
+    # punya entri utk SEMUA thread yang dia tanya.
+    return {tid: by_thread.get(tid, {"count": 0, "latest_reply_id": 0}) for tid in thread_ids}
+
+
 def delete_thread(thread_id: int) -> bool:
     """Hapus thread BESERTA semua balasannya (cascade MANUAL -- lihat
     catatan modul di atas soal foreign_keys tidak di-enforce), dalam SATU

@@ -1455,6 +1455,33 @@ def get_signal_report() -> dict:
     }
 
 
+def get_signal_notifications(since_id: int = 0, limit: int = 20) -> dict:
+    """Ringkas SINYAL BARU (id > since_id) untuk lonceng notifikasi in-app.
+    Ringan sengaja -- cuma field yang perlu utk toast/daftar notifikasi
+    (id, kode, source, status, direction, entry_price, tp_pct), bukan
+    seluruh baris + stats spt get_signal_report (yang berat & dipanggil
+    saat halaman Audit dibuka). `latest_id` selalu dikembalikan supaya
+    klien tahu titik acuan berikutnya walau `items` kosong.
+
+    since_id=0 (klien belum punya acuan) SENGAJA return items=[] -- bukan
+    membanjiri notifikasi dgn seluruh riwayat saat pertama buka; klien
+    cukup menyimpan latest_id sbg baseline, notifikasi mulai dari sinyal
+    yang muncul SETELAH itu."""
+    _ensure_table()
+    with get_db() as conn:
+        latest = conn.execute("SELECT MAX(id) AS m FROM signal_history").fetchone()
+        latest_id = (latest["m"] or 0) if latest else 0
+        items = []
+        if since_id > 0:
+            rows = conn.execute(
+                "SELECT id, kode, source, status, direction, entry_price, tp_pct, "
+                "recorded_at FROM signal_history WHERE id > ? ORDER BY id DESC LIMIT ?",
+                (since_id, limit),
+            ).fetchall()
+            items = [dict(r) for r in rows]
+    return {"items": items, "latest_id": latest_id, "n_new": len(items)}
+
+
 async def record_daily_snapshots(price_lookup) -> int:
     """Catat snapshot HARIAN (harga & progres saat ini) utk SEMUA sinyal
     OPEN -- permintaan user langsung: "track sinyalnya, hari ini wr
