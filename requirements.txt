@@ -27,3 +27,8 @@ pillow>=10.0
 # Membaca Excel daftar emiten (data/saham.xlsx)
 openpyxl>=3.1
 redis>=5.0.0
+
+# WebSocket: server /ws/ihsg pakai WebSocket bawaan FastAPI/Starlette
+# (tidak butuh paket tambahan); `websockets` di sini HANYA utk menjalankan
+# ws_client.py (client uji stream ShadowStream), bukan utk server-nya.
+websockets>=12.0
