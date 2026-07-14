@@ -1181,6 +1181,14 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .ob-imb-buy .ob-imb-verdict,.ob-imb-buysoft .ob-imb-verdict{color:var(--bull)}
 .ob-imb-sell .ob-imb-verdict,.ob-imb-sellsoft .ob-imb-verdict{color:var(--bear)}
 .ob-imb-bal .ob-imb-verdict{color:var(--gold)}
+/* Wall: level dgn volume jauh di atas level lain (calon support/resistance) */
+.ob-row.wall{outline:1px solid;outline-offset:-1px;font-weight:700}
+.ob-row.bid.wall{outline-color:rgba(47,181,126,.6)}
+.ob-row.offer.wall{outline-color:rgba(214,90,74,.6)}
+.ob-walls{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.ob-wall-chip{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;font-family:'JetBrains Mono',monospace;display:inline-flex;align-items:center;gap:4px}
+.ob-wall-chip.bid{background:rgba(47,181,126,.14);color:var(--bull);border:1px solid rgba(47,181,126,.3)}
+.ob-wall-chip.offer{background:rgba(214,90,74,.14);color:var(--bear);border:1px solid rgba(214,90,74,.3)}
 @media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
 </style>
 </head>
@@ -6754,16 +6762,39 @@ function _obImbalance(d){
   else{verdict='Seimbang';cls='bal'}
   return {bv,ov,bidPct,verdict,cls};
 }
+// Deteksi "wall": SATU level dgn volume jauh di atas level lain di sisinya
+// (bid wall = calon support, offer wall = calon resistance). Return index
+// level wall, atau -1 kalau tidak ada. Butuh MINIMAL 3 level utk banding
+// (mustahil sebut "wall" kalau cuma 1-2 level -- tidak ada pembandingnya).
+// Ambang: volume terbesar >= 3x rata-rata level LAIN. Ini deteksi RELATIF
+// (bukan absolut) -- konsisten dgn disclaimer: wall bisa spoofing, BUKAN
+// support/resistance yang pasti.
+function _obDetectWall(levels){
+  if(!levels||levels.length<3)return -1;
+  const vols=levels.map(l=>+l.volume||0);
+  const maxV=Math.max(...vols);
+  if(maxV<=0)return -1;
+  const maxIdx=vols.indexOf(maxV);
+  const others=vols.filter((_,i)=>i!==maxIdx);
+  const avgOthers=others.reduce((a,b)=>a+b,0)/others.length;
+  if(avgOthers<=0)return -1;
+  return maxV>=avgOthers*3?maxIdx:-1;
+}
 function _obCard(d){
   const bids=(d.bid_5||[]).slice(0,5),offers=(d.offer_5||[]).slice(0,5);
   const maxV=Math.max(1,...bids.map(b=>+b.volume||0),...offers.map(o=>+o.volume||0));
   const chg=+d.change||0,pct=+d.change_percent||0;
+  const bidWall=_obDetectWall(bids),offerWall=_obDetectWall(offers);
   let rows='';
   for(let i=0;i<5;i++){
     const b=bids[i],o=offers[i];
-    rows+=b?`<div class="ob-row bid"><span class="ob-bar" style="width:${(b.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(b.price)}</span><span class="ob-v">${fmt(b.volume)}</span></div>`:`<div class="ob-row bid"></div>`;
-    rows+=o?`<div class="ob-row offer"><span class="ob-bar" style="width:${(o.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(o.price)}</span><span class="ob-v">${fmt(o.volume)}</span></div>`:`<div class="ob-row offer"></div>`;
+    rows+=b?`<div class="ob-row bid${i===bidWall?' wall':''}"><span class="ob-bar" style="width:${(b.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(b.price)}</span><span class="ob-v">${fmt(b.volume)}</span></div>`:`<div class="ob-row bid"></div>`;
+    rows+=o?`<div class="ob-row offer${i===offerWall?' wall':''}"><span class="ob-bar" style="width:${(o.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(o.price)}</span><span class="ob-v">${fmt(o.volume)}</span></div>`:`<div class="ob-row offer"></div>`;
   }
+  let walls='';
+  if(bidWall>=0)walls+=`<span class="ob-wall-chip bid" title="Volume bid jauh di atas level lain — calon support. Bisa spoofing (ditarik sebelum kena).">${icon('layers',{size:10})} Bid wall · ${fmt(bids[bidWall].price)}</span>`;
+  if(offerWall>=0)walls+=`<span class="ob-wall-chip offer" title="Volume offer jauh di atas level lain — calon resistance. Bisa spoofing (ditarik sebelum kena).">${icon('layers',{size:10})} Offer wall · ${fmt(offers[offerWall].price)}</span>`;
+  const wallsHtml=walls?`<div class="ob-walls">${walls}</div>`:'';
   const t=d.timestamp?new Date(d.timestamp*1000).toLocaleTimeString('id-ID'):'';
   const imb=_obImbalance(d);
   const imbHtml=imb?`<div class="ob-imb ob-imb-${imb.cls}" title="Rasio total volume bid vs offer 5 level — tekanan jangka sangat pendek, bukan prediksi. Order book bisa di-spoof.">
@@ -6776,6 +6807,7 @@ function _obCard(d){
       <div style="text-align:right"><div class="ob-price">${fmt(d.price)}</div><div class="ob-time">${t}</div></div>
     </div>
     <div class="ob-ladder"><div class="ob-col-h bid">Bid · Vol</div><div class="ob-col-h offer">Offer · Vol</div>${rows}</div>
+    ${wallsHtml}
     ${imbHtml}
   </div>`;
 }
