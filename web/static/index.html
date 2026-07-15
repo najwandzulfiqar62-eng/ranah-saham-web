@@ -1098,6 +1098,22 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   .ms-flash{animation:none}
 }
 
+/* ===== INFO NOTE (toggle ⓘ "Cara baca") =====
+   Feedback user nyata: "ruwet, kebanyakan tulisan" -- teks metodologi/
+   disclaimer TETAP ADA (kejujuran = identitas proyek) tapi default
+   TERSEMBUNYI di balik toggle kecil; 1 klik buka. Data jadi fokus. */
+.note-wrap{margin-top:8px}
+.note-toggle{display:inline-flex;align-items:center;gap:5px;background:none;border:0;color:var(--faint);
+  font-size:11px;cursor:pointer;padding:2px 0;font-family:inherit;transition:color .15s}
+.note-toggle:hover{color:var(--gold)}
+.note-toggle .icon{width:12px;height:12px;flex:none}
+.note-body{display:none;margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--muted);
+  border-left:2px solid var(--line);padding-left:10px}
+.note-wrap.open .note-body{display:block;animation:noteIn .18s var(--ease-premium)}
+.note-wrap.open .note-toggle{color:var(--gold)}
+@keyframes noteIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.note-wrap.open .note-body{animation:none}}
+
 /* ===== LONCENG NOTIFIKASI ===== */
 .notif-btn{position:relative;width:32px;height:32px;border-radius:50%;background:var(--panel2);
   border:1px solid var(--line);color:var(--muted);cursor:pointer;transition:.15s;flex-shrink:0;
@@ -1255,7 +1271,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     <div id="homeSignals" style="margin-top:14px">
       <p class="eyebrow" style="margin-bottom:10px">Sinyal Hari Ini</p>
     </div>
-    <p class="home-foot">Data harga & fundamental dari Yahoo Finance (delayed, bukan real-time). Semua keluaran untuk edukasi — bukan rekomendasi atau nasihat keuangan. DYOR.</p>
+    <p class="home-foot">Data Yahoo Finance (delayed) · untuk edukasi, bukan rekomendasi — DYOR.</p>
   </div>
   <!-- ANALISIS -->
   <div class="view" id="v-analisis">
@@ -1434,7 +1450,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="view" id="v-audit">
     <section class="panel">
       <p class="eyebrow">Audit Sinyal</p>
-      <p class="insight muted" style="margin-bottom:6px">Setiap saham yang pernah masuk Top Pick (skor cukup tinggi) dicatat otomatis SEBELUM hasilnya diketahui, lalu dicek ulang di sini apakah target (TP) atau stop loss (SL) tercapai. Ini rekaman objektif, bukan klaim performa yang dipilih setelah tahu hasilnya.</p>
+      <div class="note-wrap" style="margin:0 0 8px"><button type="button" class="note-toggle"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Cara kerja audit ini</button><div class="note-body">Setiap saham yang pernah masuk Top Pick (skor cukup tinggi) dicatat otomatis SEBELUM hasilnya diketahui, lalu dicek ulang di sini apakah target (TP) atau stop loss (SL) tercapai. Ini rekaman objektif, bukan klaim performa yang dipilih setelah tahu hasilnya.</div></div>
       <button class="btn ghost" id="auditBtn" style="padding:7px 14px"><svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg> Refresh</button>
     </section>
     <div id="auditBody"><div class="hint muted">Memuat riwayat sinyal saat tab dibuka…</div></div>
@@ -1758,21 +1774,20 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="view" id="v-orderbook">
     <section class="panel">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <div>
+        <div style="min-width:0">
           <p class="eyebrow" style="margin-bottom:4px">Order Book Live — Kedalaman Pasar</p>
-          <p class="insight muted" style="margin:0">Bid/offer 5 level real-time dari feed <b>ShadowStream</b> (bukan Yahoo/delayed). Data langsung dari sumber, web ini hanya menampilkan.</p>
-          <p class="muted" style="margin:6px 0 0;font-size:11px;line-height:1.5"><b>Tekanan Bid/Offer</b> = rasio volume bid vs offer 5 level (konteks jangka SANGAT pendek). <b>Wall</b> = level volume raksasa (calon support/resistance). <b>Indikasi spoofing</b> = wall yang tadi ada lalu ditarik tanpa harga menyentuhnya — POLA mirip manipulasi, <u>bukan bukti</u> (order bisa dibatalkan dgn alasan sah). Semua ini konteks, BUKAN prediksi/rekomendasi/"deteksi bandar". DYOR.</p>
+          <p class="insight muted" style="margin:0">Bid/offer 5 level real-time dari feed <b>ShadowStream</b>.</p>
+          <div class="note-wrap"><button type="button" class="note-toggle"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Cara baca</button><div class="note-body"><b>Tekanan Bid/Offer</b> = rasio volume bid vs offer 5 level (konteks jangka SANGAT pendek). <b>Wall</b> = level volume raksasa (calon support/resistance). <b>Indikasi spoofing</b> = wall ditarik tanpa harga menyentuhnya — pola mirip manipulasi, <u>bukan bukti</u>. Semua ini konteks, BUKAN prediksi/rekomendasi/"deteksi bandar". Kalau kosong: feed sedang tidak mengirim data (bursa tutup / ShadowStream mati). Untuk edukasi — DYOR.</div></div>
         </div>
         <span class="ob-status" id="obStatus"><span class="ob-dot"></span><span id="obStatusText">Menyambungkan…</span></span>
       </div>
     </section>
     <div id="obBody"><div class="hint muted" style="padding:20px">Menyambungkan ke stream saat tab dibuka…</div></div>
-    <p class="home-foot" style="margin-top:14px">Data kedalaman pasar berasal dari feed ShadowStream milik operator, disalurkan real-time via WebSocket. Untuk edukasi — bukan rekomendasi. Kalau kosong: feed sedang tidak mengirim data (bursa tutup / ShadowStream mati).</p>
   </div>
   <div class="view" id="v-forum">
     <section class="panel">
       <p class="eyebrow">Forum — Tanya Jawab</p>
-      <p class="insight muted" style="margin-bottom:6px">Tanya seputar analisis saham ke komunitas atau admin. Konten di sini dari pengguna (tanpa akun/verifikasi identitas) -- bukan nasihat investasi resmi, DYOR.</p>
+      <div class="note-wrap" style="margin:0 0 8px"><button type="button" class="note-toggle"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Tentang forum</button><div class="note-body">Tanya seputar analisis saham ke komunitas atau admin. Konten dari pengguna (tanpa akun/verifikasi identitas) — bukan nasihat investasi resmi, DYOR.</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn" id="forumNewBtn">+ Pertanyaan Baru</button>
         <button class="btn ghost" id="forumAdminBtn" style="font-size:12px;padding:7px 12px">Admin</button>
@@ -1922,6 +1937,7 @@ const ICONS={
   'bar-chart':'<line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/>',
   user:'<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   'chevron-down':'<path d="m6 9 6 6 6-6"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   'message-square':'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   trash:'<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   'thumbs-up':'<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/>',
@@ -1939,6 +1955,18 @@ function icon(name,{size=16,className='',strokeWidth=2}={}){
 function emptyState(msg,iconName='search'){
   return `<div class="empty-state">${icon(iconName,{size:26})}<p>${msg}</p></div>`;
 }
+// Toggle ⓘ "Cara baca": teks metodologi/disclaimer default TERSEMBUNYI
+// (feedback nyata: "ruwet, kebanyakan tulisan") -- kontennya TIDAK dihapus
+// (kejujuran = identitas proyek), cuma diturunkan level visualnya, 1 klik
+// buka. Delegasi klik di document (sekali) supaya jalan utk semua panel
+// yang dirender ulang via innerHTML.
+function infoNote(html,label='Cara baca'){
+  return `<div class="note-wrap"><button type="button" class="note-toggle">${icon('info',{size:12})} ${label}</button><div class="note-body">${html}</div></div>`;
+}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('.note-toggle'); if(!t)return;
+  t.closest('.note-wrap')?.classList.toggle('open');
+});
 // Item accordion sidebar (Tools Lanjutan/Fundamental/Insight/VWAP/SMC) --
 // satu pola dipakai di beberapa panel supaya cuma 1 yang terbuka
 // sekaligus (kurangi capek mata liat banyak panel "quiet" bertumpuk).
@@ -2073,14 +2101,11 @@ function _quickBadges(d){
   if(d.likuiditas)b.push(`<span class="chip" style="color:${likColor(d.likuiditas)}" title="Rata-rata nilai transaksi 20 hari: Rp${fmt(d.avg_value_20)}">${d.likuiditas}</span>`);
   if(d.gaya_trading)b.push(`<span class="chip" title="Berdasarkan volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)">${d.gaya_trading}</span>`);
   if(d.bandar)b.push(`<span class="chip" style="color:${bandarColor(d.bandar.label)}" title="${d.bandar.sinyal} — proxy dari Chaikin A/D Line, bukan data transaksi bandar sungguhan">${d.bandar.label}</span>`);
-  // Penjelasan metodologi selalu TERLIHAT (bukan cuma title/tooltip --
-  // tooltip hover tidak muncul di layar sentuh HP, jadi user mobile tidak
-  // pernah lihatnya). Ditulis singkat supaya tidak makan banyak ruang.
+  // Penjelasan metodologi tetap bisa diakses di HP (tooltip hover tak ada
+  // di layar sentuh) TAPI default tersembunyi di balik toggle ⓘ (feedback
+  // nyata: "kebanyakan tulisan") -- 1 tap buka.
   const bandarLine=d.bandar?` · <b>${d.bandar.label}</b> = proxy tren Chaikin A/D Line (harga vs volume 20h), <u>bukan</u> data insider/bandar sungguhan`:'';
-  const caption=`<p class="muted" style="font-size:11px;margin:6px 0 0;line-height:1.5">
-    <b>Grade</b> = AI Score + likuiditas · <b>Likuiditas</b> = rata-rata nilai transaksi 20 hari
-    (Rp${fmtCap(d.avg_value_20)}) · <b>Gaya trading</b> = volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)${bandarLine}.
-  </p>`;
+  const caption=infoNote(`<b>Grade</b> = AI Score + likuiditas · <b>Likuiditas</b> = rata-rata nilai transaksi 20 hari (Rp${fmtCap(d.avg_value_20)}) · <b>Gaya trading</b> = volatilitas harian (ATR ${fmt(d.atr_pct,1)}%)${bandarLine}.`);
   return `<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">${b.join('')}</div>${caption}`;
 }
 function _rrRatio(d){
@@ -2395,7 +2420,7 @@ async function analyze(kode){
         <button class="btn ghost" id="insightBtn" style="width:100%">${icon('sparkles',{size:13})} Buat insight naratif</button><div id="insightBox"></div>`)}
         ${d.vwap_fv?accItem('VWAP Fair Value', `
         <div class="decision-card" style="margin-bottom:10px"><div class="label">VWAP ${d.vwap_fv.lookback} hari</div><div class="value">${fmt(d.vwap_fv.vwap)}</div><div class="sub">${d.vwap_fv.label} · ${d.vwap_fv.dev_pct>=0?'+':''}${fmt(d.vwap_fv.dev_pct,2)}% vs VWAP</div></div>
-        <p class="audit-note">VWAP adalah harga rata-rata tertimbang volume; dipakai sebagai konteks fair value teknikal, bukan valuasi fundamental.</p>`):''}
+        ${infoNote('VWAP adalah harga rata-rata tertimbang volume; dipakai sebagai konteks fair value teknikal, bukan valuasi fundamental.','Apa itu VWAP?')}`):''}
         ${d.smc?accItem('Smart Money Concepts', `
         <p class="audit-note">${d.smc.narasi||''}</p>
         <div class="chips"><span class="chip">${d.smc.n_bos} BOS / ${d.smc.n_choch} CHoCH</span><span class="chip">OB ${d.smc.ob_bullish} naik / ${d.smc.ob_bearish} turun</span><span class="chip">FVG ${d.smc.fvg_unfilled} belum terisi</span></div>
@@ -2570,10 +2595,10 @@ async function showIhsg(){
     <p class="muted" style="font-size:11px;margin-bottom:2px;letter-spacing:.03em">PREDIKSI TEKNIKAL BEBERAPA HARI KE DEPAN -- BUKAN status pergerakan hari ini</p>
     <div class="ihsg-head"><div class="big" style="color:${vColor(d.prediction)}">${d.prediction||'–'}</div>
       <div class="muted">Keyakinan: ${d.confidence||'–'}</div>${d.target_move?`<div class="muted">Target: ${d.target_move}</div>`:''}</div>
-    <p class="muted" style="font-size:12px;margin-top:4px">Hari ini indeks ${d.daily_change>=0?'naik':'turun'} <b style="color:${d.daily_change>=0?'var(--bull)':'var(--bear)'}">${d.daily_change>=0?'+':''}${fmt(d.daily_change,2)}%</b> -- prediksi di atas bisa berbeda arah dari pergerakan hari ini karena melihat struktur teknikal (posisi vs MA, RSI, dst), bukan cuma angka hari ini.</p>
+    ${infoNote(`Hari ini indeks ${d.daily_change>=0?'naik':'turun'} <b style="color:${d.daily_change>=0?'var(--bull)':'var(--bear)'}">${d.daily_change>=0?'+':''}${fmt(d.daily_change,2)}%</b> — prediksi di atas bisa berbeda arah dari pergerakan hari ini karena melihat struktur teknikal (posisi vs MA, RSI, dst), bukan cuma angka hari ini.`,'Kenapa bisa beda dgn hari ini?')}
     ${d.bandar?`<div class="quickbadges" style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
       <span class="chip" style="color:${bandarColor(d.bandar.label)}">${d.bandar.label}</span></div>
-      <p class="muted" style="font-size:11px;margin:6px 0 0;line-height:1.5"><b>${d.bandar.label}</b> = proxy tren Chaikin A/D Line pada IHSG (harga vs volume gabungan pasar 20 hari), <u>bukan</u> data transaksi bandar/asing sungguhan.</p>`:''}
+      ${infoNote(`<b>${d.bandar.label}</b> = proxy tren Chaikin A/D Line pada IHSG (harga vs volume gabungan pasar 20 hari), <u>bukan</u> data transaksi bandar/asing sungguhan.`,'Apa ini?')}`:''}
     ${d.action?`<p class="insight" style="margin:4px 0 0">${d.action}</p>`:''}
     <div class="grid" style="margin-top:14px">
       <div class="cell"><div class="k">Harga</div><div class="v" id="ihsgPrice">${fmt(d.current_price)}</div></div>
@@ -2582,7 +2607,7 @@ async function showIhsg(){
       <div class="cell"><div class="k">Tren MA</div><div class="v">${d.ma_trend||'–'}</div></div>
       ${edgeCells}
     </div>
-    ${bt&&bt.edge!=null&&bt.edge<=1?'<p class="insight muted" style="margin-top:12px">Edge tipis/negatif: sinyal ini tidak lebih baik dari sekadar mengikuti kecenderungan pasar. Statistik historis in-sample, bukan jaminan.</p>':''}
+    ${bt&&bt.edge!=null&&bt.edge<=1?infoNote('Edge tipis/negatif: sinyal ini tidak lebih baik dari sekadar mengikuti kecenderungan pasar. Statistik historis in-sample, bukan jaminan.','Soal edge'):''}
   </section>
   <section class="panel"><p class="eyebrow">Grafik IHSG</p><div id="ihsgChart"></div><div id="ihsgRibbon"></div></section>
   <div id="ihsgBreadth"></div>
@@ -2647,7 +2672,7 @@ async function loadIhsgBreadth(){
       <div class="cell"><div class="k">% MACD Bullish</div><div class="v">${b.pct_macd_bullish}%</div></div>
       <div class="cell"><div class="k">Rata-rata perubahan</div><div class="v ${b.avg_change>=0?'up':'down'}">${b.avg_change>=0?'+':''}${fmt(b.avg_change,2)}%</div></div>
     </div>
-    <p class="insight muted" style="margin-top:10px;font-size:12px">Breadth = keluasan partisipasi. Reli yang sehat biasanya didukung banyak saham (advancers tinggi); reli dengan breadth lemah lebih rapuh. Ini konteks kesehatan pasar, bukan prediksi arah.</p></section>`;
+    ${infoNote('Breadth = keluasan partisipasi. Reli yang sehat biasanya didukung banyak saham (advancers tinggi); reli dengan breadth lemah lebih rapuh. Ini konteks kesehatan pasar, bukan prediksi arah.')}</section>`;
 }
 
 async function loadIhsgNews(){
@@ -3298,7 +3323,7 @@ async function loadFundamentalScreen(){
     <td style="color:${_fundVerdictColor(r.verdict)}">${r.verdict||'–'}${r.upside_display?` (${r.upside_display})`:''}</td>
   </tr>`).join('');
   body.innerHTML=`<section class="panel">
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Screening berbasis valuasi FUNDAMENTAL murni (PER, PBV, ROE, Dividend Yield, estimasi harga wajar) -- TERPISAH dari Top Pick (yang tetap 100% teknikal). Saham IDX kadang naik/turun tidak terlalu dipengaruhi fundamental, jadi dua sudut pandang ini sengaja tidak dicampur jadi satu skor. Diurutkan Undervalued dulu. Tap baris untuk analisis.</p>
+    ${infoNote('Screening berbasis valuasi FUNDAMENTAL murni (PER, PBV, ROE, Dividend Yield, estimasi harga wajar) — TERPISAH dari Top Pick (yang tetap 100% teknikal); dua sudut pandang sengaja tidak dicampur jadi satu skor. Diurutkan Undervalued dulu. Tap baris untuk analisis.','Metodologi')}
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th class="hide-xs">Sektor</th><th>Harga</th><th>PER</th><th class="hide-xs">PBV</th><th class="hide-xs">ROE</th><th class="hide-xs">Div Yield</th><th>Estimasi Wajar</th><th>Verdict</th></tr></thead><tbody>${tr}</tbody></table></div>
     <p class="muted" style="font-size:11px;margin-top:10px">Estimasi harga wajar = median beberapa metode valuasi (Graham, PER×15, PBV×2, DCF, PEG, DDM, ROE-implied) -- referensi, bukan patokan pasti. Data dari Yahoo Finance, bisa tidak lengkap untuk sebagian saham. Bukan nasihat keuangan.</p>
   </section>`;
@@ -3334,7 +3359,7 @@ async function loadTopPick(){
     <td>Rp${fmt(r.harga)}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
     ${regimeBanner}
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}% · Likuiditas ${fmt(d.weights.liq*100,0)}% · Risk/Reward ${fmt(d.weights.rr*100,0)}%. Saham kurang/tidak likuid (⚠) skornya DIBATASI, bukan disembunyikan. Fundamental & kepemilikan pemegang saham substansial (X-15) muncul di alasan/warning kalau relevan, TIDAK memengaruhi skor (saham IDX kadang naik/turun tidak terlalu dipengaruhi fundamental). Tap baris untuk analisis.</p>
+    ${infoNote(`Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}% · Likuiditas ${fmt(d.weights.liq*100,0)}% · Risk/Reward ${fmt(d.weights.rr*100,0)}%. Saham kurang/tidak likuid (⚠) skornya DIBATASI, bukan disembunyikan. Fundamental & X-15 muncul di alasan/warning kalau relevan, TIDAK memengaruhi skor. Tap baris untuk analisis.`,'Metodologi skor')}
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor Keyakinan</th><th class="hide-xs">AI Score</th><th class="hide-xs">Sektor</th><th>Likuiditas</th><th>RR</th><th>Harga</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   staggerRows(body.querySelector('.ctable'), 12);
@@ -3442,7 +3467,7 @@ function _riwayatHarianBodyHtml(rh){
     ${grup(turun,'Turun/pullback dibanding kemarin','trending-down')}
     ${grup(stabil,'Stabil dibanding kemarin','arrow-right')}
     ${grup(belum,'Baru dibuka hari ini (belum ada pembanding)','sparkles')}
-    <p class="audit-note" style="margin-top:12px">Kartu di atas itu KUMULATIF s/d tanggal ini (utk tanggal HARI INI, angkanya SAMA PERSIS dgn Win Rate keseluruhan di panel Audit Sinyal -- keduanya menghitung hal yang sama). Menang dihitung begitu TP1 tercapai -- TP2/TP3 kalau ikut tercapai ditandai BONUS, bukan syarat tambahan. Daftar di bawah ini rincian per saham: "selesai tepat hari ini" = posisi yang BARU ditutup pada tanggal ini; "Sedang Menang" = posisi masih terbuka tapi SUDAH tercapai TP1+. Naik/turun/stabil membandingkan posisi yang masih berjalan dgn snapshot HARI SEBELUMNYA -- riwayat harian baru mulai tercatat 2026-07-07, tanggal sebelum itu cuma menampilkan menang/kalah tanpa data naik/turun berjalan.</p>`;
+    ${infoNote('Kartu di atas itu KUMULATIF s/d tanggal ini (utk tanggal HARI INI, angkanya SAMA PERSIS dgn Win Rate keseluruhan di panel Audit Sinyal). Menang dihitung begitu TP1 tercapai — TP2/TP3 kalau ikut tercapai ditandai BONUS, bukan syarat. "Selesai tepat hari ini" = posisi yang BARU ditutup pada tanggal ini; "Sedang Menang" = posisi masih terbuka tapi SUDAH tercapai TP1+. Naik/turun/stabil membandingkan posisi berjalan dgn snapshot HARI SEBELUMNYA (riwayat harian mulai tercatat 2026-07-07).')}`;
 }
 // Date-picker Riwayat Harian (permintaan user: "di riwayat ada tombol
 // tanggal jadi bisa liat riwayat wr signal") -- ganti tanggal cuma
@@ -3558,7 +3583,7 @@ async function loadSignalAudit(){
   const confirmedHtml=confirmed.length?`<section class="panel" style="border:1px solid var(--bull);background:linear-gradient(180deg,rgba(46,125,82,.10),transparent)">
     <p class="eyebrow" style="color:var(--bull)">${icon('check-circle',{size:14})} Signal Confirmed (TP1+) <span class="muted" style="font-weight:400;font-size:12px">· ${confirmedDates.length} hari sejak sinyal pertama dicatat</span></p>
     ${confirmedTimelineHtml}
-    <p class="audit-note" style="margin-top:10px">Begitu TP1 tercapai, sinyal sudah confirmed/menang -- TP2 & TP3 OPSIONAL (bonus kalau posisi lanjut naik), bukan syarat. Bisa diverifikasi lewat data kami sendiri (endpoint <b>/api/signals</b>), bukan tangkapan layar -- sinyal dicatat otomatis SEBELUM hasilnya diketahui.</p>
+    ${infoNote('Begitu TP1 tercapai, sinyal sudah confirmed/menang — TP2 & TP3 OPSIONAL (bonus kalau posisi lanjut naik), bukan syarat. Bisa diverifikasi lewat data kami sendiri (endpoint <b>/api/signals</b>), bukan tangkapan layar — sinyal dicatat otomatis SEBELUM hasilnya diketahui.')}
   </section>`:'';
   let statsHtml;
   const pendingNote=d.n_pending_entry?` dan ${d.n_pending_entry} menunggu entry (belum ada posisi, harga belum turun ke level yang disarankan)`:'';
@@ -3579,7 +3604,7 @@ async function loadSignalAudit(){
         <div class="decision-card"><div class="label">Rata-rata Durasi</div><div class="value" data-animate="${s.avg_days_to_resolve}|1| hari">0 hari</div><div class="sub">Sampai TP/SL/kadaluarsa</div></div>
         <div class="decision-card"><div class="label">Sedang Berjalan</div><div class="value" data-animate="${d.n_open}|0">0</div><div class="sub">${d.n_pending_entry?`+ ${d.n_pending_entry} menunggu entry · `:''}Dari ${d.n_total} total dicatat</div></div>
       </div>
-      <p class="audit-note" style="margin-top:12px">Win rate dihitung begitu TP1 tercapai (TP2/TP3 opsional, tidak perlu ditunggu) -- sekali tercatat menang, tetap menang walau posisi belakangan berbalik kena SL. <b>Rata-rata Return</b> = return terkunci di level TP tertinggi yang TERBUKTI tercapai per sinyal (TP1/TP2 pakai % target level itu, pemenang tuntas TP3 pakai realisasi aktual, kalah/kadaluarsa pakai hasil aktual termasuk minusnya) -- populasi SAMA dgn win rate. SENGAJA tidak berasumsi "semua pemenang sampai TP3" (itu angka bohong -- ada yang TP1 lalu berbalik SL). "Disiplin TP1" = kalau selalu ambil untung di TP1. Kadaluarsa (${s.n_expired}) masuk rata-rata return tapi TIDAK dihitung menang/kalah.${d.n_expired_no_entry?` ${d.n_expired_no_entry} rekomendasi entry tidak pernah tercapai (bukan menang/kalah, tidak pernah ada posisi).`:''}</p>
+      ${infoNote(`Win rate dihitung begitu TP1 tercapai (TP2/TP3 opsional) — sekali tercatat menang, tetap menang walau posisi belakangan berbalik kena SL. <b>Rata-rata Return</b> = return terkunci di level TP tertinggi yang TERBUKTI tercapai per sinyal (TP1/TP2 pakai % target level itu, tuntas TP3 pakai realisasi aktual, kalah/kadaluarsa pakai hasil aktual termasuk minusnya) — populasi SAMA dgn win rate. SENGAJA tidak berasumsi "semua pemenang sampai TP3" (itu angka bohong). "Disiplin TP1" = kalau selalu ambil untung di TP1. Kadaluarsa (${s.n_expired}) masuk rata-rata return tapi TIDAK dihitung menang/kalah.${d.n_expired_no_entry?` ${d.n_expired_no_entry} rekomendasi entry tidak pernah tercapai (bukan menang/kalah, tidak pernah ada posisi).`:''}`,'Metodologi angka di atas')}
     </section>`;
   }
   // Statistik agregat "berapa dari yang masih OPEN sudah confirmed TP1+"
@@ -3591,7 +3616,7 @@ async function loadSignalAudit(){
     <div class="decision-grid">
       <div class="decision-card"><div class="label">Sudah Confirmed (TP1+)</div><div class="value" style="color:var(--bull)">${pp.n_tp_progress}/${pp.n_open}</div><div class="sub">${fmt(pp.pct_tp_progress,1)}% dari sinyal yang masih berjalan</div></div>
     </div>
-    <p class="audit-note" style="margin-top:12px">Sinyal ini SUDAH dihitung menang di Win Rate (TP1 tercapai) meski posisinya masih terbuka mengejar TP2/TP3 (opsional, bukan syarat) -- lihat kartu "Signal Confirmed" di atas utk detail per saham.</p>
+    ${infoNote('Sinyal ini SUDAH dihitung menang di Win Rate (TP1 tercapai) meski posisinya masih terbuka mengejar TP2/TP3 (opsional, bukan syarat) — lihat kartu "Signal Confirmed" di atas utk detail per saham.')}
   </section>`:'';
   // Riwayat Harian (permintaan user: "hari ini wr brp trus loss brp dan
   // yg berjalan apa aja dan besoknya juga sama yg lanjut naik dari kmrn
@@ -4751,7 +4776,7 @@ async function loadWhyMove(kode){
     </div>
     ${factorsHtml}
     ${newsHtml}
-    <p class="audit-note" style="margin-top:14px">Semua faktor di atas adalah korelasi waktu (kebetulan terjadi bersamaan hari ini), BUKAN bukti sebab-akibat. Kalau ada berita terkait, itu ditampilkan terpisah dari kondisi teknikal -- bukan klaim "berita ini yang menyebabkan harga bergerak".</p>
+    ${infoNote('Semua faktor di atas adalah korelasi waktu (kebetulan terjadi bersamaan hari ini), BUKAN bukti sebab-akibat. Kalau ada berita terkait, itu ditampilkan terpisah dari kondisi teknikal — bukan klaim "berita ini yang menyebabkan harga bergerak".')}
   </div>`;
 }
 
@@ -4807,7 +4832,7 @@ async function loadInsight(kode,containerId,btnId,isMarket){
   html+=isMarket?block('Rotasi Sektor',d.sektor):block('Konteks IHSG',d.konteks_ihsg);
   html+=block('Berita',d.berita);
   html+=block('Sintesis',d.sintesis);
-  html+=`<p class="insight muted" style="margin-top:8px;font-size:12px;border-top:1px solid var(--line);padding-top:10px">${INSIGHT_METHOD}</p></div>`;
+  html+=`${infoNote(INSIGHT_METHOD,'Metodologi insight')}</div>`;
   box.innerHTML=html;
   // fade-in blok insight satu per satu
   requestAnimationFrame(()=>{
@@ -5206,7 +5231,7 @@ function _renderAksiKorporasi(d){
     </div>
     ${colHdr}
     ${list.map(_aksiKorporasiRow).join('')||noData}
-    <p class="muted" style="font-size:10.5px;margin-top:10px;line-height:1.6">Laporan X-15 tanpa perubahan % kepemilikan (mis. buyback/repurchase agreement yang dilaporkan lewat anggota Direksi/Komisaris atas nama pengendali) -- bukan sinyal akumulasi/distribusi, sekadar konteks aksi korporasi.</p>`;
+    ${infoNote('Laporan X-15 tanpa perubahan % kepemilikan (mis. buyback/repurchase agreement yang dilaporkan lewat Direksi/Komisaris atas nama pengendali) — bukan sinyal akumulasi/distribusi, sekadar konteks aksi korporasi.')}`;
 }
 
 async function loadX15(hari=0){
@@ -5321,7 +5346,7 @@ async function loadBerulang(){
       <span style="margin-left:auto;background:rgba(47,181,126,.13);color:var(--bull);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:700">${repeats.length} saham</span>
     </div>
     ${cards}
-    <p class="muted" style="font-size:10.5px;margin-top:12px;line-height:1.6">Saham yang dibeli ${_pemegangMode==='insider'?'direksi/komisaris':'pemegang ≥5%'} (siapa pun pelapornya) di 2+ sesi dari ${N} hari terakhir. Titik hijau = hari aktif. Tap ticker untuk analisis.</p>`;
+    ${infoNote(`Saham yang dibeli ${_pemegangMode==='insider'?'direksi/komisaris':'pemegang ≥5%'} (siapa pun pelapornya) di 2+ sesi dari ${N} hari terakhir. Titik hijau = hari aktif. Tap ticker untuk analisis.`)}`;
 }
 
 /* ---------- PEMEGANG SAHAM ---------- */
@@ -5429,10 +5454,7 @@ async function loadHolders(kode){
     <p class="eyebrow" style="margin-bottom:10px">Struktur Kepemilikan</p>
     ${pctRows||'<p class="muted" style="font-size:13px">Data tidak tersedia</p>'}
     ${pubRow}
-    <p class="insight muted" style="font-size:11.5px;margin-top:10px;line-height:1.6">
-      <b style="color:var(--gold)">Pengendali/Insider</b> = pemegang pengendali (mayoritas domestik, termasuk grup keluarga/konglomerasi).
-      <b style="color:var(--accent)">Institusi</b> = fund global (Vanguard, iShares, dll.) yang diwajibkan lapor ke regulator internasional.
-    </p>
+    ${infoNote('<b style="color:var(--gold)">Pengendali/Insider</b> = pemegang pengendali (mayoritas domestik, termasuk grup keluarga/konglomerasi). <b style="color:var(--accent)">Institusi</b> = fund global (Vanguard, iShares, dll.) yang diwajibkan lapor ke regulator internasional.')}
   </section>
 
   <!-- Fund asing -->
