@@ -62,6 +62,26 @@ MAX_HOLD_DAYS = 20
 # pasar yang sudah jauh berubah.
 MAX_ENTRY_WAIT_DAYS = 5
 
+# Diskon entry maksimum yang dianggap REALISTIS tercapai dalam MAX_ENTRY_
+# WAIT_DAYS (jawaban utk keluhan user "banyak entry yang ga kecapai"):
+# entry skenario yang lebih dari 7% di bawah harga live saat pencatatan
+# hampir pasti tidak akan tersentuh dalam 5 hari bursa -- di-SKIP saat
+# pencatatan ("tidak ada setup realistis" lebih jujur drpd entry pajangan
+# yang ujungnya cuma menumpuk EXPIRED_NO_ENTRY).
+MAX_ENTRY_DISCOUNT_PCT = 7.0
+
+# Zona sentuh entry yang dianggap fill WAJAR di audit_pending_entries:
+# harga terpantau boleh sampai 5% di bawah entry (limit order tetap
+# tereksekusi di harga entry saat harga melewatinya). Lebih dalam dari itu
+# di SATU observasi (polling ~10 menit) = harga MELOMPATI area entry (gap/
+# crash) -- klaim "fill di harga entry" jadi tidak realistis, dan kalau
+# jauh sekali (< ENTRY_ANOMALY_RATIO x entry) hampir pasti BUKAN pergerakan
+# pasar wajar melainkan aksi korporasi/stock split (kasus nyata RAJA:
+# entry 4.497 vs harga 880 = -80% "dalam semalam" krn split -- skala harga
+# lama sudah tidak berlaku, sinyal wajib diinvalidasi, BUKAN di-fill).
+ENTRY_FILL_ZONE_PCT = 5.0
+ENTRY_ANOMALY_RATIO = 0.6
+
 # Ambang minimum confidence_score supaya masuk daftar yang diaudit --
 # JANGAN catat SEMUA 45 saham tiap hari (terlalu bising, dan sinyal yang
 # skornya biasa-biasa saja bukan "yang ditampilkan sebagai Top Pick").
@@ -693,6 +713,14 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
     _ensure_table()
     if _is_bursa_weekend():
         return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
+    # Gate jam bursa (BARU, bug nyata PPRE 2026-07-16): pencatatan dulu cuma
+    # di-gate akhir pekan, jadi siklus auto-cycle PRE-MARKET tetap mencatat
+    # sinyal dari harga closing kemarin -- begitu pasar buka gap turun,
+    # entry rekomendasi (Rp122) sudah DI ATAS harga pasar (Rp110): rekomendasi
+    # lahir basi & tidak pernah valid. Sinyal baru sekarang HANYA lahir saat
+    # bursa buka, dari harga yang benar2 sedang berjalan.
+    if not _is_bursa_trading_hours():
+        return []
 
     # Sisa kuota HARI INI (BUKAN cuma sisa kuota panggilan ini) -- bug NYATA
     # ditemukan lewat verifikasi live setelah universe diperluas ke LIQUID_250
@@ -766,6 +794,28 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
                         entry_price = live_price
                 except Exception:
                     pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
+        else:
+            # Validasi entry skenario thd harga LIVE saat pencatatan (BARU,
+            # jawaban utk keluhan user "banyak entry yang ga kecapai" + kasus
+            # PPRE entry di atas pasar):
+            # - entry >= harga live -> BUKAN pullback lagi (pasar sudah di
+            #   bawah entry saat sinyal lahir) -- rekomendasi tidak valid, skip.
+            # - entry terlalu DALAM di bawah harga live (> MAX_ENTRY_DISCOUNT_
+            #   PCT) -> hampir pasti tidak tersentuh dalam MAX_ENTRY_WAIT_DAYS,
+            #   cuma jadi sampah EXPIRED_NO_ENTRY -- skip juga ("tidak ada
+            #   setup realistis hari ini" lebih jujur drpd entry pajangan).
+            # Kalau harga live tidak tersedia, lolos apa adanya (fail-open,
+            # jangan blokir pencatatan gara2 lookup gagal).
+            if price_lookup is not None:
+                try:
+                    live_price = await price_lookup(it["kode"])
+                    if live_price and live_price > 0:
+                        if entry_price >= live_price:
+                            continue  # pasar sudah <= entry: pullback-nya sudah lewat, tidak valid
+                        if entry_price < live_price * (1 - MAX_ENTRY_DISCOUNT_PCT / 100):
+                            continue  # entry terlalu jauh di bawah: tidak realistis tercapai
+                except Exception:
+                    pass
 
         tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
         # TP2/TP3 (permintaan user: "kena tp1 tandai, lanjut ke tp
@@ -1038,8 +1088,31 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
         # masuk sinyal"). runaway_price None kalau tp_pct tidak wajar (jaga2).
         tp_pct = row["tp_pct"]
         runaway_price = row["entry_price"] * (1 + tp_pct / 100) if tp_pct and tp_pct > 0 else None
+        # Batas bawah zona fill yang wajar (lihat ENTRY_FILL_ZONE_PCT):
+        # di bawah ini = harga MELOMPATI area entry, bukan menyentuhnya.
+        fill_floor = row["entry_price"] * (1 - ENTRY_FILL_ZONE_PCT / 100)
 
-        if not is_stale and price <= row["entry_price"]:
+        if not is_stale and price < fill_floor:
+            # Harga jauh DI BAWAH area entry dalam satu observasi -- gap/
+            # crash melompati entry (atau, kalau ekstrem, aksi korporasi/
+            # split spt kasus RAJA -80%). Fill di harga entry TIDAK jujur
+            # (kita tidak tahu harga eksekusi sungguhan), jadi rekomendasi
+            # diinvalidasi: EXPIRED_NO_ENTRY, bukan menang/kalah.
+            with get_db() as conn:
+                cur = conn.execute(
+                    "UPDATE signal_history SET status = 'EXPIRED_NO_ENTRY', resolved_at = datetime('now', 'localtime') "
+                    "WHERE id = ? AND status = 'PENDING_ENTRY'",
+                    (row["id"],),
+                )
+                if cur.rowcount == 0:
+                    continue
+            events.append({
+                "kind": "entry_expired", "id": row["id"], "kode": row["kode"],
+                "entry_price": row["entry_price"], "last_price": price,
+                "reason": ("anomaly" if price < row["entry_price"] * ENTRY_ANOMALY_RATIO else "gap"),
+                "source": row["source"], "pattern": row["pattern"],
+            })
+        elif not is_stale and price <= row["entry_price"]:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with get_db() as conn:
                 cur = conn.execute(
@@ -1185,6 +1258,17 @@ async def audit_open_signals(price_lookup) -> list[dict]:
         entry = row["entry_price"]
         is_sell = row["direction"] == "SELL"
 
+        # Guard anomali skala harga (kelas bug yang sama dgn RAJA di
+        # PENDING_ENTRY): harga terpantau <60% atau >160% dari entry dalam
+        # SATU observasi hampir pasti aksi korporasi (stock split/reverse
+        # split) -- skala harga baris ini sudah tidak sebanding. JANGAN
+        # resolve TP/SL pakai angka rusak (SL_HIT -80% palsu menghancurkan
+        # kejujuran track record). Diperlakukan spt is_stale: klaim TP/SL
+        # diblokir, HANYA EXPIRED berbasis waktu yang boleh menutupnya --
+        # dgn return_pct NULL (untung/rugi tidak bisa diukur jujur di skala
+        # harga yang sudah berubah).
+        is_anomaly = price < entry * 0.6 or price > entry * 1.6
+
         def _level_price(pct):
             if pct is None:
                 return None
@@ -1229,12 +1313,15 @@ async def audit_open_signals(price_lookup) -> list[dict]:
         prev_level = row["tp_level_hit"] or 0
         kind, status, return_pct = None, None, None
 
-        if is_stale:
-            # Harga basi -- lewati klaim TP/SL/tp_progress sepenuhnya,
-            # cuma EXPIRED (berbasis waktu) yang boleh jalan.
+        if is_stale or is_anomaly:
+            # Harga basi ATAU skala harga anomali (indikasi split) -- lewati
+            # klaim TP/SL/tp_progress sepenuhnya, cuma EXPIRED (berbasis
+            # waktu) yang boleh jalan. Utk anomali, return_pct NULL: untung/
+            # rugi tidak bisa diukur jujur di skala harga yang berubah.
             if age_days >= MAX_HOLD_DAYS:
                 kind, status = "resolved", "EXPIRED"
-                return_pct = round((entry / price - 1) * 100, 2) if is_sell else round((price / entry - 1) * 100, 2)
+                if not is_anomaly:
+                    return_pct = round((entry / price - 1) * 100, 2) if is_sell else round((price / entry - 1) * 100, 2)
         elif sl_hit:
             kind, status, return_pct = "resolved", "SL_HIT", -row["sl_pct"]
         elif reached_level >= configured_max and reached_level > 0:
@@ -1327,7 +1414,11 @@ def _compute_stats(signals: list[dict]) -> dict | None:
         return None
 
     win_rate = round(len(wins) / len(decided) * 100, 1) if decided else None
-    avg_return = round(sum(s["return_pct"] for s in closed) / len(closed), 2) if closed else None
+    # EXPIRED hasil anomali skala harga (indikasi split) punya return_pct
+    # NULL (tidak bisa diukur jujur) -- dilewati dari rata-rata, bukan
+    # dipaksa jadi 0 (0 = klaim "impas", itu bohong).
+    closed_ret = [s["return_pct"] for s in closed if s["return_pct"] is not None]
+    avg_return = round(sum(closed_ret) / len(closed_ret), 2) if closed_ret else None
     avg_days = round(sum(s["days_to_resolve"] for s in closed) / len(closed), 1) if closed else None
     n_expired = len([s for s in closed if s["status"] == "EXPIRED"])
 

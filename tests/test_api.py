@@ -2697,6 +2697,148 @@ def test_audit_pending_entries_ignores_stale_price_for_fill(clean_signal_db):
     assert events == []
 
 
+def test_audit_pending_entries_gap_below_fill_zone_invalidates(clean_signal_db):
+    """Harga terpantau MELOMPATI area entry (lebih dari ENTRY_FILL_ZONE_PCT
+    di bawah entry dalam satu observasi ~10 menit) -> klaim 'fill di harga
+    entry' tidak realistis (gap/crash). Rekomendasi diinvalidasi jadi
+    EXPIRED_NO_ENTRY (reason 'gap'), BUKAN di-fill jadi posisi rugi palsu."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_pending_entries
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZGAP', 1000, 5, 3, 'PENDING_ENTRY', 'BUY')"
+        )
+
+    async def fake_lookup(kode):
+        return 900.0, date.today()  # 10% di bawah entry -- melompati zona fill 5%
+
+    events = asyncio.run(audit_pending_entries(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status, return_pct FROM signal_history WHERE kode='ZZGAP'").fetchone()
+    assert row["status"] == "EXPIRED_NO_ENTRY"
+    assert row["return_pct"] is None
+    assert len(events) == 1 and events[0]["reason"] == "gap"
+
+
+def test_audit_pending_entries_anomaly_price_scale_invalidates(clean_signal_db):
+    """Kasus nyata RAJA: entry 4497 vs harga 880 (-80%) karena stock split
+    -- skala harga lama sudah tidak berlaku. HARUS diinvalidasi dgn reason
+    'anomaly' (indikasi aksi korporasi), bukan di-fill/di-SL-kan."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_pending_entries
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZSPLIT', 4497, 5, 3, 'PENDING_ENTRY', 'BUY')"
+        )
+
+    async def fake_lookup(kode):
+        return 880.0, date.today()  # ~20% dari entry -- jauh di bawah ENTRY_ANOMALY_RATIO
+
+    events = asyncio.run(audit_pending_entries(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status FROM signal_history WHERE kode='ZZSPLIT'").fetchone()
+    assert row["status"] == "EXPIRED_NO_ENTRY"
+    assert len(events) == 1 and events[0]["reason"] == "anomaly"
+
+
+def test_record_top_picks_gated_outside_trading_hours(clean_signal_db, monkeypatch):
+    """Kasus nyata PPRE: auto-cycle PRE-MARKET mencatat sinyal dari harga
+    closing kemarin; pasar buka gap turun -> entry rekomendasi lahir SUDAH
+    di atas harga pasar. Pencatatan kini di-gate jam bursa (bukan cuma
+    akhir pekan)."""
+    import asyncio
+
+    import core.signal_history as sh
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    monkeypatch.setattr(sh, "_is_bursa_trading_hours", lambda: False)
+    items = [{"kode": "ZZPREMKT", "harga": 1000, "confidence_score": MIN_SCORE_TO_RECORD + 5,
+              "potensi_naik_pct": 5.0, "risiko_turun_pct": 3.0}]
+    saved = asyncio.run(record_top_picks(items))
+    assert saved == [], "di luar jam bursa TIDAK BOLEH lahir sinyal baru (harga basi)"
+
+
+def test_record_top_picks_skips_entry_invalid_vs_live_price(clean_signal_db):
+    """Validasi entry skenario thd harga LIVE saat pencatatan:
+    - entry >= harga live -> pullback sudah terlampaui, skip (kasus PPRE).
+    - entry > MAX_ENTRY_DISCOUNT_PCT di bawah live -> tidak realistis
+      tercapai dalam 5 hari, skip (keluhan 'banyak entry ga kecapai').
+    - entry wajar (sedikit di bawah live) -> tetap tercatat."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    base = {"confidence_score": MIN_SCORE_TO_RECORD + 5, "potensi_naik_pct": 5.0, "risiko_turun_pct": 3.0}
+    items = [
+        {**base, "kode": "ZZABOVE", "harga": 1000, "entry_price": 1100},  # entry DI ATAS live 1000
+        {**base, "kode": "ZZDEEP", "harga": 1000, "entry_price": 900},    # 10% di bawah live (> 7%)
+        {**base, "kode": "ZZOKENT", "harga": 1000, "entry_price": 970},   # 3% di bawah live -- wajar
+    ]
+
+    async def fake_live(kode):
+        return 1000.0
+
+    saved = asyncio.run(record_top_picks(items, price_lookup=fake_live))
+    kode_saved = [s["kode"] for s in saved]
+    assert kode_saved == ["ZZOKENT"], f"cuma entry realistis yang boleh lahir, dapat: {kode_saved}"
+
+    with get_db() as conn:
+        n = conn.execute("SELECT COUNT(*) c FROM signal_history WHERE kode IN ('ZZABOVE','ZZDEEP')").fetchone()["c"]
+    assert n == 0
+
+
+def test_audit_open_signals_anomalous_price_never_fakes_sl(clean_signal_db):
+    """Guard split utk posisi OPEN: harga terpantau <60% dari entry TIDAK
+    BOLEH di-resolve SL_HIT -80% palsu (skala harga berubah, indikasi aksi
+    korporasi). Posisi tetap OPEN; kalau umurnya sudah lewat MAX_HOLD_DAYS,
+    ditutup EXPIRED dgn return_pct NULL (tidak bisa diukur jujur)."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        # posisi muda: harga anomali -> HARUS tetap OPEN (bukan SL_HIT)
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZOPSPLIT', 4497, 5, 3, 'OPEN', 'BUY')"
+        )
+        # posisi tua (lewat MAX_HOLD_DAYS): harga anomali -> EXPIRED, return NULL
+        conn.execute(
+            f"INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction, recorded_at) "
+            f"VALUES ('ZZOPSPLITOLD', 4497, 5, 3, 'OPEN', 'BUY', datetime('now', '-{MAX_HOLD_DAYS + 2} days'))"
+        )
+
+    async def fake_lookup(kode):
+        return 880.0, date.today()  # -80% dari entry: indikasi split
+
+    asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        muda = conn.execute("SELECT status FROM signal_history WHERE kode='ZZOPSPLIT'").fetchone()
+        tua = conn.execute("SELECT status, return_pct FROM signal_history WHERE kode='ZZOPSPLITOLD'").fetchone()
+    assert muda["status"] == "OPEN", "harga anomali tidak boleh jadi SL_HIT palsu"
+    assert tua["status"] == "EXPIRED"
+    assert tua["return_pct"] is None, "return di skala harga rusak tidak bisa diukur -- harus NULL"
+
+
 def test_audit_pending_entries_skips_entirely_outside_trading_hours(clean_signal_db, monkeypatch):
     """Sama pola dgn audit_open_signals -- di luar jam bursa, JANGAN proses
     sama sekali (harga yang didapat di luar jam bursa berisiko basi/echo
