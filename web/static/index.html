@@ -1153,66 +1153,6 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .notif-perm button{margin-top:7px;font-size:11px;padding:6px 11px}
 @media(max-width:768px){.notif-btn{display:none}}
 
-/* ===== ORDER BOOK LIVE ===== */
-.ob-status{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
-  padding:6px 12px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
-.ob-status .ob-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
-.ob-status.live{color:var(--bull);border-color:rgba(47,181,126,.4)}
-.ob-status.live .ob-dot{background:var(--bull);box-shadow:0 0 0 0 rgba(47,181,126,.5);animation:liveRing 1.6s ease-out infinite}
-.ob-status.down{color:var(--bear);border-color:rgba(214,90,74,.4)}
-.ob-status.down .ob-dot{background:var(--bear)}
-.ob-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
-.ob-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
-  box-shadow:var(--shadow-inset-top),var(--shadow-sm)}
-.ob-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px;
-  padding-bottom:9px;border-bottom:1px solid var(--line)}
-.ob-tk{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px}
-.ob-price{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:15px}
-.ob-chg{font-family:'JetBrains Mono',monospace;font-size:12px;margin-left:6px}
-.ob-time{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint)}
-.ob-ladder{display:grid;grid-template-columns:1fr 1fr;gap:2px}
-.ob-col-h{font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--faint);padding:2px 6px;text-transform:uppercase}
-.ob-col-h.bid{text-align:left;color:var(--bull)}
-.ob-col-h.offer{text-align:right;color:var(--bear)}
-.ob-row{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:11.5px;
-  padding:3px 6px;border-radius:4px;position:relative;overflow:hidden}
-/* bar volume proporsional sbg latar (depth visualization) */
-.ob-row .ob-bar{position:absolute;top:0;bottom:0;opacity:.14;border-radius:4px}
-.ob-row.bid .ob-bar{right:0;background:var(--bull)}
-.ob-row.offer .ob-bar{left:0;background:var(--bear)}
-.ob-row>span{position:relative;z-index:1}
-.ob-row.bid .ob-p{color:var(--bull);font-weight:700}
-.ob-row.offer{flex-direction:row-reverse}
-.ob-row.offer .ob-p{color:var(--bear);font-weight:700}
-.ob-row .ob-v{color:var(--muted)}
-.ob-flash{animation:obFlash .6s ease-out}
-@keyframes obFlash{0%{background:rgba(199,154,42,.28)}100%{background:transparent}}
-/* Tekanan Bid/Offer (imbalance) -- rasio volume bid vs offer 5 level */
-.ob-imb{margin-top:11px;padding-top:10px;border-top:1px solid var(--line-soft)}
-.ob-imb-bar{height:7px;border-radius:4px;background:var(--bear);overflow:hidden;transition:none}
-.ob-imb-bid{display:block;background:var(--bull);height:100%;transition:width .35s var(--ease-premium)}
-.ob-imb-lbl{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:11px}
-.ob-imb-verdict{font-weight:700;display:inline-flex;align-items:center;gap:5px}
-.ob-imb-pct{font-family:'JetBrains Mono',monospace;color:var(--muted);font-size:10px}
-.ob-imb-buy .ob-imb-verdict,.ob-imb-buysoft .ob-imb-verdict{color:var(--bull)}
-.ob-imb-sell .ob-imb-verdict,.ob-imb-sellsoft .ob-imb-verdict{color:var(--bear)}
-.ob-imb-bal .ob-imb-verdict{color:var(--gold)}
-/* Wall: level dgn volume jauh di atas level lain (calon support/resistance) */
-.ob-row.wall{outline:1px solid;outline-offset:-1px;font-weight:700}
-.ob-row.bid.wall{outline-color:rgba(47,181,126,.6)}
-.ob-row.offer.wall{outline-color:rgba(214,90,74,.6)}
-.ob-walls{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
-.ob-wall-chip{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;font-family:'JetBrains Mono',monospace;display:inline-flex;align-items:center;gap:4px}
-.ob-wall-chip.bid{background:rgba(47,181,126,.14);color:var(--bull);border:1px solid rgba(47,181,126,.3)}
-.ob-wall-chip.offer{background:rgba(214,90,74,.14);color:var(--bear);border:1px solid rgba(214,90,74,.3)}
-/* Alert wall palsu (spoofing) -- wall ditarik tanpa harga menyentuhnya */
-.ob-spoof{display:flex;align-items:center;gap:6px;margin-top:9px;padding:6px 10px;border-radius:7px;
-  font-size:10.5px;font-weight:700;background:rgba(230,160,40,.13);color:#E6A028;
-  border:1px solid rgba(230,160,40,.35);animation:obSpoofIn .35s var(--ease-premium)}
-.ob-spoof .icon{flex:none}
-@keyframes obSpoofIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media(prefers-reduced-motion:reduce){.ob-spoof{animation:none}}
-@media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
 /* Zeta Dashboard */
 .zeta-board{display:flex;flex-direction:column;gap:16px;background:var(--panel);padding:20px;border-radius:var(--radius);border:1px solid var(--line-soft);box-shadow:var(--shadow-sm)}
 .zeta-grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
@@ -1797,20 +1737,6 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   </div>
 
   <!-- FORUM -->
-  <!-- ORDER BOOK LIVE (stream WebSocket dari ShadowStream via /ws/ihsg) -->
-  <div class="view" id="v-orderbook">
-    <section class="panel">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <div style="min-width:0">
-          <p class="eyebrow" style="margin-bottom:4px">Order Book Live — Kedalaman Pasar</p>
-          <p class="insight muted" style="margin:0">Bid/offer 5 level real-time dari feed <b>ShadowStream</b>.</p>
-          <div class="note-wrap"><button type="button" class="note-toggle"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Cara baca</button><div class="note-body"><b>Tekanan Bid/Offer</b> = rasio volume bid vs offer 5 level (konteks jangka SANGAT pendek). <b>Wall</b> = level volume raksasa (calon support/resistance). <b>Indikasi spoofing</b> = wall ditarik tanpa harga menyentuhnya — pola mirip manipulasi, <u>bukan bukti</u>. Semua ini konteks, BUKAN prediksi/rekomendasi/"deteksi bandar". Kalau kosong: feed sedang tidak mengirim data (bursa tutup / ShadowStream mati). Untuk edukasi — DYOR.</div></div>
-        </div>
-        <span class="ob-status" id="obStatus"><span class="ob-dot"></span><span id="obStatusText">Menyambungkan…</span></span>
-      </div>
-    </section>
-    <div id="obBody"><div class="hint muted" style="padding:20px">Menyambungkan ke stream saat tab dibuka…</div></div>
-  </div>
   <div class="view" id="v-forum">
     <section class="panel">
       <p class="eyebrow">Forum — Tanya Jawab</p>
@@ -2085,7 +2011,6 @@ const NAV_GROUPS=[
     {v:'audit',l:'Audit Sinyal',icon:'check-circle'}]},
   {label:'Pasar',items:[
     {v:'pasar',l:'Pasar Harian',icon:'bar-chart'},
-    {v:'orderbook',l:'Order Book Live',icon:'activity'},
     {v:'heatmap',l:'Heatmap',icon:'layers'},
     {v:'sektor',l:'Sektor',icon:'activity'},
     {v:'makro',l:'Makro Global',icon:'zap'}]},
@@ -2210,11 +2135,7 @@ function _applyRoute(v){
     document.querySelectorAll('.view').forEach(x=>x.classList.remove('on','view-enter','view-exit'));
     view.classList.add('on','view-enter');
     window.scrollTo(0,0);
-    // Order Book Live: WebSocket dibuka HANYA saat view aktif, ditutup saat
-    // pindah ke view lain -- tidak menahan koneksi stream sepanjang sesi.
-    if(_currentView==='orderbook'&&v!=='orderbook')obDisconnect();
     _currentView=v;
-    if(v==='orderbook'){obConnect()}
     if(v==='beranda'&&!loaded.beranda){loaded.beranda=1;loadHome()}
     if(v==='ihsg'&&!loaded.ihsg){loaded.ihsg=1;showIhsg()}
     if(v==='makro'&&!loaded.makro){loaded.makro=1;loadMakro()}
@@ -3581,10 +3502,10 @@ async function loadSignalAudit(){
       // level TP yang SUDAH TERBUKTI tercapai (fakta sebelum split),
       // jangan pajang % live palsu / NaN.
       pct=_tpLevelPct(s);
-      sub=`Rp${fmt(s.entry_price)} → sempat TP${lv} · harga kini Rp${fmt(s.floating_price)} indikasi stock split (beda skala, % live tidak diukur)`;
+      sub=`Rp${fmt(s.entry_price)} → sempat TP${lv} (split)`;
     }else if(s.status==='OPEN'){
       pct=s.floating_return_pct;
-      sub=`Rp${fmt(s.entry_price)} → Rp${fmt(s.floating_price)} · TP${lv} tercapai · lanjut pantau TP${Math.min(lv+1,3)} (opsional)`;
+      sub=`Rp${fmt(s.entry_price)} → Rp${fmt(s.floating_price)} (TP${lv})`;
     }else if(s.status==='TP_HIT'){
       pct=s.return_pct;
       sub=`Rp${fmt(s.entry_price)} → Rp${fmt(s.resolved_price)} · ${s.days_to_resolve} hari${s.pattern?' · '+s.pattern:''}`;
@@ -3594,7 +3515,7 @@ async function loadSignalAudit(){
       // negatif seolah itu untung -- tampilkan target TP yang SUDAH
       // tercapai, dan tetap jujur bahwa harga akhirnya balik turun.
       pct=_tpLevelPct(s);
-      sub=`Rp${fmt(s.entry_price)} → sempat TP${lv}, lalu balik turun & kena SL (hasil akhir ${s.return_pct>=0?'+':''}${fmt(s.return_pct,2)}%)`;
+      sub=`Rp${fmt(s.entry_price)} → sempat TP${lv}, lalu SL`;
     }
     return `<div class="decision-card glow-bull">
       <div class="label">${s.kode} · ${_sourceLabel(s.source)}</div>
@@ -3807,7 +3728,7 @@ async function loadSignalAudit(){
     }).join('')}</div>
   </section>`:'';
   if(!signals.length){
-    body.innerHTML=rhHtml+statsHtml+`<section class="panel">${emptyState('Belum ada sinyal yang tercatat. Sinyal otomatis tercatat saat Top Pick dibuka dan ada saham dengan skor cukup tinggi.','calendar')}</section>`;
+    body.innerHTML=rhHtml+statsHtml+`<section class="panel">${emptyState('Belum ada sinyal tercatat.','calendar')}</section>`;
     _wireRiwayatHarianControls();
     animateStatCards(body);
     return;
@@ -3823,7 +3744,7 @@ async function loadSignalAudit(){
       if(s.distance_to_entry_pct!=null){
         retTxt=(s.distance_to_entry_pct>=0?'+':'')+fmt(s.distance_to_entry_pct,2)+'%';
         retColor='var(--accent)';
-        retSub=`<div class="muted" style="font-size:10px;font-style:italic">jarak ke entry · Rp${fmt(s.current_price)}</div>`;
+        retSub=`<div class="muted" style="font-size:10px;font-style:italic">ke entry Rp${fmt(s.current_price)}</div>`;
       }else{
         retTxt='–';retColor='var(--muted)';
       }
@@ -3836,11 +3757,11 @@ async function loadSignalAudit(){
         // bukan rugi. Server sudah menolak menghitung %-nya
         // (floating_return_pct null + flag ini); bilang apa adanya.
         retTxt='–';retColor='var(--muted)';
-        retSub=`<div class="muted" style="font-size:10px;font-style:italic">indikasi stock split · harga kini Rp${fmt(s.floating_price)} beda skala dari entry — % tidak diukur</div>`;
+        retSub=`<div class="muted" style="font-size:10px;font-style:italic">indikasi split</div>`;
       }else if(s.floating_return_pct!=null){
         retTxt=(s.floating_return_pct>=0?'+':'')+fmt(s.floating_return_pct,2)+'%';
         retColor=s.floating_return_pct>=0?'var(--bull)':'var(--bear)';
-        retSub=`<div class="muted" style="font-size:10px;font-style:italic">mengambang · Rp${fmt(s.floating_price)}</div>`;
+        retSub=`<div class="muted" style="font-size:10px;font-style:italic">Rp${fmt(s.floating_price)}</div>`;
       }else{
         retTxt='–';retColor='var(--muted)';
       }
@@ -3865,12 +3786,12 @@ async function loadSignalAudit(){
     };
     return `<tr data-k="${s.kode}" data-status="${s.status}" style="cursor:pointer">
       <td class="tk">${tickerTag(s.kode)}${dirBadge}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
-      <td>${_sourceLabel(s.source)}</td>
-      <td>Rp${fmt(s.entry_price)}</td>
+      <td class="hide-xs">${_sourceLabel(s.source)}</td>
+      <td class="hide-xs">Rp${fmt(s.entry_price)}</td>
       <td style="color:var(--bull)">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
-      <td style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">${slSign}${fmt(s.sl_pct,1)}%</div></td>
+      <td class="hide-xs" style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">${slSign}${fmt(s.sl_pct,1)}%</div></td>
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
-      <td style="color:${retColor}">${retTxt}${retSub}</td></tr>`;
+      <td style="text-align:right;color:${retColor}">${retTxt}<br>${retSub}</td></tr>`;
   }).join('');
   const filterChips = `
     <div id="auditFilter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
@@ -3885,7 +3806,7 @@ async function loadSignalAudit(){
   `;
   body.innerHTML=rhHtml+confirmedHtml+statsHtml+partialProgressHtml+bySourceHtml+`<section class="panel">
     ${filterChips}
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th class="hide-xs">Sumber</th><th class="hide-xs">Entry</th><th>Target TP</th><th class="hide-xs">Stop Loss</th><th>Status</th><th style="text-align:right">Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>
   </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   staggerRows(body.querySelector('.ctable'), 12);
@@ -7034,192 +6955,6 @@ function _toggleNotifPanel(){
   setInterval(()=>{if(document.visibilityState==='visible')_pollNotifications(false)},NOTIF_POLL_MS);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')_pollNotifications(false)});
 })();
-
-/* ==================== ORDER BOOK LIVE (WebSocket /ws/ihsg) ====================
-   Menampilkan stream bid/offer 5 level dari feed ShadowStream (via relay
-   /ws/ihsg). WebSocket dibuka HANYA saat view aktif (obConnect di router),
-   ditutup saat pindah view (obDisconnect). Kalau feed belum kirim data ->
-   tampil "menunggu data", BUKAN angka palsu (data murni dari ShadowStream,
-   web ini tidak pernah mengarang order book). */
-let _obWS=null,_obState={},_obPrevPrice={},_obReconnectTimer=null,_obBackoff=1000,_obIntentionalClose=false,_obRenderRAF=0;
-// Pelacak spoofing: _obLast simpan order book + wall tick SEBELUMNYA per
-// saham; _obSpoof simpan alert "wall ditarik" terbaru per saham (transient,
-// tampil ~20 detik). Deteksi wall palsu = wall yang tadi ada lalu HILANG/
-// menyusut drastis TANPA harga menyentuhnya (pola mirip spoofing).
-let _obLast={},_obSpoof={};
-const _OB_SPOOF_MS=20000; // lama alert ditampilkan setelah wall ditarik
-function _obSetStatus(cls,text){
-  const s=$('#obStatus'),t=$('#obStatusText');
-  if(s)s.className='ob-status'+(cls?' '+cls:'');
-  if(t)t.textContent=text;
-}
-function _obScheduleRender(){
-  if(_obRenderRAF)return;
-  _obRenderRAF=requestAnimationFrame(()=>{_obRenderRAF=0;_obRender()});
-}
-// Ringkas order book jadi peta harga->volume + wall terdeteksi (dipakai
-// pelacakan spoof antar-tick).
-function _obBook(d){
-  const bids=d.bid_5||[],offers=d.offer_5||[];
-  const bidMap={},offerMap={};
-  bids.forEach(b=>{bidMap[b.price]=+b.volume||0});
-  offers.forEach(o=>{offerMap[o.price]=+o.volume||0});
-  const bw=_obDetectWall(bids),ow=_obDetectWall(offers);
-  const walls=[];
-  if(bw>=0)walls.push({side:'bid',price:+bids[bw].price,volume:+bids[bw].volume||0});
-  if(ow>=0)walls.push({side:'offer',price:+offers[ow].price,volume:+offers[ow].volume||0});
-  return {bidMap,offerMap,price:+d.price||0,walls};
-}
-// Bandingkan tick baru vs sebelumnya: wall yang tadi ada, sekarang volumenya
-// turun >=65% DAN harga BELUM menembus level itu -> "ditarik" (indikasi
-// spoofing, BUKAN bukti). Kalau harga sudah menembus level wall, hilangnya
-// wajar (kemungkinan kena/tereksekusi) -> TIDAK ditandai spoof.
-function _obTrackSpoof(ticker,d){
-  const cur=_obBook(d),prev=_obLast[ticker];
-  if(prev&&prev.walls){
-    prev.walls.forEach(w=>{
-      const nowVol=w.side==='bid'?(cur.bidMap[w.price]??0):(cur.offerMap[w.price]??0);
-      const traded=w.side==='bid'?(cur.price<=w.price):(cur.price>=w.price);
-      const dropped=w.volume>0&&nowVol<=w.volume*0.35;
-      if(dropped&&!traded)_obSpoof[ticker]={side:w.side,price:w.price,at:Date.now()};
-    });
-  }
-  _obLast[ticker]=cur;
-}
-function _obHandleMsg(raw){
-  let data;try{data=JSON.parse(raw)}catch(e){return}
-  if(data.type==='snapshot'&&data.data){
-    _obState={};
-    Object.values(data.data).forEach(d=>{if(d&&d.ticker){_obTrackSpoof(d.ticker,d);_obState[d.ticker]=d}});
-  }else if(data.ticker){
-    _obTrackSpoof(data.ticker,data);
-    _obState[data.ticker]=data;
-  }else return;
-  _obScheduleRender();
-}
-// Tekanan Bid/Offer: rasio total volume bid vs offer 5 level. Metrik
-// mikrostruktur standar (order flow imbalance) -- dihitung dari data
-// ShadowStream ASLI (bukan mengarang), murni aritmetika. JUJUR: ini
-// konteks tekanan JANGKA SANGAT PENDEK & berisik, DAN order book gampang
-// di-spoof (wall/volume palsu ditarik sebelum kena) -- BUKAN prediksi arah
-// harga, BUKAN rekomendasi. Disclaimer ini tampil di panel (lihat header).
-function _obImbalance(d){
-  const bids=d.bid_5||[],offers=d.offer_5||[];
-  const bv=bids.reduce((s,b)=>s+(+b.volume||0),0);
-  const ov=offers.reduce((s,o)=>s+(+o.volume||0),0);
-  const tot=bv+ov;
-  if(tot<=0)return null;
-  const bidPct=bv/tot*100;
-  let verdict,cls;
-  if(bidPct>=60){verdict='Tekanan Beli';cls='buy'}
-  else if(bidPct>=55){verdict='Cenderung Beli';cls='buysoft'}
-  else if(bidPct<=40){verdict='Tekanan Jual';cls='sell'}
-  else if(bidPct<=45){verdict='Cenderung Jual';cls='sellsoft'}
-  else{verdict='Seimbang';cls='bal'}
-  return {bv,ov,bidPct,verdict,cls};
-}
-// Deteksi "wall": SATU level dgn volume jauh di atas level lain di sisinya
-// (bid wall = calon support, offer wall = calon resistance). Return index
-// level wall, atau -1 kalau tidak ada. Butuh MINIMAL 3 level utk banding
-// (mustahil sebut "wall" kalau cuma 1-2 level -- tidak ada pembandingnya).
-// Ambang: volume terbesar >= 3x rata-rata level LAIN. Ini deteksi RELATIF
-// (bukan absolut) -- konsisten dgn disclaimer: wall bisa spoofing, BUKAN
-// support/resistance yang pasti.
-function _obDetectWall(levels){
-  if(!levels||levels.length<3)return -1;
-  const vols=levels.map(l=>+l.volume||0);
-  const maxV=Math.max(...vols);
-  if(maxV<=0)return -1;
-  const maxIdx=vols.indexOf(maxV);
-  const others=vols.filter((_,i)=>i!==maxIdx);
-  const avgOthers=others.reduce((a,b)=>a+b,0)/others.length;
-  if(avgOthers<=0)return -1;
-  return maxV>=avgOthers*3?maxIdx:-1;
-}
-function _obCard(d){
-  const bids=(d.bid_5||[]).slice(0,5),offers=(d.offer_5||[]).slice(0,5);
-  const maxV=Math.max(1,...bids.map(b=>+b.volume||0),...offers.map(o=>+o.volume||0));
-  const chg=+d.change||0,pct=+d.change_percent||0;
-  const bidWall=_obDetectWall(bids),offerWall=_obDetectWall(offers);
-  let rows='';
-  for(let i=0;i<5;i++){
-    const b=bids[i],o=offers[i];
-    rows+=b?`<div class="ob-row bid${i===bidWall?' wall':''}"><span class="ob-bar" style="width:${(b.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(b.price)}</span><span class="ob-v">${fmt(b.volume)}</span></div>`:`<div class="ob-row bid"></div>`;
-    rows+=o?`<div class="ob-row offer${i===offerWall?' wall':''}"><span class="ob-bar" style="width:${(o.volume/maxV*100).toFixed(0)}%"></span><span class="ob-p">${fmt(o.price)}</span><span class="ob-v">${fmt(o.volume)}</span></div>`:`<div class="ob-row offer"></div>`;
-  }
-  let walls='';
-  if(bidWall>=0)walls+=`<span class="ob-wall-chip bid" title="Volume bid jauh di atas level lain — calon support. Bisa spoofing (ditarik sebelum kena).">${icon('layers',{size:10})} Bid wall · ${fmt(bids[bidWall].price)}</span>`;
-  if(offerWall>=0)walls+=`<span class="ob-wall-chip offer" title="Volume offer jauh di atas level lain — calon resistance. Bisa spoofing (ditarik sebelum kena).">${icon('layers',{size:10})} Offer wall · ${fmt(offers[offerWall].price)}</span>`;
-  const wallsHtml=walls?`<div class="ob-walls">${walls}</div>`:'';
-  // Alert wall palsu (spoofing) -- tampil kalau ada wall ditarik dlm ~20d
-  const sp=_obSpoof[d.ticker];
-  const spoofHtml=(sp&&Date.now()-sp.at<_OB_SPOOF_MS)
-    ?`<div class="ob-spoof" title="Wall ini tadi ada lalu hilang/menyusut drastis tanpa harga menyentuhnya — POLA mirip spoofing. Bukan bukti: bisa juga order dibatalkan dgn alasan sah.">${icon('alert-triangle',{size:11})} Wall ${sp.side==='bid'?'bid':'offer'} di ${fmt(sp.price)} ditarik — indikasi spoofing</div>`
-    :'';
-  const t=d.timestamp?new Date(d.timestamp*1000).toLocaleTimeString('id-ID'):'';
-  const imb=_obImbalance(d);
-  const imbHtml=imb?`<div class="ob-imb ob-imb-${imb.cls}" title="Rasio total volume bid vs offer 5 level — tekanan jangka sangat pendek, bukan prediksi. Order book bisa di-spoof.">
-    <div class="ob-imb-bar"><span class="ob-imb-bid" style="width:${imb.bidPct.toFixed(0)}%"></span></div>
-    <div class="ob-imb-lbl"><span class="ob-imb-verdict">${imb.verdict}</span><span class="ob-imb-pct">${imb.bidPct.toFixed(0)}% bid · ${(100-imb.bidPct).toFixed(0)}% offer</span></div>
-  </div>`:'';
-  return `<div class="ob-card" data-tk="${escHtml(d.ticker||'')}">
-    <div class="ob-card-head">
-      <div><span class="ob-tk">${escHtml(d.ticker||'?')}</span><span class="ob-chg ${chg>=0?'up':'down'}">${chg>=0?'+':''}${fmt(pct,2)}%</span></div>
-      <div style="text-align:right"><div class="ob-price">${fmt(d.price)}</div><div class="ob-time">${t}</div></div>
-    </div>
-    <div class="ob-ladder"><div class="ob-col-h bid">Bid · Vol</div><div class="ob-col-h offer">Offer · Vol</div>${rows}</div>
-    ${spoofHtml}
-    ${wallsHtml}
-    ${imbHtml}
-  </div>`;
-}
-function _obRender(){
-  const body=$('#obBody');if(!body)return;
-  const tickers=Object.values(_obState);
-  if(!tickers.length){
-    body.innerHTML=`<section class="panel">${emptyState('Menunggu data dari ShadowStream… feed belum mengirim tick (bursa mungkin tutup atau ShadowStream sedang mati).','activity')}</section>`;
-    return;
-  }
-  tickers.sort((a,b)=>(a.ticker||'').localeCompare(b.ticker||''));
-  body.innerHTML=`<div class="ob-grid">${tickers.map(_obCard).join('')}</div>`;
-  // flash harga yang BERUBAH dari render sebelumnya (elemen baru dibuat tiap
-  // render, jadi menambah class memicu animasi sekali -- tidak menumpuk)
-  tickers.forEach(d=>{
-    const prev=_obPrevPrice[d.ticker];
-    if(prev!=null&&prev!==d.price){
-      const el=body.querySelector(`.ob-card[data-tk="${d.ticker}"] .ob-price`);
-      if(el)el.classList.add('ob-flash');
-    }
-    _obPrevPrice[d.ticker]=d.price;
-  });
-}
-function obConnect(){
-  if(_obWS&&(_obWS.readyState===0||_obWS.readyState===1))return;// sudah connect/connecting
-  _obIntentionalClose=false;
-  _obSetStatus('','Menyambungkan…');
-  const proto=location.protocol==='https:'?'wss':'ws';
-  let ws;
-  try{ws=new WebSocket(`${proto}://${location.host}/ws/ihsg`)}catch(e){_obSetStatus('down','Gagal menyambung');return}
-  _obWS=ws;
-  ws.onopen=()=>{_obBackoff=1000;_obSetStatus('live','Terhubung — live');_obScheduleRender()};// render skrg -> tampil "Menunggu data" kalau feed belum kirim apa2
-  ws.onmessage=e=>_obHandleMsg(e.data);
-  ws.onclose=()=>{
-    _obWS=null;
-    if(_obIntentionalClose)return;
-    if(_currentView==='orderbook'){// reconnect backoff hanya kalau masih di view ini
-      _obSetStatus('down','Terputus — menyambung ulang…');
-      _obReconnectTimer=setTimeout(obConnect,_obBackoff);
-      _obBackoff=Math.min(_obBackoff*1.7,15000);
-    }
-  };
-  ws.onerror=()=>{try{ws.close()}catch(e){}};
-}
-function obDisconnect(){
-  _obIntentionalClose=true;
-  if(_obReconnectTimer){clearTimeout(_obReconnectTimer);_obReconnectTimer=null}
-  if(_obWS){try{_obWS.close()}catch(e){}_obWS=null}
-  _obState={};_obPrevPrice={};
-}
 
 /* init */
 if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{})})}
