@@ -1213,6 +1213,22 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @keyframes obSpoofIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.ob-spoof{animation:none}}
 @media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
+/* Zeta Dashboard */
+.zeta-board{display:flex;flex-direction:column;gap:16px;background:#0d1117;padding:20px;border-radius:12px;border:1px solid #30363d}
+.zeta-grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.zeta-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;display:flex;flex-direction:column;justify-content:center}
+.zeta-card:hover{border-color:#8b949e}
+.zeta-label{font-size:10px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.zeta-value{font-size:28px;font-weight:700;line-height:1;margin-bottom:6px;font-family:'Space Grotesk',sans-serif}
+.zeta-value.green{color:#00e676}
+.zeta-value.red{color:#ff4d4d}
+.zeta-value.white{color:#ffffff}
+.zeta-sub{font-size:11px;color:#8b949e}
+.zeta-sub b{color:#c9d1d9}
+.zeta-chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:8px}
+.zeta-chart-wrapper{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
+.zeta-chart-header{font-size:13px;font-weight:700;color:#c9d1d9;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.zeta-chart-container{width:100%;height:220px}
 /* Forum Images */
 .forum-img-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .forum-img{max-width:100%;max-height:300px;border-radius:8px;object-fit:cover;border:1px solid var(--line);transition:transform 0.2s}
@@ -3593,7 +3609,7 @@ async function loadSignalAudit(){
   </section>`:'';
   let statsHtml;
   const pendingNote=d.n_pending_entry?` dan ${d.n_pending_entry} menunggu entry (belum ada posisi, harga belum turun ke level yang disarankan)`:'';
-  if(!d.stats){
+  if(!signals.length || !d.stats){
     statsHtml=`<section class="panel">
       <p class="audit-note"><b>Belum cukup data untuk statistik win rate.</b> Ada ${d.n_open} sinyal yang masih berjalan
       (belum tercapai target atau stop loss)${pendingNote} dari total ${d.n_total} yang pernah dicatat. Statistik baru muncul setelah
@@ -3601,17 +3617,105 @@ async function loadSignalAudit(){
       ditampilkan sebagai 0% atau dikarang sebelum itu.</p>
     </section>`;
   }else{
-    const s=d.stats;
-    const wrColor=s.win_rate==null?'var(--muted)':s.win_rate>=55?'var(--bull)':s.win_rate>=45?'var(--gold)':'var(--bear)';
-    statsHtml=`<section class="panel">
-      <div class="decision-grid">
-        <div class="decision-card"><div class="label">Win Rate</div><div class="value" style="color:${wrColor}" ${s.win_rate!=null?`data-animate="${s.win_rate}|1|%"`:''}>${s.win_rate!=null?'0%':'–'}</div><div class="sub">${s.n_tp_hit} kena TP1+ vs ${s.n_sl_hit} SL murni (tidak termasuk kadaluarsa)</div></div>
-        <div class="decision-card"><div class="label">Rata-rata Return</div><div class="value" style="color:${s.avg_return_locked_pct==null?'var(--muted)':s.avg_return_locked_pct>=0?'var(--bull)':'var(--bear)'}" ${s.avg_return_locked_pct!=null?`data-animate="${s.avg_return_locked_pct}|2|%|${s.avg_return_locked_pct>=0?'+':''}"`:''}>${s.avg_return_locked_pct==null?'–':(s.avg_return_locked_pct>=0?'+':'')+'0%'}</div><div class="sub">Terkunci di level TP tercapai (${s.n_tp1_scenario} sinyal)${s.avg_return_tp3_pct!=null?` · pemenang tuntas TP3: <b style="color:var(--bull)">+${fmt(s.avg_return_tp3_pct,1)}%</b> (${s.n_tp3_full} sinyal)`:''} · disiplin TP1: ${s.avg_return_tp1_pct==null?'–':(s.avg_return_tp1_pct>=0?'+':'')+fmt(s.avg_return_tp1_pct,2)+'%'}</div></div>
-        <div class="decision-card"><div class="label">Rata-rata Durasi</div><div class="value" data-animate="${s.avg_days_to_resolve}|1| hari">0 hari</div><div class="sub">Sampai TP/SL/kadaluarsa</div></div>
-        <div class="decision-card"><div class="label">Sedang Berjalan</div><div class="value" data-animate="${d.n_open}|0">0</div><div class="sub">${d.n_pending_entry?`+ ${d.n_pending_entry} menunggu entry · `:''}Dari ${d.n_total} total dicatat</div></div>
+    let wins=0, losses=0, sumWinRet=0, sumLossRet=0, totalRet=0, closedCount=0;
+    let bestRet=-999, bestCode='', bestDate='';
+    let worstRet=999, worstCode='', worstDate='';
+    const tradingDates=new Set();
+    const dailyReturns={};
+    signals.forEach(s=>{
+      const isWin = s.status==='TP_HIT' || (s.tp_level_hit||0)>=1;
+      const isLoss = s.status==='SL_HIT' && (s.tp_level_hit||0)===0;
+      const isClosed = s.status==='TP_HIT' || s.status==='SL_HIT' || s.status==='EXPIRED';
+      let ret=null;
+      if(s.status==='TP_HIT' && s.return_pct!=null) ret=s.return_pct;
+      else if(isWin && s.tp_pct!=null) ret=s.tp_pct;
+      else if(isLoss && s.return_pct!=null) ret=s.return_pct;
+      else if(isClosed && s.status==='EXPIRED' && (s.tp_level_hit||0)===0 && s.return_pct!=null) ret=s.return_pct;
+      if(isWin){wins++;if(ret!=null)sumWinRet+=ret;}
+      if(isLoss){losses++;if(ret!=null)sumLossRet+=Math.abs(ret);}
+      if(ret!=null){
+        totalRet+=ret;
+        closedCount++;
+        const dt=(s.recorded_at||'').slice(0,10);
+        if(ret>bestRet){bestRet=ret;bestCode=s.kode;bestDate=dt;}
+        if(ret<worstRet){worstRet=ret;worstCode=s.kode;worstDate=dt;}
+        tradingDates.add(dt);
+        dailyReturns[dt]=(dailyReturns[dt]||0)+ret;
+      }
+    });
+    if(bestRet===-999){bestRet=0;bestCode='-';}
+    if(worstRet===999){worstRet=0;worstCode='-';}
+    const winRate = (wins+losses)>0?(wins/(wins+losses)*100):0;
+    const profitFactor = sumLossRet>0?(sumWinRet/sumLossRet):(sumWinRet>0?99:0);
+    const avgRet = closedCount>0?(totalRet/closedCount):0;
+    const sortedDates = Object.keys(dailyReturns).sort();
+    let cum = 0;
+    const equityData = [], pnlData = [];
+    sortedDates.forEach(dt=>{
+      const v = dailyReturns[dt];
+      cum += v;
+      equityData.push({time:dt, value:cum});
+      pnlData.push({time:dt, value:v, color:v>=0?'#00e676':'#ff4d4d'});
+    });
+    window._zetaChartData = {equity:equityData, pnl:pnlData};
+    statsHtml=`
+      <div class="zeta-board" id="zetaBoard">
+        <div class="zeta-grid-4">
+          <div class="zeta-card">
+            <div class="zeta-label">Total Return</div>
+            <div class="zeta-value ${totalRet>=0?'green':'red'}" data-animate="${totalRet}|1|%|${totalRet>=0?'+':''}">${totalRet>=0?'+':''}0.0%</div>
+            <div class="zeta-sub">${closedCount} trades executed</div>
+          </div>
+          <div class="zeta-card">
+            <div class="zeta-label">Win Rate</div>
+            <div class="zeta-value ${winRate>=50?'green':'red'}" data-animate="${winRate}|1|%">${winRate.toFixed(1)}%</div>
+            <div class="zeta-sub">${wins}W / ${losses}L</div>
+          </div>
+          <div class="zeta-card">
+            <div class="zeta-label">Profit Factor</div>
+            <div class="zeta-value ${profitFactor>=1?'green':'red'}" data-animate="${profitFactor}|2">${profitFactor.toFixed(2)}</div>
+            <div class="zeta-sub">Gross profit / loss</div>
+          </div>
+          <div class="zeta-card">
+            <div class="zeta-label">Avg Return/Trade</div>
+            <div class="zeta-value ${avgRet>=0?'green':'red'}" data-animate="${avgRet}|1|%|${avgRet>=0?'+':''}">${avgRet>=0?'+':''}0.0%</div>
+            <div class="zeta-sub">Per executed trade</div>
+          </div>
+        </div>
+        <div class="zeta-grid-4" style="margin-top:-8px">
+          <div class="zeta-card" style="padding:12px 16px">
+            <div class="zeta-label">Total Signals</div>
+            <div class="zeta-value white" style="font-size:20px" data-animate="${signals.length}|0">0</div>
+            <div class="zeta-sub">${closedCount} executed, ${d.stats?d.stats.n_expired:0} expired</div>
+          </div>
+          <div class="zeta-card" style="padding:12px 16px">
+            <div class="zeta-label">Best Trade</div>
+            <div class="zeta-value green" style="font-size:20px">${bestCode} +${fmt(bestRet,1)}%</div>
+            <div class="zeta-sub">${bestDate}</div>
+          </div>
+          <div class="zeta-card" style="padding:12px 16px">
+            <div class="zeta-label">Worst Trade</div>
+            <div class="zeta-value red" style="font-size:20px">${worstCode} ${fmt(worstRet,1)}%</div>
+            <div class="zeta-sub">${worstDate}</div>
+          </div>
+          <div class="zeta-card" style="padding:12px 16px">
+            <div class="zeta-label">Trading Days</div>
+            <div class="zeta-value white" style="font-size:20px" data-animate="${tradingDates.size}|0">0</div>
+            <div class="zeta-sub">Unique days traded</div>
+          </div>
+        </div>
+        <div class="zeta-chart-grid">
+          <div class="zeta-chart-wrapper">
+            <div class="zeta-chart-header">${icon('activity',{size:14})} Equity Curve</div>
+            <div id="zetaEquityChart" class="zeta-chart-container"></div>
+          </div>
+          <div class="zeta-chart-wrapper">
+            <div class="zeta-chart-header">${icon('bar-chart',{size:14})} Daily P&L</div>
+            <div id="zetaPnlChart" class="zeta-chart-container"></div>
+          </div>
+        </div>
       </div>
-      ${infoNote(`Win rate dihitung begitu TP1 tercapai (TP2/TP3 opsional) — sekali tercatat menang, tetap menang walau posisi belakangan berbalik kena SL. <b>Rata-rata Return</b> = return terkunci di level TP tertinggi yang TERBUKTI tercapai per sinyal (TP1/TP2 pakai % target level itu, tuntas TP3 pakai realisasi aktual, kalah/kadaluarsa pakai hasil aktual termasuk minusnya) — populasi SAMA dgn win rate. SENGAJA tidak berasumsi "semua pemenang sampai TP3" (itu angka bohong). "Disiplin TP1" = kalau selalu ambil untung di TP1. Kadaluarsa (${s.n_expired}) masuk rata-rata return tapi TIDAK dihitung menang/kalah.${d.n_expired_no_entry?` ${d.n_expired_no_entry} rekomendasi entry tidak pernah tercapai (bukan menang/kalah, tidak pernah ada posisi).`:''}`,'Metodologi angka di atas')}
-    </section>`;
+    `;
   }
   // Statistik agregat "berapa dari yang masih OPEN sudah confirmed TP1+"
   // -- pelengkap kartu Signal Confirmed di atas (yang cuma nampilin
@@ -3762,6 +3866,34 @@ async function loadSignalAudit(){
     });
   });
   _wireRiwayatHarianControls();
+  if (window._zetaChartData) {
+    const d = window._zetaChartData;
+    const eqCont = document.getElementById('zetaEquityChart');
+    if (eqCont && d.equity.length) {
+      const chart = LightweightCharts.createChart(eqCont, {
+        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        rightPriceScale: { borderVisible: false },
+        timeScale: { borderVisible: false }
+      });
+      const lineSeries = chart.addLineSeries({ color: '#f1c40f', lineWidth: 2, crosshairMarkerRadius: 4 });
+      lineSeries.setData(d.equity);
+      chart.timeScale().fitContent();
+    }
+    const pnlCont = document.getElementById('zetaPnlChart');
+    if (pnlCont && d.pnl.length) {
+      const chart2 = LightweightCharts.createChart(pnlCont, {
+        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        rightPriceScale: { borderVisible: false },
+        timeScale: { borderVisible: false }
+      });
+      const barSeries = chart2.addHistogramSeries({ priceFormat: { type: 'volume' } });
+      barSeries.setData(d.pnl);
+      chart2.timeScale().fitContent();
+    }
+    window._zetaChartData = null;
+  }
   animateStatCards(body);
 }
 $('#auditBtn').addEventListener('click',()=>{loaded.audit=0;loadSignalAudit()});
