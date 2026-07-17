@@ -202,9 +202,9 @@
 
   p.insight{color:#d2dbeb;margin:0}
   .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;
-    gap:11px;padding:34px 20px;text-align:center;color:var(--muted)}
-  .empty-state .icon{opacity:.45}
-  .empty-state p{margin:0;font-size:13px;line-height:1.6;max-width:360px}
+    gap:16px;padding:48px 20px;text-align:center;color:var(--muted);background:radial-gradient(circle at center, rgba(199,154,42,.03) 0%, transparent 70%)}
+  .empty-state .icon{opacity:.35;color:var(--gold);transform:scale(1.5);margin-bottom:8px}
+  .empty-state p{margin:0;font-size:14px;line-height:1.7;max-width:400px;font-family:"Space Grotesk";font-weight:500}
   .chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
   .chip{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 11px;
     font-size:12px;font-family:"JetBrains Mono"}
@@ -273,6 +273,14 @@
   .tk-row{display:inline-flex;align-items:center;gap:7px}
   .minibar{height:6px;width:90px;background:var(--panel2);border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:8px}
   .minibar i{display:block;height:100%}
+  @media(max-width:768px){
+    .ctable thead{display:none}
+    .ctable tbody tr{display:flex;flex-wrap:wrap;background:var(--panel2);border-radius:var(--radius);padding:12px;margin-bottom:12px;border:1px solid var(--line);box-shadow:var(--shadow-xs);transition:transform 0.15s, box-shadow 0.15s}
+    .ctable tbody tr td{display:flex;align-items:center;width:100%;padding:4px 0;border:none;background:transparent!important}
+    .ctable tbody tr:nth-child(even) td{background:transparent!important}
+    .ctable tbody tr td:first-child{width:100%;margin-bottom:6px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+    .ctable tbody tr td:not(:first-child){width:50%}
+  }
 
   /* ihsg */
   .ihsg-head{display:flex;flex-wrap:wrap;gap:16px;align-items:baseline;margin-bottom:6px}
@@ -284,11 +292,13 @@
   .hint b{color:var(--text)} .hint .big{font-family:"Space Grotesk";font-size:26px;color:var(--text);display:block;margin-bottom:10px}
   .err{background:rgba(224,86,107,.1);border:1px solid rgba(224,86,107,.4);color:#ffd9df;
     padding:15px 17px;border-radius:11px;margin:18px 0}
-  .skel{position:relative;overflow:hidden;background:var(--panel)}
+  .skel{position:relative;overflow:hidden;background:var(--panel2);border-radius:var(--radius);border:1px solid var(--line);
+    background-image: repeating-linear-gradient(0deg, transparent, transparent 47px, var(--line-soft) 47px, var(--line-soft) 48px);
+    box-shadow:var(--shadow-inset-top)}
   .skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
-    background:linear-gradient(90deg,transparent,rgba(255,255,255,.05),transparent);animation:sh 1.2s infinite}
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent);animation:sh 1.2s infinite}
   @keyframes sh{100%{transform:translateX(100%)}}
-  .loadbar{height:64px;border-radius:12px;margin:8px 0}
+  .loadbar{height:64px;margin:8px 0}
 
   /* command palette */
   .cmdk{position:fixed;inset:0;z-index:50;display:none;align-items:flex-start;justify-content:center;
@@ -824,6 +834,11 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .btn{border-radius:7px}
 .btn:hover{filter:none;background:linear-gradient(180deg,#E5BC55,#D7A83A 60%,#BD9226)}
 .btn.ghost:hover{background:rgba(199,154,42,.08);border-color:var(--gold-dim)}
+/* Micro-interactions (Tactile Feedback) */
+.btn:active, .chip:active, .tab:active, .sugrow:active, .ctable tbody tr[data-k]:active, .forum-img:active, .note-toggle:active {
+  transform: scale(0.97);
+  transition: transform 0.05s ease;
+}
 .eyebrow{letter-spacing:.18em;color:#B8B0A0}
 .eyebrow::before{background:var(--gold);width:18px}
 
