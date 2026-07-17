@@ -7,7 +7,12 @@
 # yang benar2 diverifikasi SERVER (hmac.compare_digest thd env var
 # FORUM_ADMIN_SECRET, lihat _forum_is_admin di web/app.py) -- TIDAK PERNAH
 # dipercaya dari klaim klien begitu saja.
+import json
+
 import pytest
+
+_PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgo="
+_JPEG_DATA_URL = "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
 
 
 def test_create_thread_success(client, clean_forum_db):
@@ -84,6 +89,121 @@ def test_create_reply_success(client, clean_forum_db):
     data = r.json()
     assert data["nama"] == "Ani"
     assert data["thread_id"] == thread["id"]
+
+
+def test_create_thread_with_image_data(client, clean_forum_db):
+    r = client.post("/api/forum/threads", json={
+        "nama": "Budi",
+        "judul": "Profit BBCA",
+        "isi": "Share hasil trading.",
+        "image_data": _PNG_DATA_URL,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["image_data"] == _PNG_DATA_URL
+    assert data["images"] == [_PNG_DATA_URL]
+
+    detail = client.get(f"/api/forum/threads/{data['id']}").json()
+    assert detail["thread"]["image_data"] == _PNG_DATA_URL
+    assert detail["thread"]["images"] == [_PNG_DATA_URL]
+
+
+def test_create_reply_with_image_data(client, clean_forum_db):
+    thread = client.post("/api/forum/threads", json={"nama": "A", "judul": "Q", "isi": "I"}).json()
+    r = client.post(f"/api/forum/threads/{thread['id']}/replies", json={
+        "nama": "Ani",
+        "isi": "Ini screenshot profitnya.",
+        "image_data": _PNG_DATA_URL,
+    })
+    assert r.status_code == 200
+    assert r.json()["image_data"] == _PNG_DATA_URL
+    assert r.json()["images"] == [_PNG_DATA_URL]
+
+    detail = client.get(f"/api/forum/threads/{thread['id']}").json()
+    assert detail["replies"][0]["image_data"] == _PNG_DATA_URL
+    assert detail["replies"][0]["images"] == [_PNG_DATA_URL]
+
+
+def test_create_thread_with_multiple_images(client, clean_forum_db):
+    images = [_PNG_DATA_URL, _JPEG_DATA_URL]
+    r = client.post("/api/forum/threads", json={
+        "nama": "Budi",
+        "judul": "Profit BBCA",
+        "isi": "Beberapa screenshot.",
+        "image_data": images,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert json.loads(data["image_data"]) == images
+    assert data["images"] == images
+
+    detail = client.get(f"/api/forum/threads/{data['id']}").json()
+    assert json.loads(detail["thread"]["image_data"]) == images
+    assert detail["thread"]["images"] == images
+
+
+def test_create_thread_accepts_images_alias(client, clean_forum_db):
+    images = [_PNG_DATA_URL, _JPEG_DATA_URL]
+    r = client.post("/api/forum/threads", json={
+        "nama": "Budi",
+        "judul": "Profit BBCA",
+        "isi": "Alias payload frontend.",
+        "images": images,
+    })
+    assert r.status_code == 200
+    assert r.json()["images"] == images
+
+
+def test_create_thread_with_multipart_image_files(client, clean_forum_db, tmp_path, monkeypatch):
+    import web.app as app_module
+
+    monkeypatch.setattr(app_module, "_FORUM_UPLOAD_DIR", str(tmp_path))
+
+    r = client.post(
+        "/api/forum/threads",
+        data={"nama": "Budi", "judul": "Profit BBCA", "isi": "Upload file asli.", "kategori": "umum"},
+        files=[
+            ("images", ("profit-1.png", b"fakepng1", "image/png")),
+            ("images", ("profit-2.jpg", b"fakejpg2", "image/jpeg")),
+        ],
+    )
+    assert r.status_code == 200
+    images = r.json()["images"]
+    assert len(images) == 2
+    assert all(u.startswith("/forum_uploads/") for u in images)
+    assert all((tmp_path / u.rsplit("/", 1)[1]).exists() for u in images)
+
+    detail = client.get(f"/api/forum/threads/{r.json()['id']}").json()
+    assert detail["thread"]["images"] == images
+
+
+def test_forum_image_data_rejects_too_many_images(client, clean_forum_db):
+    r = client.post("/api/forum/threads", json={
+        "nama": "A",
+        "judul": "J",
+        "isi": "I",
+        "image_data": [_PNG_DATA_URL] * 6,
+    })
+    assert r.status_code == 400
+
+
+def test_forum_image_data_rejects_invalid_format_and_large_payload(client, clean_forum_db):
+    bad = client.post("/api/forum/threads", json={
+        "nama": "A",
+        "judul": "J",
+        "isi": "I",
+        "image_data": "data:text/html;base64,PHNjcmlwdD4=",
+    })
+    assert bad.status_code == 400
+
+    large_b64 = "A" * (701 * 1024 * 4 // 3)
+    large = client.post("/api/forum/threads", json={
+        "nama": "A",
+        "judul": "J",
+        "isi": "I",
+        "image_data": f"data:image/png;base64,{large_b64}",
+    })
+    assert large.status_code == 400
 
 
 def test_create_reply_to_nonexistent_thread_404(client, clean_forum_db):

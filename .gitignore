@@ -19,3 +19,6 @@ __pycache__/
 
 # Env lokal
 .env
+
+# User Uploads
+web/static/forum_uploads/

@@ -27,6 +27,8 @@ import asyncio
 import tempfile
 import hashlib
 import hmac
+import json
+import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
@@ -420,6 +422,16 @@ async def rate_limit(request: Request, call_next):
 # status admin, konsisten dgn prinsip "tidak ada kunci/token di sisi
 # browser" di atas (baris awal file ini).
 FORUM_NAMA_MAX, FORUM_JUDUL_MAX, FORUM_ISI_MAX = 50, 200, 5000
+FORUM_IMAGE_MAX_BYTES = 700 * 1024
+FORUM_IMAGE_MAX_COUNT = 5
+_FORUM_IMAGE_RE = re.compile(r"^data:image/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$")
+_FORUM_IMAGE_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+_FORUM_UPLOAD_DIR = os.path.join(_STATIC, "forum_uploads")
 
 # Limiter TERPISAH & lebih ketat dari rate_limit() global di atas (1200/60d
 # terlalu longgar utk anti-spam endpoint tulis spesifik) -- SAMA PERSIS pola
@@ -463,6 +475,95 @@ def _forum_text(value, max_len: int, label: str) -> str:
     if len(v) > max_len:
         raise HTTPException(400, f"{label} maksimal {max_len} karakter.")
     return v
+
+
+def _forum_validate_image_data_url(value) -> str:
+    v = str(value or "").strip()
+    m = _FORUM_IMAGE_RE.match(v)
+    if not m:
+        raise HTTPException(400, "Format gambar tidak didukung.")
+    b64 = m.group(2)
+    approx_bytes = (len(b64) * 3 // 4) - b64.count("=")
+    if approx_bytes > FORUM_IMAGE_MAX_BYTES:
+        raise HTTPException(400, "Ukuran tiap gambar maksimal 700 KB.")
+    return v
+
+
+def _forum_image_data(value) -> str | None:
+    """Terima beberapa gambar kecil sebagai data URL. Ini sengaja
+    dibatasi ketat karena forum disimpan di SQLite, bukan object storage."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, list):
+        if len(value) > FORUM_IMAGE_MAX_COUNT:
+            raise HTTPException(400, f"Maksimal {FORUM_IMAGE_MAX_COUNT} gambar per post.")
+        images = [_forum_validate_image_data_url(v) for v in value if (v or "").strip()]
+        return json.dumps(images, separators=(",", ":")) if images else None
+    return _forum_validate_image_data_url(value)
+
+
+async def _forum_save_uploads(files) -> str | None:
+    files = [f for f in files if getattr(f, "filename", "")]
+    if not files:
+        return None
+    if len(files) > FORUM_IMAGE_MAX_COUNT:
+        raise HTTPException(400, f"Maksimal {FORUM_IMAGE_MAX_COUNT} gambar per post.")
+    os.makedirs(_FORUM_UPLOAD_DIR, exist_ok=True)
+    urls = []
+    for file in files:
+        content_type = (getattr(file, "content_type", "") or "").lower()
+        ext = _FORUM_IMAGE_MIME_EXT.get(content_type)
+        if not ext:
+            raise HTTPException(400, "Format gambar harus PNG, JPG, WEBP, atau GIF.")
+        data = await file.read(FORUM_IMAGE_MAX_BYTES + 1)
+        if not data:
+            continue
+        if len(data) > FORUM_IMAGE_MAX_BYTES:
+            raise HTTPException(400, "Ukuran tiap gambar maksimal 700 KB.")
+        digest = hashlib.sha256(data).hexdigest()[:16]
+        filename = f"{int(time.time())}_{uuid.uuid4().hex[:12]}_{digest}{ext}"
+        path = os.path.join(_FORUM_UPLOAD_DIR, filename)
+        with open(path, "xb") as f:
+            f.write(data)
+        urls.append(f"/forum_uploads/{filename}")
+    return json.dumps(urls, separators=(",", ":")) if urls else None
+
+
+async def _forum_request_body(request: Request) -> dict:
+    content_type = (request.headers.get("content-type") or "").lower()
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        files = []
+        for key in ("images", "image_data", "gambar"):
+            files.extend([v for v in form.getlist(key) if hasattr(v, "filename")])
+        return {
+            "nama": form.get("nama"),
+            "judul": form.get("judul"),
+            "isi": form.get("isi"),
+            "kategori": form.get("kategori"),
+            "admin_code": form.get("admin_code"),
+            "image_data": await _forum_save_uploads(files),
+            "_image_data_ready": True,
+        }
+    return await request.json()
+
+
+def _forum_images_out(value) -> list[str]:
+    """Normalisasi nilai DB utk frontend: post lama bisa berisi satu data URL,
+    post baru berisi JSON array data URL."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value if v]
+    v = str(value)
+    if v.strip().startswith("["):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed if x]
+        except Exception:
+            return []
+    return [v]
 
 
 def _forum_admin_flag(body: dict) -> bool:
@@ -555,6 +656,7 @@ async def api_forum_list_threads(request: Request):
     )
     for t in threads:
         t["tickers"] = _forum_tickers(f"{t['judul']} {t['isi']}")
+        t["images"] = _forum_images_out(t.get("image_data"))
     return _py(threads)
 
 
@@ -566,35 +668,42 @@ async def api_forum_thread_detail(thread_id: int):
         raise HTTPException(404, "Thread tidak ditemukan.")
     replies = await asyncio.to_thread(list_replies, thread_id)
     thread["tickers"] = _forum_tickers(f"{thread['judul']} {thread['isi']}")
+    thread["images"] = _forum_images_out(thread.get("image_data"))
     for r in replies:
         r["tickers"] = _forum_tickers(r["isi"])
+        r["images"] = _forum_images_out(r.get("image_data"))
     return _py({"thread": thread, "replies": replies})
 
 
 @app.post("/api/forum/threads")
 async def api_forum_create_thread(request: Request):
     _forum_rate_limit(request)
-    body = await request.json()
+    body = await _forum_request_body(request)
     nama = _forum_text(body.get("nama"), FORUM_NAMA_MAX, "Nama")
     judul = _forum_text(body.get("judul"), FORUM_JUDUL_MAX, "Judul")
     isi = _forum_text(body.get("isi"), FORUM_ISI_MAX, "Isi")
+    image_data = body.get("image_data") if body.get("_image_data_ready") else _forum_image_data(body.get("image_data", body.get("images")))
     is_admin = _forum_admin_flag(body)
     kategori = _forum_kategori_flag(body.get("kategori"))
     from core.forum import create_thread
-    return _py(await asyncio.to_thread(create_thread, nama, judul, isi, is_admin, kategori))
+    created = await asyncio.to_thread(create_thread, nama, judul, isi, is_admin, kategori, image_data)
+    created["images"] = _forum_images_out(created.get("image_data"))
+    return _py(created)
 
 
 @app.post("/api/forum/threads/{thread_id}/replies")
 async def api_forum_create_reply(thread_id: int, request: Request):
     _forum_rate_limit(request)
-    body = await request.json()
+    body = await _forum_request_body(request)
     nama = _forum_text(body.get("nama"), FORUM_NAMA_MAX, "Nama")
     isi = _forum_text(body.get("isi"), FORUM_ISI_MAX, "Isi")
+    image_data = body.get("image_data") if body.get("_image_data_ready") else _forum_image_data(body.get("image_data", body.get("images")))
     is_admin = _forum_admin_flag(body)
     from core.forum import create_reply
-    reply = await asyncio.to_thread(create_reply, thread_id, nama, isi, is_admin)
+    reply = await asyncio.to_thread(create_reply, thread_id, nama, isi, is_admin, image_data)
     if reply is None:
         raise HTTPException(404, "Thread tidak ditemukan.")
+    reply["images"] = _forum_images_out(reply.get("image_data"))
     return _py(reply)
 
 

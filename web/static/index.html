@@ -1213,6 +1213,12 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @keyframes obSpoofIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.ob-spoof{animation:none}}
 @media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
+/* Forum Images */
+.forum-img-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.forum-img{max-width:100%;max-height:300px;border-radius:8px;object-fit:cover;border:1px solid var(--line);transition:transform 0.2s}
+.forum-img:hover{transform:scale(1.02)}
+.forum-img-preview-grid{display:grid;gap:8px;margin-top:10px;grid-template-columns:repeat(auto-fill,minmax(60px,1fr))}
+.forum-img-preview{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -3807,6 +3813,75 @@ function _forumLinkTickers(html,tickers){
 // urutan tampilan/sinyal moderasi, bukan uang/keamanan, jadi diterima
 // gampang dilewati clear-localStorage/incognito). Server TIDAK dedup sama
 // sekali -- lihat core/forum.py::upvote_reply/report_thread/report_reply.
+
+const _forumImageState={};
+function _forumWireImagePicker(prefix){
+  const input=document.getElementById(prefix+'ImageInput'),preview=document.getElementById(prefix+'ImagePreview'),name=document.getElementById(prefix+'ImageName'),clear=document.querySelector(`[data-prefix="${prefix}"].forum-img-clear`);
+  const reset=()=>{
+    (_forumImageState[prefix]?.previewUrls||[]).forEach(u=>URL.revokeObjectURL(u));
+    _forumImageState[prefix]={files:[],previewUrls:[]};
+    if(input) input.value='';
+    if(preview){preview.innerHTML='';preview.style.display='none';}
+    if(clear) clear.style.display='none';
+    if(name) name.textContent='Opsional, maks 5 gambar @ 700 KB';
+  };
+  const btn = document.querySelector(`[data-prefix="${prefix}"].forum-img-btn`);
+  if(btn) btn.addEventListener('click',()=>input.click());
+  if(clear) clear.addEventListener('click',reset);
+  if(input) input.addEventListener('change',()=>{
+    const files=Array.from(input.files||[]);
+    if(!files.length){reset();return}
+    if(files.length>5){toast('Maksimal 5 gambar per post.','err');reset();return}
+    for(const file of files){
+      if(!/^image\/(png|jpeg|webp|gif)$/.test(file.type)){toast('Format gambar harus PNG, JPG, WEBP, atau GIF.','err');reset();return}
+      if(file.size>700*1024){toast('Ukuran tiap gambar maksimal 700 KB.','err');reset();return}
+    }
+    const previewUrls=files.map(file=>URL.createObjectURL(file));
+    _forumImageState[prefix]={files,previewUrls};
+    preview.innerHTML=previewUrls.map((src,i)=>`<img class="forum-img-preview" src="${escHtml(src)}" alt="Preview gambar ${i+1}">`).join('');
+    preview.style.display='grid';
+    clear.style.display='inline-flex';
+    name.textContent=`${files.length} gambar siap dikirim`;
+  });
+  reset();
+}
+function _forumSelectedImages(prefix){
+  const state=_forumImageState[prefix];
+  if(!state)return [];
+  return state.files||[];
+}
+function _forumFormData(fields, files){
+  const fd=new FormData();
+  Object.keys(fields).forEach(k=>fd.append(k,fields[k]||''));
+  (files||[]).forEach(file=>fd.append('images',file,file.name));
+  return fd;
+}
+function _forumImages(value){
+  if(!value)return [];
+  if(Array.isArray(value))return value.filter(Boolean);
+  const s=String(value);
+  if(s.trim().startsWith('[')){
+    try{const arr=JSON.parse(s);return Array.isArray(arr)?arr.filter(Boolean):[]}catch(e){}
+  }
+  return s?[s]:[];
+}
+function _forumImageHtml(value){
+  const images=_forumImages(value);
+  if(!images.length)return '';
+  return `<div class="forum-img-grid">${images.map((src,i)=>`<img class="forum-img" src="${escHtml(src)}" alt="Gambar forum ${i+1}" loading="lazy" style="cursor:pointer" onclick="window.open('${escHtml(src)}','_blank')">`).join('')}</div>`;
+}
+function _forumImagePickerHtml(prefix){
+  return `<div class="fld" style="margin-bottom:10px">Gambar
+    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+      <button type="button" class="btn outline forum-img-btn" data-prefix="${prefix}">${icon('image',{size:14})} Pilih</button>
+      <span class="muted" id="${prefix}ImageName" style="font-size:12px">Opsional, maks 5 gambar @ 700 KB</span>
+      <button type="button" class="btn ghost forum-img-clear" data-prefix="${prefix}" style="display:none;color:var(--red)">Hapus</button>
+    </div>
+    <input id="${prefix}ImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple style="display:none">
+    <div id="${prefix}ImagePreview" class="forum-img-preview-grid"></div>
+  </div>`;
+}
+
 function _forumVoteBtn(r){
   const voted=!!rsGet('rs_forum_voted_reply_'+r.id);
   return `<button class="forum-vote-btn forum-vote" data-id="${r.id}" ${voted?'disabled':''}>${icon('thumbs-up',{size:12})} ${r.upvotes||0}</button>`;
@@ -3879,6 +3954,7 @@ function _forumNewFormHtml(){
     <label class="fld" style="margin-bottom:10px">Nama<input id="forumNewNama" placeholder="Nama kamu" maxlength="50" value="${escHtml(rsGet('rs_forum_name'))}" style="width:100%;box-sizing:border-box"></label>
     <label class="fld" style="margin-bottom:10px">Judul pertanyaan<input id="forumNewJudul" placeholder="Judul singkat pertanyaanmu" maxlength="200" style="width:100%;box-sizing:border-box"></label>
     <label class="fld" style="margin-bottom:10px">Isi<textarea id="forumNewIsi" placeholder="Jelaskan pertanyaanmu... (kode saham spt BBCA otomatis jadi link)" maxlength="5000"></textarea></label>
+    ${_forumImagePickerHtml('forumNew')}
     <div class="fld" style="margin-bottom:10px">Kategori<div id="forumNewKat" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px">${katChips}</div></div>
     <button class="btn" id="forumNewSubmit">Kirim Pertanyaan</button>
   </div>`;
@@ -3947,11 +4023,14 @@ async function _forumFetchList(){
   }else{
     const rows=threads.map(t=>`<div class="panel" data-tid="${t.id}" style="cursor:pointer">
       <div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap">
-        <div>
+        <div style="flex:1;min-width:0">
           <div style="font-weight:700">${_forumLinkTickers(escHtml(t.judul),t.tickers)}</div>
           <div class="muted" style="font-size:12px;margin-top:3px">${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)} · <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span> · ${_forumKategoriBadge(t.kategori)}</div>
         </div>
-        <span class="chip" style="font-size:11px;white-space:nowrap">${icon('message-square',{size:11})} ${t.reply_count}</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          ${t.images && t.images.length ? `<img src="${escHtml(t.images[0])}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;background:var(--panel2);border:1px solid var(--line)" alt="Thumb">` : ''}
+          <span class="chip" style="font-size:11px;white-space:nowrap">${icon('message-square',{size:11})} ${t.reply_count}</span>
+        </div>
       </div>
     </div>`).join('');
     list.innerHTML=`<div style="display:flex;flex-direction:column;gap:10px">${rows}</div>`;
@@ -3972,6 +4051,7 @@ async function renderForumThread(id){
       ${_forumDeleteBtn('reply',r.id)}
     </div>
     <div style="margin-top:6px;white-space:pre-wrap">${_forumLinkTickers(escHtml(r.isi),r.tickers)}</div>
+    ${_forumImageHtml(r.images||r.image_data)}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${_forumVoteBtn(r)}${_forumReportBtn('reply',r.id)}${_forumBestBtn(r)}</div>
   </div>`).join(''):`<p class="muted" style="font-size:13px;padding:8px 0">Belum ada balasan.</p>`;
   body.innerHTML=`
@@ -3983,16 +4063,19 @@ async function renderForumThread(id){
       </div>
       <div class="muted" style="font-size:12px;margin:6px 0 10px">${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)} · <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span> · ${_forumKategoriBadge(t.kategori)}</div>
       <div style="white-space:pre-wrap">${_forumLinkTickers(escHtml(t.isi),t.tickers)}</div>
+      ${_forumImageHtml(t.images||t.image_data)}
     </section>
     <p class="muted" style="font-size:12px;margin:14px 0 8px">${replies.length} balasan</p>
     <div style="display:flex;flex-direction:column;gap:8px">${repliesHtml}</div>
     <div class="panel" style="margin-top:14px">
       <label class="fld" style="margin-bottom:10px">Nama<input id="forumReplyNama" placeholder="Nama kamu" maxlength="50" value="${escHtml(rsGet('rs_forum_name'))}" style="width:100%;box-sizing:border-box"></label>
       <label class="fld" style="margin-bottom:10px">Balasan<textarea id="forumReplyIsi" placeholder="Tulis balasanmu..." maxlength="5000"></textarea></label>
+      ${_forumImagePickerHtml('forumReply')}
       <button class="btn" id="forumReplySubmit">Kirim Balasan</button>
     </div>`;
   $('#forumBackBtn').addEventListener('click',loadForum);
   $('#forumReplySubmit').addEventListener('click',()=>_forumSubmitReply(id));
+  _forumWireImagePicker('forumReply');
   _forumWireDeleteButtons(body);
   _forumWireReplyActions(body);
 }
@@ -4002,13 +4085,14 @@ async function _forumSubmitThread(){
   const nama=($('#forumNewNama').value||'').trim();
   const judul=($('#forumNewJudul').value||'').trim();
   const isi=($('#forumNewIsi').value||'').trim();
+  const images=_forumSelectedImages('forumNew');
   const katEl=$('#forumNewKat')?$('#forumNewKat').querySelector('.forum-kat-pick.active'):null;
   const kategori=katEl?katEl.dataset.kat:'umum';
   if(!nama||!judul||!isi){toast('Nama, judul, dan isi wajib diisi.','err');return}
   setBtnLoading(btn,true);
   try{
-    const resp=await fetch('/api/forum/threads',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({nama,judul,isi,kategori,admin_code:rsGet('rs_forum_admin_code')})});
+    const resp=await fetch('/api/forum/threads',{method:'POST',
+      body:_forumFormData({nama,judul,isi,kategori,admin_code:rsGet('rs_forum_admin_code')},images)});
     if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal mengirim.');
     const created=await resp.json();
     rsSet('rs_forum_name',nama);
@@ -4024,11 +4108,12 @@ async function _forumSubmitReply(threadId){
   const btn=$('#forumReplySubmit');
   const nama=($('#forumReplyNama').value||'').trim();
   const isi=($('#forumReplyIsi').value||'').trim();
+  const images=_forumSelectedImages('forumReply');
   if(!nama||!isi){toast('Nama dan isi balasan wajib diisi.','err');return}
   setBtnLoading(btn,true);
   try{
-    const resp=await fetch(`/api/forum/threads/${threadId}/replies`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({nama,isi,admin_code:rsGet('rs_forum_admin_code')})});
+    const resp=await fetch(`/api/forum/threads/${threadId}/replies`,{method:'POST',
+      body:_forumFormData({nama,isi,admin_code:rsGet('rs_forum_admin_code')},images)});
     if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal mengirim.');
     const created=await resp.json();
     rsSet('rs_forum_name',nama);
@@ -4047,6 +4132,7 @@ $('#forumNewBtn').addEventListener('click',()=>{
   box.innerHTML=box.innerHTML?'':_forumNewFormHtml();
   if(box.innerHTML){
     $('#forumNewSubmit').addEventListener('click',_forumSubmitThread);
+    _forumWireImagePicker('forumNew');
     box.querySelectorAll('.forum-kat-pick').forEach(b=>b.addEventListener('click',()=>{
       box.querySelectorAll('.forum-kat-pick').forEach(x=>x.classList.remove('active'));
       b.classList.add('active');
