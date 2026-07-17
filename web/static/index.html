@@ -1214,20 +1214,20 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @media(prefers-reduced-motion:reduce){.ob-spoof{animation:none}}
 @media(prefers-reduced-motion:reduce){.ob-flash{animation:none}.ob-status.live .ob-dot{animation:none}.ob-imb-bid{transition:none}}
 /* Zeta Dashboard */
-.zeta-board{display:flex;flex-direction:column;gap:16px;background:#0d1117;padding:20px;border-radius:12px;border:1px solid #30363d}
+.zeta-board{display:flex;flex-direction:column;gap:16px;background:var(--panel);padding:20px;border-radius:var(--radius);border:1px solid var(--line-soft);box-shadow:var(--shadow-sm)}
 .zeta-grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
-.zeta-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;display:flex;flex-direction:column;justify-content:center}
-.zeta-card:hover{border-color:#8b949e}
-.zeta-label{font-size:10px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
-.zeta-value{font-size:28px;font-weight:700;line-height:1;margin-bottom:6px;font-family:'Space Grotesk',sans-serif}
-.zeta-value.green{color:#00e676}
-.zeta-value.red{color:#ff4d4d}
-.zeta-value.white{color:#ffffff}
-.zeta-sub{font-size:11px;color:#8b949e}
-.zeta-sub b{color:#c9d1d9}
+.zeta-card{background:var(--elev);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;justify-content:center;transition:border-color .2s, transform .2s}
+.zeta-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow-xs)}
+.zeta-label{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.zeta-value{font-size:28px;font-weight:700;line-height:1;margin-bottom:6px;font-family:'Space Grotesk',sans-serif;letter-spacing:-0.5px;text-shadow:0 2px 12px rgba(0,0,0,0.4)}
+.zeta-value.green{color:var(--bull);text-shadow:0 2px 14px rgba(47,181,126,0.3)}
+.zeta-value.red{color:var(--bear);text-shadow:0 2px 14px rgba(214,90,74,0.3)}
+.zeta-value.white{color:var(--text);text-shadow:0 2px 14px rgba(242,239,231,0.2)}
+.zeta-sub{font-size:11.5px;color:var(--muted)}
+.zeta-sub b{color:var(--text)}
 .zeta-chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:8px}
-.zeta-chart-wrapper{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
-.zeta-chart-header{font-size:13px;font-weight:700;color:#c9d1d9;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.zeta-chart-wrapper{background:var(--elev);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow-xs)}
+.zeta-chart-header{font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:6px}
 .zeta-chart-container{width:100%;height:220px}
 /* Forum Images */
 .forum-img-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
@@ -3655,7 +3655,7 @@ async function loadSignalAudit(){
       const v = dailyReturns[dt];
       cum += v;
       equityData.push({time:dt, value:cum});
-      pnlData.push({time:dt, value:v, color:v>=0?'#00e676':'#ff4d4d'});
+      pnlData.push({time:dt, value:v, color:v>=0?'#2FB57E':'#D65A4A'});
     });
     window._zetaChartData = {equity:equityData, pnl:pnlData};
     statsHtml=`
@@ -3871,20 +3871,20 @@ async function loadSignalAudit(){
     const eqCont = document.getElementById('zetaEquityChart');
     if (eqCont && d.equity.length) {
       const chart = LightweightCharts.createChart(eqCont, {
-        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#8b949e' },
-        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9AA69F' },
+        grid: { vertLines: { color: '#213832' }, horzLines: { color: '#213832' } },
         rightPriceScale: { borderVisible: false },
         timeScale: { borderVisible: false }
       });
-      const lineSeries = chart.addLineSeries({ color: '#f1c40f', lineWidth: 2, crosshairMarkerRadius: 4 });
+      const lineSeries = chart.addLineSeries({ color: '#C79A2A', lineWidth: 2, crosshairMarkerRadius: 4 });
       lineSeries.setData(d.equity);
       chart.timeScale().fitContent();
     }
     const pnlCont = document.getElementById('zetaPnlChart');
     if (pnlCont && d.pnl.length) {
       const chart2 = LightweightCharts.createChart(pnlCont, {
-        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#8b949e' },
-        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9AA69F' },
+        grid: { vertLines: { color: '#213832' }, horzLines: { color: '#213832' } },
         rightPriceScale: { borderVisible: false },
         timeScale: { borderVisible: false }
       });
