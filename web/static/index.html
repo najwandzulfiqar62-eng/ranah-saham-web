@@ -3720,7 +3720,7 @@ async function loadSignalAudit(){
       const hit=tpLevelFinal>=n;
       return `<div style="${hit?'':'opacity:.5'}">${hit?icon('check',{size:11})+' ':''}TP${n} Rp${fmt(price)} <span class="muted" style="font-size:9.5px">(${tpSign}${fmt(pct,1)}%)</span></div>`;
     };
-    return `<tr data-k="${s.kode}" style="cursor:pointer">
+    return `<tr data-k="${s.kode}" data-status="${s.status}" style="cursor:pointer">
       <td class="tk">${tickerTag(s.kode)}${dirBadge}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
       <td>${_sourceLabel(s.source)}</td>
       <td>Rp${fmt(s.entry_price)}</td>
@@ -3729,11 +3729,38 @@ async function loadSignalAudit(){
       <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
       <td style="color:${retColor}">${retTxt}${retSub}</td></tr>`;
   }).join('');
+  const filterChips = `
+    <div id="auditFilter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <span class="muted" style="font-size:12px;margin-right:4px">${icon('filter',{size:12})} Filter:</span>
+      <button class="chip active" data-f="ALL">Semua</button>
+      <button class="chip" data-f="PENDING_ENTRY">Belum Entry</button>
+      <button class="chip" data-f="OPEN">Sedang Berjalan</button>
+      <button class="chip" data-f="TP_HIT">TP Tercapai</button>
+      <button class="chip" data-f="SL_HIT">Kena SL</button>
+      <button class="chip" data-f="EXPIRED">Kadaluarsa</button>
+    </div>
+  `;
   body.innerHTML=rhHtml+confirmedHtml+statsHtml+partialProgressHtml+bySourceHtml+`<section class="panel">
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${filterChips}
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th>Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>
   </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   staggerRows(body.querySelector('.ctable'), 12);
+  const tbody = body.querySelector('#auditTbody');
+  const fChips = body.querySelectorAll('#auditFilter .chip');
+  fChips.forEach(btn => {
+    btn.addEventListener('click', () => {
+      fChips.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const f = btn.dataset.f;
+      tbody.querySelectorAll('tr[data-status]').forEach(tr => {
+        const s = tr.dataset.status;
+        if (f === 'ALL') tr.style.display = '';
+        else if (f === 'EXPIRED') tr.style.display = (s === 'EXPIRED' || s === 'EXPIRED_NO_ENTRY') ? '' : 'none';
+        else tr.style.display = (s === f) ? '' : 'none';
+      });
+    });
+  });
   _wireRiwayatHarianControls();
   animateStatCards(body);
 }
