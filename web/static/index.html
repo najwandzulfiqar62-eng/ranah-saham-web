@@ -1229,6 +1229,11 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .zeta-chart-wrapper{background:var(--elev);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow-xs)}
 .zeta-chart-header{font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:6px}
 .zeta-chart-container{width:100%;height:220px}
+/* Filter status tabel audit: .chip aslinya utk <span> -- sbg <button>
+   perlu cursor + warna teks eksplisit (default UA button nyaris hitam,
+   tak terbaca di panel gelap) */
+#auditFilter .chip{cursor:pointer;color:var(--text)}
+#auditFilter .chip.active{border-color:var(--gold);color:var(--gold)}
 /* Forum Images */
 .forum-img-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .forum-img{max-width:100%;max-height:300px;border-radius:8px;object-fit:cover;border:1px solid var(--line);transition:transform 0.2s}
@@ -1965,6 +1970,8 @@ const ICONS={
   'thumbs-up':'<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/>',
   flag:'<path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 8 2a6 6 0 0 0 3.6-1.2A1 1 0 0 1 21 3.6V15a1 1 0 0 1-.4.8A6 6 0 0 1 17 17c-3 0-5-2-8-2a6 6 0 0 0-3.6 1.2"/>',
   award:'<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>',
+  image:'<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  filter:'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
 };
 function icon(name,{size=16,className='',strokeWidth=2}={}){
   const body=ICONS[name]; if(!body)return '';
@@ -3607,7 +3614,7 @@ async function loadSignalAudit(){
     ${confirmedTimelineHtml}
     ${infoNote('Begitu TP1 tercapai, sinyal sudah confirmed/menang — TP2 & TP3 OPSIONAL (bonus kalau posisi lanjut naik), bukan syarat. Bisa diverifikasi lewat data kami sendiri (endpoint <b>/api/signals</b>), bukan tangkapan layar — sinyal dicatat otomatis SEBELUM hasilnya diketahui.')}
   </section>`:'';
-  let statsHtml;
+  let statsHtml,zetaCharts=null;
   const pendingNote=d.n_pending_entry?` dan ${d.n_pending_entry} menunggu entry (belum ada posisi, harga belum turun ke level yang disarankan)`:'';
   if(!signals.length || !d.stats){
     statsHtml=`<section class="panel">
@@ -3617,103 +3624,121 @@ async function loadSignalAudit(){
       ditampilkan sebagai 0% atau dikarang sebelum itu.</p>
     </section>`;
   }else{
-    let wins=0, losses=0, sumWinRet=0, sumLossRet=0, totalRet=0, closedCount=0;
-    let bestRet=-999, bestCode='', bestDate='';
-    let worstRet=999, worstCode='', worstDate='';
-    const tradingDates=new Set();
+    const s=d.stats;
+    // ---- Dashboard gaya "Zeta" (kartu besar + 2 chart), ANGKA tetap
+    // metodologi kita ---- Win Rate/rata-rata TIDAK dihitung ulang di
+    // browser -- d.stats dari server (_compute_stats) satu-satunya sumber
+    // kebenaran (versi pertama panel ini menghitung sendiri dgn aturan
+    // beda: pemenang yang MASIH OPEN ikut dijumlah ke "Total Return"
+    // seolah sudah realisasi -- angkanya lebih besar dari kenyataan).
+    //
+    // Populasi kurva/Total Return: HANYA sinyal SELESAI (TP_HIT/SL_HIT/
+    // EXPIRED). Nilai per sinyal pakai konvensi TERKUNCI yang SAMA dgn
+    // _locked_return di server: TP1/TP2 terbukti -> % target level itu,
+    // tuntas TP3 -> realisasi aktual, kalah/kadaluarsa -> hasil aktual
+    // (minus ikut dihitung); return NULL (anomali indikasi split)
+    // DILEWATI, bukan dianggap 0. PENDING_ENTRY/EXPIRED_NO_ENTRY tidak
+    // pernah ikut (tidak pernah ada posisi). Tanggal pakai resolved_at
+    // (kapan hasil TERJADI), bukan tanggal sinyal lahir.
+    const _lockedRet=t=>{
+      if(t.status==='TP_HIT'&&t.return_pct!=null)return t.return_pct;
+      const lv=t.tp_level_hit||0;
+      if(lv>=2&&t.tp2_pct!=null)return Math.abs(t.tp2_pct);
+      if(lv>=1&&t.tp_pct!=null)return Math.abs(t.tp_pct);
+      return t.return_pct;
+    };
+    const closedSig=signals.filter(t=>t.status==='TP_HIT'||t.status==='SL_HIT'||t.status==='EXPIRED');
+    let totalRet=0,closedCount=0,sumWinRet=0,sumLossRet=0;
+    let bestRet=null,bestCode='',bestDate='',worstRet=null,worstCode='',worstDate='';
     const dailyReturns={};
-    signals.forEach(s=>{
-      const isWin = s.status==='TP_HIT' || (s.tp_level_hit||0)>=1;
-      const isLoss = s.status==='SL_HIT' && (s.tp_level_hit||0)===0;
-      const isClosed = s.status==='TP_HIT' || s.status==='SL_HIT' || s.status==='EXPIRED';
-      let ret=null;
-      if(s.status==='TP_HIT' && s.return_pct!=null) ret=s.return_pct;
-      else if(isWin && s.tp_pct!=null) ret=s.tp_pct;
-      else if(isLoss && s.return_pct!=null) ret=s.return_pct;
-      else if(isClosed && s.status==='EXPIRED' && (s.tp_level_hit||0)===0 && s.return_pct!=null) ret=s.return_pct;
-      if(isWin){wins++;if(ret!=null)sumWinRet+=ret;}
-      if(isLoss){losses++;if(ret!=null)sumLossRet+=Math.abs(ret);}
-      if(ret!=null){
-        totalRet+=ret;
-        closedCount++;
-        const dt=(s.recorded_at||'').slice(0,10);
-        if(ret>bestRet){bestRet=ret;bestCode=s.kode;bestDate=dt;}
-        if(ret<worstRet){worstRet=ret;worstCode=s.kode;worstDate=dt;}
-        tradingDates.add(dt);
-        dailyReturns[dt]=(dailyReturns[dt]||0)+ret;
-      }
+    closedSig.forEach(t=>{
+      const ret=_lockedRet(t);
+      if(ret==null)return;
+      totalRet+=ret;closedCount++;
+      if(ret>=0)sumWinRet+=ret;else sumLossRet+=Math.abs(ret);
+      const dt=(t.resolved_at||t.recorded_at||'').slice(0,10);
+      if(bestRet==null||ret>bestRet){bestRet=ret;bestCode=t.kode;bestDate=dt;}
+      if(worstRet==null||ret<worstRet){worstRet=ret;worstCode=t.kode;worstDate=dt;}
+      if(dt)dailyReturns[dt]=(dailyReturns[dt]||0)+ret;
     });
-    if(bestRet===-999){bestRet=0;bestCode='-';}
-    if(worstRet===999){worstRet=0;worstCode='-';}
-    const winRate = (wins+losses)>0?(wins/(wins+losses)*100):0;
-    const profitFactor = sumLossRet>0?(sumWinRet/sumLossRet):(sumWinRet>0?99:0);
-    const avgRet = closedCount>0?(totalRet/closedCount):0;
-    const sortedDates = Object.keys(dailyReturns).sort();
-    let cum = 0;
-    const equityData = [], pnlData = [];
+    // Profit factor null = belum ada loss sama sekali -> tampil "∞",
+    // BUKAN angka karangan macam 99 (itu klaim palsu).
+    const profitFactor=sumLossRet>0?sumWinRet/sumLossRet:null;
+    const avgRet=closedCount?totalRet/closedCount:null;
+    const sortedDates=Object.keys(dailyReturns).sort();
+    let cum=0;
+    const equityData=[],pnlData=[];
     sortedDates.forEach(dt=>{
-      const v = dailyReturns[dt];
-      cum += v;
-      equityData.push({time:dt, value:cum});
-      pnlData.push({time:dt, value:v, color:v>=0?'#2FB57E':'#D65A4A'});
+      const v=dailyReturns[dt];
+      cum+=v;
+      equityData.push({time:dt,value:+cum.toFixed(2)});
+      pnlData.push({time:dt,value:+v.toFixed(2),color:v>=0?'#2FB57E':'#D65A4A'});
     });
-    window._zetaChartData = {equity:equityData, pnl:pnlData};
+    zetaCharts={equity:equityData,pnl:pnlData};
+    const wrClass=s.win_rate==null?'white':s.win_rate>=55?'green':s.win_rate>=45?'white':'red';
+    const pfClass=profitFactor==null?(sumWinRet>0?'green':'white'):profitFactor>=1?'green':'red';
     statsHtml=`
       <div class="zeta-board" id="zetaBoard">
         <div class="zeta-grid-4">
           <div class="zeta-card">
             <div class="zeta-label">Total Return</div>
             <div class="zeta-value ${totalRet>=0?'green':'red'}" data-animate="${totalRet}|1|%|${totalRet>=0?'+':''}">${totalRet>=0?'+':''}0.0%</div>
-            <div class="zeta-sub">${closedCount} trades executed</div>
+            <div class="zeta-sub">Σ return <b>${closedCount}</b> sinyal selesai — tanpa bobot posisi, bukan return portofolio</div>
           </div>
           <div class="zeta-card">
             <div class="zeta-label">Win Rate</div>
-            <div class="zeta-value ${winRate>=50?'green':'red'}" data-animate="${winRate}|1|%">${winRate.toFixed(1)}%</div>
-            <div class="zeta-sub">${wins}W / ${losses}L</div>
+            <div class="zeta-value ${wrClass}" ${s.win_rate!=null?`data-animate="${s.win_rate}|1|%"`:''}>${s.win_rate!=null?'0%':'–'}</div>
+            <div class="zeta-sub"><b>${s.n_tp_hit}</b>W / <b>${s.n_sl_hit}</b>L · TP1 tercapai = menang permanen</div>
           </div>
           <div class="zeta-card">
             <div class="zeta-label">Profit Factor</div>
-            <div class="zeta-value ${profitFactor>=1?'green':'red'}" data-animate="${profitFactor}|2">${profitFactor.toFixed(2)}</div>
-            <div class="zeta-sub">Gross profit / loss</div>
+            <div class="zeta-value ${pfClass}" ${profitFactor!=null?`data-animate="${profitFactor}|2"`:''}>${profitFactor!=null?'0':(sumWinRet>0?'∞':'–')}</div>
+            <div class="zeta-sub">Total profit ÷ total loss (terkunci, sinyal selesai)</div>
           </div>
           <div class="zeta-card">
-            <div class="zeta-label">Avg Return/Trade</div>
-            <div class="zeta-value ${avgRet>=0?'green':'red'}" data-animate="${avgRet}|1|%|${avgRet>=0?'+':''}">${avgRet>=0?'+':''}0.0%</div>
-            <div class="zeta-sub">Per executed trade</div>
+            <div class="zeta-label">Rata-rata / Sinyal</div>
+            <div class="zeta-value ${avgRet==null?'white':avgRet>=0?'green':'red'}" ${avgRet!=null?`data-animate="${avgRet}|2|%|${avgRet>=0?'+':''}"`:''}>${avgRet==null?'–':(avgRet>=0?'+':'')+'0%'}</div>
+            <div class="zeta-sub">Per sinyal selesai · disiplin TP1: ${s.avg_return_tp1_pct==null?'–':(s.avg_return_tp1_pct>=0?'+':'')+fmt(s.avg_return_tp1_pct,2)+'%'}</div>
           </div>
         </div>
         <div class="zeta-grid-4" style="margin-top:-8px">
           <div class="zeta-card" style="padding:12px 16px">
-            <div class="zeta-label">Total Signals</div>
-            <div class="zeta-value white" style="font-size:20px" data-animate="${signals.length}|0">0</div>
-            <div class="zeta-sub">${closedCount} executed, ${d.stats?d.stats.n_expired:0} expired</div>
+            <div class="zeta-label">Total Sinyal</div>
+            <div class="zeta-value white" style="font-size:20px" data-animate="${d.n_total}|0">0</div>
+            <div class="zeta-sub">${closedCount} selesai · ${d.n_open} berjalan${d.n_pending_entry?` · ${d.n_pending_entry} menunggu entry`:''}${d.n_expired_no_entry?` · ${d.n_expired_no_entry} entry tak tercapai`:''}</div>
           </div>
           <div class="zeta-card" style="padding:12px 16px">
-            <div class="zeta-label">Best Trade</div>
-            <div class="zeta-value green" style="font-size:20px">${bestCode} +${fmt(bestRet,1)}%</div>
-            <div class="zeta-sub">${bestDate}</div>
+            <div class="zeta-label">Terbaik</div>
+            <div class="zeta-value ${bestRet!=null&&bestRet<0?'red':'green'}" style="font-size:20px">${bestRet==null?'–':`${bestCode} ${bestRet>=0?'+':''}${fmt(bestRet,1)}%`}</div>
+            <div class="zeta-sub">${bestDate||'Belum ada sinyal selesai'}</div>
           </div>
           <div class="zeta-card" style="padding:12px 16px">
-            <div class="zeta-label">Worst Trade</div>
-            <div class="zeta-value red" style="font-size:20px">${worstCode} ${fmt(worstRet,1)}%</div>
-            <div class="zeta-sub">${worstDate}</div>
+            <div class="zeta-label">Terburuk</div>
+            <div class="zeta-value ${worstRet!=null&&worstRet>=0?'green':'red'}" style="font-size:20px">${worstRet==null?'–':`${worstCode} ${worstRet>=0?'+':''}${fmt(worstRet,1)}%`}</div>
+            <div class="zeta-sub">${worstDate||'Belum ada sinyal selesai'}</div>
           </div>
           <div class="zeta-card" style="padding:12px 16px">
-            <div class="zeta-label">Trading Days</div>
-            <div class="zeta-value white" style="font-size:20px" data-animate="${tradingDates.size}|0">0</div>
-            <div class="zeta-sub">Unique days traded</div>
+            <div class="zeta-label">Hari Aktif</div>
+            <div class="zeta-value white" style="font-size:20px" data-animate="${sortedDates.length}|0">0</div>
+            <div class="zeta-sub">Hari dengan sinyal selesai</div>
+          </div>
+          <div class="zeta-card" style="padding:12px 16px">
+            <div class="zeta-label">Rata-rata Durasi</div>
+            <div class="zeta-value white" style="font-size:20px" ${s.avg_days_to_resolve!=null?`data-animate="${s.avg_days_to_resolve}|1| hari"`:''}>${s.avg_days_to_resolve!=null?'0 hari':'–'}</div>
+            <div class="zeta-sub">Sampai TP/SL/kadaluarsa</div>
           </div>
         </div>
         <div class="zeta-chart-grid">
           <div class="zeta-chart-wrapper">
-            <div class="zeta-chart-header">${icon('activity',{size:14})} Equity Curve</div>
+            <div class="zeta-chart-header">${icon('activity',{size:14})} Equity Curve <span class="muted" style="font-weight:400;font-size:11px">· kumulatif Σ return sinyal selesai</span></div>
             <div id="zetaEquityChart" class="zeta-chart-container"></div>
           </div>
           <div class="zeta-chart-wrapper">
-            <div class="zeta-chart-header">${icon('bar-chart',{size:14})} Daily P&L</div>
+            <div class="zeta-chart-header">${icon('bar-chart',{size:14})} P&L Harian <span class="muted" style="font-weight:400;font-size:11px">· per tanggal selesai</span></div>
             <div id="zetaPnlChart" class="zeta-chart-container"></div>
           </div>
         </div>
+        ${infoNote(`Win rate dihitung begitu TP1 tercapai (TP2/TP3 opsional) — sekali tercatat menang, tetap menang walau posisi belakangan berbalik kena SL; pemenang TP1+ yang MASIH berjalan ikut win rate & rata-rata terkunci server (${s.avg_return_locked_pct==null?'–':(s.avg_return_locked_pct>=0?'+':'')+fmt(s.avg_return_locked_pct,2)+'%'} dari ${s.n_tp1_scenario} sinyal) tapi BELUM masuk kurva/Total Return — kurva ini realisasi sinyal yang sudah selesai, bukan proyeksi. Nilai per sinyal TERKUNCI di level TP tertinggi yang TERBUKTI tercapai (TP1/TP2 pakai % target level itu, tuntas TP3 pakai realisasi aktual${s.avg_return_tp3_pct!=null?` — pemenang tuntas TP3: <b style="color:var(--bull)">+${fmt(s.avg_return_tp3_pct,1)}%</b> (${s.n_tp3_full} sinyal)`:''}, kalah/kadaluarsa pakai hasil aktual termasuk minusnya) — SENGAJA tidak berasumsi "semua pemenang sampai TP3" (itu angka bohong). Total Return = jumlah % per sinyal TANPA bobot posisi/compounding — BUKAN return portofolio. Kadaluarsa (${s.n_expired}) masuk hitungan return tapi TIDAK dihitung menang/kalah; return anomali harga (indikasi split) dilewati, bukan dianggap 0.${d.n_expired_no_entry?` ${d.n_expired_no_entry} rekomendasi entry tidak pernah tercapai (bukan menang/kalah, tidak pernah ada posisi).`:''}`,'Metodologi angka di atas')}
       </div>
     `;
   }
@@ -3866,33 +3891,31 @@ async function loadSignalAudit(){
     });
   });
   _wireRiwayatHarianControls();
-  if (window._zetaChartData) {
-    const d = window._zetaChartData;
-    const eqCont = document.getElementById('zetaEquityChart');
-    if (eqCont && d.equity.length) {
-      const chart = LightweightCharts.createChart(eqCont, {
-        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9AA69F' },
-        grid: { vertLines: { color: '#213832' }, horzLines: { color: '#213832' } },
-        rightPriceScale: { borderVisible: false },
-        timeScale: { borderVisible: false }
-      });
-      const lineSeries = chart.addLineSeries({ color: '#C79A2A', lineWidth: 2, crosshairMarkerRadius: 4 });
-      lineSeries.setData(d.equity);
+  if(zetaCharts&&window.LightweightCharts){
+    // BUG NYATA (screenshot user): /api/signals lambat (~30 dtk) -- kalau
+    // user pindah tab lalu balik, blok ini jalan saat view display:none
+    // dan canvas chart lahir 0x0 PERMANEN (kartu angka hidup, dua chart
+    // kosong melompong). Pola perbaikan SAMA dgn chart IHSG (renderIhsg):
+    // width eksplisit + ResizeObserver yang membetulkan ukuran &
+    // fitContent begitu container benar-benar punya lebar.
+    const _zetaChart=(contId,mount)=>{
+      const cont=document.getElementById(contId);
+      if(!cont)return;
+      const chart=LightweightCharts.createChart(cont,{
+        width:cont.clientWidth||320,height:220,
+        layout:{background:{color:'transparent'},textColor:'#9AA69F',fontFamily:'JetBrains Mono'},
+        grid:{vertLines:{color:'#213832'},horzLines:{color:'#213832'}},
+        rightPriceScale:{borderVisible:false},timeScale:{borderVisible:false}});
+      mount(chart);
       chart.timeScale().fitContent();
-    }
-    const pnlCont = document.getElementById('zetaPnlChart');
-    if (pnlCont && d.pnl.length) {
-      const chart2 = LightweightCharts.createChart(pnlCont, {
-        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9AA69F' },
-        grid: { vertLines: { color: '#213832' }, horzLines: { color: '#213832' } },
-        rightPriceScale: { borderVisible: false },
-        timeScale: { borderVisible: false }
-      });
-      const barSeries = chart2.addHistogramSeries({ priceFormat: { type: 'volume' } });
-      barSeries.setData(d.pnl);
-      chart2.timeScale().fitContent();
-    }
-    window._zetaChartData = null;
+      new ResizeObserver(()=>{
+        if(!cont.clientWidth)return;
+        chart.applyOptions({width:cont.clientWidth});
+        chart.timeScale().fitContent();
+      }).observe(cont);
+    };
+    if(zetaCharts.equity.length)_zetaChart('zetaEquityChart',c=>c.addLineSeries({color:'#C79A2A',lineWidth:2,crosshairMarkerRadius:4}).setData(zetaCharts.equity));
+    if(zetaCharts.pnl.length)_zetaChart('zetaPnlChart',c=>c.addHistogramSeries({priceFormat:{type:'price',precision:1,minMove:0.1}}).setData(zetaCharts.pnl));
   }
   animateStatCards(body);
 }
@@ -3907,6 +3930,15 @@ $('#auditBtn').addEventListener('click',()=>{loaded.audit=0;loadSignalAudit()});
 // lain yang selalu angka/kode ticker tertutup), jangan pernah taruh
 // nama/judul/isi langsung ke innerHTML tanpa lewat sini.
 function escHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+// Baca pesan error dari response fetch dgn AMAN: error server/proxy bisa
+// berbadan TEKS POLOS ("Internal Server Error", halaman ngrok, dsb) --
+// resp.json() langsung di situ malah melempar SyntaxError sendiri dan
+// toast-nya jadi "Unexpected token 'I'..." (bug nyata dari screenshot
+// user saat kirim balasan bergambar ke server yang belum di-restart).
+async function _respErr(resp,fallback){
+  try{const d=await resp.json();return (d&&d.detail)||fallback}
+  catch(e){return `${fallback} Server error ${resp.status} — coba lagi, atau kabari admin kalau berulang.`}
+}
 // localStorage prefix rs_, try/catch (pola sama dgn rs_tour_seen).
 function rsGet(key,def=''){try{return localStorage.getItem(key)||def}catch(e){return def}}
 function rsSet(key,val){try{localStorage.setItem(key,val)}catch(e){}}
@@ -3944,7 +3976,7 @@ async function _forumDelete(kind,id){
   try{
     const url=kind==='thread'?`/api/forum/threads/${id}`:`/api/forum/replies/${id}`;
     const resp=await fetch(url,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_code:rsGet('rs_forum_admin_code')})});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal menghapus.');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal menghapus.'));
     toast('Terhapus.','ok');
     if(kind==='thread'){loadForum()}else{renderForumThread(_forumCurrentThreadId)}
   }catch(e){toast(e.message,'err')}
@@ -4062,7 +4094,7 @@ async function _forumUpvote(btn){
   btn.disabled=true;
   try{
     const resp=await fetch(`/api/forum/replies/${id}/upvote`,{method:'POST'});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal.');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal.'));
     const data=await resp.json();
     rsSet('rs_forum_voted_reply_'+id,'1');
     btn.innerHTML=`${icon('thumbs-up',{size:12})} ${data.upvotes}`;
@@ -4075,7 +4107,7 @@ async function _forumReport(btn){
   try{
     const url=kind==='thread'?`/api/forum/threads/${id}/report`:`/api/forum/replies/${id}/report`;
     const resp=await fetch(url,{method:'POST'});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal.');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal.'));
     rsSet(key,'1');
     btn.disabled=true;
     btn.innerHTML=`${icon('flag',{size:11})} Dilaporkan`;
@@ -4086,7 +4118,7 @@ async function _forumToggleBest(btn){
   try{
     const resp=await fetch(`/api/forum/replies/${btn.dataset.id}/best-answer`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({admin_code:rsGet('rs_forum_admin_code')})});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal.');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal.'));
     toast('Status jawaban terbaik diperbarui.','ok');
     renderForumThread(_forumCurrentThreadId);
   }catch(e){toast(e.message,'err')}
@@ -4252,7 +4284,7 @@ async function _forumSubmitThread(){
   try{
     const resp=await fetch('/api/forum/threads',{method:'POST',
       body:_forumFormData({nama,judul,isi,kategori,admin_code:rsGet('rs_forum_admin_code')},images)});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal mengirim.');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal mengirim.'));
     const created=await resp.json();
     rsSet('rs_forum_name',nama);
     if(created&&created.id)_forumFollowThread(created.id,0);// baru, belum ada balasan -> baseline 0
@@ -4273,7 +4305,7 @@ async function _forumSubmitReply(threadId){
   try{
     const resp=await fetch(`/api/forum/threads/${threadId}/replies`,{method:'POST',
       body:_forumFormData({nama,isi,admin_code:rsGet('rs_forum_admin_code')},images)});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal mengirim.');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal mengirim.'));
     const created=await resp.json();
     rsSet('rs_forum_name',nama);
     // Ikuti thread yang kita balas -- catat latest_reply_id sbg baseline
@@ -6841,7 +6873,7 @@ async function runBacktest(){
   </section>`;
   try{
     const resp=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conditions:cond,holding_days:btHolding})});
-    if(!resp.ok) throw new Error((await resp.json()).detail||'Gagal');
+    if(!resp.ok) throw new Error(await _respErr(resp,'Gagal.'));
     renderBacktestResult(await resp.json());
   }catch(e){
     box.innerHTML=`<section class="panel panel-anim"><p class="muted" style="padding:12px 0">Error: ${e.message}</p></section>`;
