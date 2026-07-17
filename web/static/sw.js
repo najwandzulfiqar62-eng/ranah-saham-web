@@ -1,7 +1,7 @@
 /* RANAH SAHAM service worker.
    Strategi: cache "shell" aplikasi agar bisa dibuka cepat / offline, TAPI
    JANGAN pernah cache data live (/api/*) karena harga & analisis sensitif waktu. */
-const CACHE = 'ranahsaham-v1';
+const CACHE = 'ranahsaham-v2';
 const SHELL = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
