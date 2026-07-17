@@ -3460,6 +3460,76 @@ def test_signals_endpoint_enriches_open_signals_with_floating_pnl(client, clean_
     assert closed_sig.get("floating_return_pct") is None
 
 
+def test_signals_endpoint_floating_anomaly_stock_split(client, clean_signal_db):
+    """Regresi kasus nyata RAJA (screenshot user 2026-07-17): posisi OPEN
+    dgn harga live BEDA SKALA dari entry (split ~1:5) tampil "-79,55%
+    mengambang" di tabel audit -- itu artefak skala harga, BUKAN rugi.
+    Endpoint HARUS menolak menghitung floating %-nya (NULL + flag
+    floating_anomaly=True) sambil tetap jujur mengirim harga barunya --
+    guard yang SAMA dgn audit_open_signals (is_price_scale_anomaly).
+    Dua arah diuji: split (harga live jauh DI BAWAH entry) dan reverse
+    split (jauh DI ATAS)."""
+    from core.database import get_db
+
+    # Harga live dari fixture no_network DETERMINISTIK ~821.84 (seed 0).
+    # entry 4328 -> ratio 0.19 (<0.6 = indikasi split, angka persis RAJA);
+    # entry 400  -> ratio 2.05 (>1.6 = indikasi reverse split).
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, status)
+            VALUES ('ZZSPLIT', 4328, 8, 16, 24, 5, 'OPEN')
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, status)
+            VALUES ('ZZRSPLIT', 400, 8, 16, 24, 5, 'OPEN')
+        ''')
+
+    r = client.get("/api/signals")
+    assert r.status_code == 200
+    signals = r.json()["signals"]
+    for kode in ("ZZSPLIT", "ZZRSPLIT"):
+        sig = next(s for s in signals if s["kode"] == kode)
+        # Audit yang jalan duluan di endpoint ini juga TIDAK BOLEH
+        # me-resolve TP/SL pakai harga beda skala (guard is_anomaly).
+        assert sig["status"] == "OPEN", f"{kode} tidak boleh di-resolve pakai harga beda skala"
+        assert sig.get("floating_price") is not None, f"{kode}: harga baru tetap dikirim (jujur apa adanya)"
+        assert sig.get("floating_return_pct") is None, f"{kode}: % palsu dari skala berbeda dilarang tampil"
+        assert sig.get("floating_anomaly") is True, f"{kode}: frontend butuh flag utk pesan 'indikasi split'"
+
+
+def test_record_daily_snapshots_skips_price_scale_anomaly(clean_signal_db):
+    """Regresi (satu paket dgn floating_anomaly di atas): snapshot harian
+    juga TIDAK BOLEH merekam floating -79% palsu dari harga beda skala --
+    sekali tersimpan, recap Riwayat Harian & delta naik/turun vs kemarin
+    ikut beracun. Baris anomali DILEWATI (bukan ditulis 0 -- 0 berarti
+    klaim "impas", itu bohong)."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, record_daily_snapshots
+
+    _ensure_table()
+    with get_db() as conn:
+        cur = conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status) "
+                           "VALUES ('ZZSPLITSNAP', 4328, 8, 5, 'OPEN')")
+        anomaly_id = cur.lastrowid
+        conn.execute("INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status) "
+                     "VALUES ('ZZNORMSNAP', 1000, 5, 3, 'OPEN')")
+
+    async def fake_lookup(kode):
+        # ZZSPLITSNAP: 885/4328 = 0.20 -> anomali (persis kasus RAJA);
+        # ZZNORMSNAP: 1050/1000 -> wajar, tetap tersimpan.
+        return 885.0 if kode == "ZZSPLITSNAP" else 1050.0
+
+    n = asyncio.run(record_daily_snapshots(fake_lookup))
+    assert n == 1, "hanya sinyal berharga wajar yang boleh tersnapshot"
+
+    with get_db() as conn:
+        rows = conn.execute("SELECT signal_id FROM signal_daily_snapshot").fetchall()
+    assert [r["signal_id"] for r in rows] != [anomaly_id]
+    assert all(r["signal_id"] != anomaly_id for r in rows)
+
+
 def test_riwayat_harian_endpoint_records_snapshot_when_viewing_today(client, clean_signal_db, monkeypatch):
     """Regresi: membuka riwayat harian utk HARI INI (tanggal default atau
     eksplisit) HARUS memicu record_daily_snapshots() -- supaya snapshot

@@ -2482,6 +2482,7 @@ async def signals():
     # (ditemukan nyata: bar harian yfinance utk hari terbaru kadang masih
     # NaN/belum terbit, sementara fast_info.last_price tetap mencerminkan
     # kutipan terkini walau bar harian belum final).
+    from core.signal_history import is_price_scale_anomaly
     open_signals = [s for s in report.get("signals", []) if s.get("status") == "OPEN"]
     if open_signals:
         prices = await asyncio.gather(
@@ -2492,6 +2493,17 @@ async def signals():
             if isinstance(price, Exception) or not price:
                 continue
             entry = sig["entry_price"]
+            # Harga live beda skala dari entry (indikasi stock split, kasus
+            # nyata RAJA 1:5: entry 4.328 vs live 885): (price/entry - 1)
+            # BUKAN untung/rugi, cuma artefak skala harga -- jangan pajang
+            # "-79%" bohong di tabel audit (guard yang SAMA dgn
+            # audit_open_signals). Harga barunya tetap dikirim apa adanya +
+            # flag, biar frontend bisa jujur bilang "indikasi split".
+            if is_price_scale_anomaly(entry, price):
+                sig["floating_price"] = round(price, 2)
+                sig["floating_return_pct"] = None
+                sig["floating_anomaly"] = True
+                continue
             is_sell = sig.get("direction") == "SELL"
             floating_pct = (entry / price - 1) * 100 if is_sell else (price / entry - 1) * 100
             sig["floating_price"] = round(price, 2)

@@ -81,6 +81,21 @@ MAX_ENTRY_DISCOUNT_PCT = 7.0
 # lama sudah tidak berlaku, sinyal wajib diinvalidasi, BUKAN di-fill).
 ENTRY_FILL_ZONE_PCT = 5.0
 ENTRY_ANOMALY_RATIO = 0.6
+# Kebalikan ke ATAS utk reverse split (harga melonjak >1.6x entry dalam
+# satu observasi) -- batasnya sengaja tidak simetris 1/0.6: TP3 terjauh
+# cuma ~+25%, jadi 1.6x sudah jauh di luar skenario sinyal manapun.
+ENTRY_ANOMALY_RATIO_UP = 1.6
+
+
+def is_price_scale_anomaly(entry_price: float, price: float) -> bool:
+    """True kalau harga terpantau BEDA SKALA dari entry (indikasi stock
+    split / reverse split, kasus nyata RAJA split ~1:5) -- selisih segini
+    dalam horizon sinyal hampir pasti aksi korporasi, bukan pergerakan
+    pasar. Dipakai TIGA tempat yang WAJIB konsisten: audit_open_signals
+    (jangan resolve TP/SL palsu), floating P&L /api/signals (jangan pajang
+    -79% bohong di tabel audit), dan record_daily_snapshots (jangan
+    racuni recap harian dgn delta palsu)."""
+    return price < entry_price * ENTRY_ANOMALY_RATIO or price > entry_price * ENTRY_ANOMALY_RATIO_UP
 
 # Ambang minimum confidence_score supaya masuk daftar yang diaudit --
 # JANGAN catat SEMUA 45 saham tiap hari (terlalu bising, dan sinyal yang
@@ -1267,7 +1282,7 @@ async def audit_open_signals(price_lookup) -> list[dict]:
         # diblokir, HANYA EXPIRED berbasis waktu yang boleh menutupnya --
         # dgn return_pct NULL (untung/rugi tidak bisa diukur jujur di skala
         # harga yang sudah berubah).
-        is_anomaly = price < entry * 0.6 or price > entry * 1.6
+        is_anomaly = is_price_scale_anomaly(entry, price)
 
         def _level_price(pct):
             if pct is None:
@@ -1651,6 +1666,12 @@ async def record_daily_snapshots(price_lookup) -> int:
         if price is None or price <= 0:
             continue
         entry = row["entry_price"]
+        # Harga beda skala (indikasi split, kasus nyata RAJA 1:5): snapshot
+        # "floating -79%" bukan progres sungguhan, cuma artefak skala --
+        # kalau ikut tersimpan, recap harian & delta naik/turun vs kemarin
+        # ikut beracun. Lewati (bukan tulis 0 -- 0 = klaim "impas", bohong).
+        if is_price_scale_anomaly(entry, price):
+            continue
         is_sell = row["direction"] == "SELL"
         floating_pct = (entry / price - 1) * 100 if is_sell else (price / entry - 1) * 100
         with get_db() as conn:
