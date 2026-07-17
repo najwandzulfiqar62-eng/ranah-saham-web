@@ -55,22 +55,3 @@ YF_BATCH_DELAY_SECONDS = 0.8  # jeda antar batch
 # Kosong = fitur admin forum nonaktif total (fail-closed) -- forum tetap
 # jalan normal tanpa admin, cuma badge/hapus tidak pernah bisa didapat.
 FORUM_ADMIN_SECRET = os.environ.get("FORUM_ADMIN_SECRET", "")
-
-# ---- Stream real-time IHSG / order book (relay dari ShadowStream) ----
-# ShadowStream = layanan TERPISAH (bukan repo ini) yang menghasilkan data
-# order book Level 2 asli lalu PUBLISH ke channel Redis di bawah. web/app.py
-# SUBSCRIBE channel ini & meneruskan verbatim ke klien WebSocket /ws/ihsg
-# -- app ini MURNI relay, tidak menghitung/mengarang data pasar (data asli
-# dari feed user, konsisten dgn prinsip "tidak ada klaim data broker/bandar
-# buatan"). IHSG_SNAPSHOT_KEY = key Redis (opsional) tempat ShadowStream
-# menyimpan state penuh terakhir, dikirim ke klien yang baru connect supaya
-# tidak layar kosong sampai tick berikutnya.
-IHSG_STREAM_CHANNEL = os.environ.get("IHSG_STREAM_CHANNEL", "ihsg:stream")
-IHSG_SNAPSHOT_KEY = os.environ.get("IHSG_SNAPSHOT_KEY", "ihsg:snapshot")
-# Kalau diisi, pump /ws/ihsg konek ke WebSocket ShadowStream INI (mode
-# upstream-relay) alih-alih subscribe Redis. Dipakai karena ShadowStream
-# ternyata broadcast lewat WebSocket-nya sendiri (/ws/ihsg), BUKAN publish
-# ke Redis. Isi mis. "wss://<sub>.ngrok-free.app/ws/ihsg" (atau "ws://
-# localhost:PORT/ws/ihsg" kalau ShadowStream 1 mesin -- lebih hemat, tidak
-# lewat ngrok). Kosong = fallback ke Redis pub/sub (IHSG_STREAM_CHANNEL).
-SHADOWSTREAM_WS_URL = os.environ.get("SHADOWSTREAM_WS_URL", "")

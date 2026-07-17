@@ -62,7 +62,7 @@ if sys.platform == "win32":
 
 import pandas as pd
 import yfinance as yf
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.gzip import GZipMiddleware
@@ -263,15 +263,12 @@ async def _lifespan(_app: "FastAPI"):
     baru -- cuma 1 asyncio task dalam proses yang sama (bukan Celery/cron
     terpisah), cukup untuk skala aplikasi ini."""
     task = asyncio.create_task(_signal_auto_loop())
-    # Relay stream ShadowStream -> klien WebSocket (lihat _ihsg_stream_pump).
-    ws_pump = asyncio.create_task(_ihsg_stream_pump())
     yield
-    for t in (task, ws_pump):
-        t.cancel()
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="Ranah Saham API", version="1.0", lifespan=_lifespan)
@@ -812,128 +809,6 @@ async def api_notif_forum(request: Request):
     from core.forum import reply_counts_for_threads
     counts = await asyncio.to_thread(reply_counts_for_threads, clean)
     return _py({"threads": counts})
-
-
-# ---------- WebSocket relay: stream real-time IHSG/order book (ShadowStream) ----------
-# ShadowStream (layanan TERPISAH milik user, BUKAN repo ini) PUBLISH data
-# order book Level 2 asli (bid/offer 5 level + freq) ke channel Redis; app
-# ini SUBSCRIBE lalu broadcast VERBATIM ke semua klien WebSocket di
-# /ws/ihsg. App ini MURNI jembatan -- TIDAK menghitung/mengarang data pasar
-# apa pun (konsisten dgn prinsip proyek: tidak ada klaim data broker/bandar
-# buatan; data di sini datang dari feed asli user). Redis pub/sub jadi
-# perantara -- ShadowStream & app ini tidak perlu saling tahu alamat.
-_IHSG_WS_CLIENTS: set = set()
-# Snapshot penuh TERAKHIR yang diterima dari sumber -- dikirim ke klien
-# browser yang BARU connect supaya tidak layar kosong sampai tick berikutnya
-# (ShadowStream kirim snapshot berkala; kita simpan yang terakhir).
-_ihsg_snapshot_cache: "str | None" = None
-
-
-async def _ws_broadcast(text: str):
-    """Kirim satu pesan ke SEMUA klien WS yang terhubung; buang koneksi
-    yang sudah mati (send gagal) dari set supaya tidak menumpuk."""
-    dead = []
-    for ws in _IHSG_WS_CLIENTS:
-        try:
-            await ws.send_text(text)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _IHSG_WS_CLIENTS.discard(ws)
-
-
-def _ihsg_note_snapshot(text: str):
-    """Simpan pesan sbg snapshot terakhir kalau ia bertipe snapshot (cek
-    murah di awal string, tanpa parse JSON penuh tiap tick)."""
-    global _ihsg_snapshot_cache
-    if '"snapshot"' in text[:64]:
-        _ihsg_snapshot_cache = text
-
-
-async def _ihsg_stream_pump():
-    """Task background TUNGGAL yang men-fan-out data order book ke semua
-    klien WS. DUA mode sumber (loop reconnect self-heal di keduanya):
-    - SHADOWSTREAM_WS_URL diisi -> konek ke WebSocket ShadowStream itu sbg
-      UPSTREAM CLIENT & relay (ShadowStream ternyata broadcast lewat WS
-      sendiri, bukan publish Redis).
-    - kosong -> fallback subscribe Redis pub/sub (IHSG_STREAM_CHANNEL)."""
-    from core.config import SHADOWSTREAM_WS_URL, IHSG_STREAM_CHANNEL
-    if SHADOWSTREAM_WS_URL:
-        await _ihsg_pump_upstream_ws(SHADOWSTREAM_WS_URL)
-    else:
-        await _ihsg_pump_redis(IHSG_STREAM_CHANNEL)
-
-
-async def _ihsg_pump_upstream_ws(url: str):
-    import websockets
-    while True:
-        try:
-            # ngrok-skip-browser-warning: lewati halaman interstitial ngrok
-            # free (jaga-jaga kalau URL upstream lewat ngrok).
-            async with websockets.connect(
-                url, additional_headers={"ngrok-skip-browser-warning": "1"},
-                open_timeout=10, ping_interval=20, max_size=2 ** 21,
-            ) as ws:
-                async for msg in ws:
-                    text = msg.decode("utf-8", "replace") if isinstance(msg, (bytes, bytearray)) else msg
-                    _ihsg_note_snapshot(text)
-                    await _ws_broadcast(text)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await asyncio.sleep(3)  # upstream mati/putus -- tunggu, reconnect
-
-
-async def _ihsg_pump_redis(channel: str):
-    import redis.asyncio as aioredis
-    url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    while True:
-        try:
-            r = aioredis.from_url(url)
-            pubsub = r.pubsub()
-            await pubsub.subscribe(channel)
-            async for msg in pubsub.listen():
-                if msg.get("type") != "message":
-                    continue
-                data = msg["data"]
-                if isinstance(data, (bytes, bytearray)):
-                    data = data.decode("utf-8", "replace")
-                _ihsg_note_snapshot(data)
-                await _ws_broadcast(data)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await asyncio.sleep(3)
-
-
-@app.websocket("/ws/ihsg")
-async def ws_ihsg(ws: WebSocket):
-    await ws.accept()
-    _IHSG_WS_CLIENTS.add(ws)
-    # Snapshot awal: prefer snapshot in-memory terakhir dari sumber (mode
-    # upstream WS); fallback ke key Redis (mode Redis / ShadowStream simpan
-    # state di sana). Supaya klien baru tidak layar kosong sampai tick
-    # berikutnya. Gagal ambil snapshot != gagal koneksi.
-    try:
-        snap = _ihsg_snapshot_cache
-        if not snap:
-            from core.config import IHSG_SNAPSHOT_KEY
-            s = _redis.get(IHSG_SNAPSHOT_KEY)
-            if s:
-                snap = s.decode("utf-8", "replace") if isinstance(s, (bytes, bytearray)) else s
-        if snap:
-            await ws.send_text(snap)
-    except Exception:
-        pass
-    try:
-        # Server ini murni broadcaster -- tidak butuh pesan dari klien;
-        # receive_text() dipakai HANYA utk mendeteksi klien memutus koneksi.
-        while True:
-            await ws.receive_text()
-    except (WebSocketDisconnect, Exception):
-        pass
-    finally:
-        _IHSG_WS_CLIENTS.discard(ws)
 
 
 # ---------- cache chart PNG (Redis) ----------

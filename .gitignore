@@ -22,3 +22,7 @@ __pycache__/
 
 # User Uploads
 web/static/forum_uploads/
+
+# Dokumen skripsi pribadi (draft, contoh skripsi kating/teman, pedoman) --
+# bahan penulisan, bukan bagian dari source code aplikasi.
+/skripsi najwan/
