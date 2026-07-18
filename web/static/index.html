@@ -7457,13 +7457,13 @@ if(sessionStorage.getItem('rs_entered')){
   // Isi mockup cards dengan data live
   (async()=>{
     try{
-      const data=await api('/api/marketstrip');
+      const data=await api('/api/ihsg');
       if(data){
         const ihsgEl=$('#lm-ihsg'),chgEl=$('#lm-ihsg-chg');
-        if(ihsgEl&&data.ihsg_val)ihsgEl.textContent=fmt(data.ihsg_val);
-        if(chgEl&&data.ihsg_pct!=null){
-          const up=data.ihsg_pct>=0;
-          chgEl.innerHTML=`<span style="color:var(--${up?'bull':'bear'})">${up?'+':''}${fmt(data.ihsg_pct,2)}%</span>`;
+        if(ihsgEl&&data.current_price)ihsgEl.textContent=fmt(data.current_price);
+        if(chgEl&&data.daily_change!=null){
+          const up=data.daily_change>=0;
+          chgEl.innerHTML=`<span style="color:var(--${up?'bull':'bear'})">${up?'+':''}${fmt(data.daily_change,2)}%</span>`;
         }
       }
     }catch{}
