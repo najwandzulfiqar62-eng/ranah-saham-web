@@ -1008,23 +1008,25 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 }
 
 /* ---------- FOOTER ---------- */
-.site-footer{border-top:1px solid var(--line);margin-top:36px;background:var(--panel);box-shadow:0 -12px 28px -20px rgba(0,0,0,.5)}
-.site-footer .footer-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1.2fr;gap:28px;padding:36px 22px 26px}
-.footer-brand .footer-logo{display:flex;align-items:center;gap:9px;margin-bottom:12px}
-.footer-brand .footer-logo img{width:26px;height:26px}
-.footer-brand .footer-logo span{font-family:"Space Grotesk";font-weight:700;letter-spacing:.04em;color:var(--text)}
-.footer-brand p{color:var(--muted);font-size:13px;line-height:1.6;max-width:280px}
-.footer-social{display:flex;gap:9px;margin-top:14px}
-.footer-social a{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;
-  background:var(--panel2);border:1px solid var(--line);color:var(--muted);
-  transition:transform .15s var(--ease-premium),box-shadow .15s var(--ease-premium),color .15s,border-color .15s}
-.footer-social a:hover{color:var(--gold);border-color:var(--gold-dim);transform:translateY(-2px);box-shadow:var(--shadow-sm)}
-.footer-col b{display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
-.footer-col a,.footer-col .footer-note{display:block;color:var(--muted);font-size:13.5px;text-decoration:none;margin-bottom:11px;cursor:pointer;transition:.15s}
-.footer-col a:hover{color:var(--gold)}
-.footer-col .footer-divider{border-top:1px solid var(--line);margin:14px 0}
-.footer-col .footer-sub{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
-.site-footer .footer-disclaimer{border-top:1px solid var(--line);padding:16px 22px;color:var(--muted);font-size:12px;line-height:1.6}
+.site-footer{border-top:1px solid rgba(199,154,42,0.15);margin-top:40px;background:linear-gradient(to bottom, var(--panel), #050c0b);box-shadow:0 -20px 40px -20px rgba(0,0,0,.6)}
+.site-footer .footer-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1.5fr;gap:40px;padding:48px 24px 40px}
+.footer-brand .footer-logo{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.footer-brand .footer-logo img{width:32px;height:32px}
+.footer-brand .footer-logo span{font-family:"Space Grotesk";font-weight:700;font-size:18px;letter-spacing:1px;color:var(--text)}
+.footer-brand p{color:var(--muted);font-size:13.5px;line-height:1.7;max-width:320px}
+.footer-social{display:flex;gap:12px;margin-top:20px}
+.footer-social a{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:8px;
+  background:rgba(255,255,255,0.03);border:1px solid var(--line);color:var(--muted);
+  transition:transform .2s var(--ease-premium),box-shadow .2s var(--ease-premium),color .2s,border-color .2s,background .2s}
+.footer-social a:hover{color:var(--gold);border-color:var(--gold-dim);background:rgba(199,154,42,0.08);transform:translateY(-3px);box-shadow:0 6px 16px rgba(0,0,0,0.3)}
+.footer-col b{display:block;font-size:12px;font-family:"Space Grotesk";letter-spacing:1.5px;text-transform:uppercase;color:var(--text);margin-bottom:18px}
+.footer-col a,.footer-col .footer-note{display:flex;align-items:center;color:var(--muted);font-size:14px;text-decoration:none;margin-bottom:12px;cursor:pointer;transition:all .2s ease}
+.footer-col a::before{content:"\2192";display:inline-block;opacity:0;transform:translateX(-10px);transition:all .2s ease;font-size:12px;margin-right:0;width:0;overflow:hidden;color:var(--gold)}
+.footer-col a:hover{color:var(--text);transform:translateX(4px)}
+.footer-col a:hover::before{opacity:1;transform:translateX(0);margin-right:8px;width:12px}
+.footer-col .footer-divider{border-top:1px solid rgba(255,255,255,0.06);margin:18px 0}
+.footer-col .footer-sub{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+.site-footer .footer-disclaimer{border-top:1px solid rgba(255,255,255,0.06);padding:24px;color:var(--faint);font-size:12px;line-height:1.6;text-align:center;background:#050c0b}
 
 /* ===== ANIMASI: kartu tambahan yang belum kebagian hover (lihat "polish
    pass 1" di atas, ===== ANIMASI ===== dekat awal <style>) -- ditaruh di
@@ -1181,9 +1183,38 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .forum-img:hover{transform:scale(1.02)}
 .forum-img-preview-grid{display:grid;gap:8px;margin-top:10px;grid-template-columns:repeat(auto-fill,minmax(60px,1fr))}
 .forum-img-preview{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+/* ===== SPLASH SCREEN ===== */
+#splashScreen{position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s ease-out, visibility .6s;overflow:hidden}
+#splashScreen::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at center, rgba(199,154,42,0.08) 0%, transparent 60%);pointer-events:none}
+.splash-content{text-align:center;position:relative;z-index:2;animation:splashContentIn 1s cubic-bezier(0.16,1,0.3,1) forwards;opacity:0}
+.splash-logo{margin-bottom:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--text);font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:32px;letter-spacing:1.5px}
+.splash-logo img{width:56px;height:56px;animation:splashPulse 2s ease-in-out infinite}
+.splash-tagline{color:var(--faint);font-size:11px;letter-spacing:4px;text-transform:uppercase;margin-bottom:50px;opacity:0.7}
+.splash-loader{display:flex;flex-direction:column;align-items:center;gap:16px}
+.splash-loader-line{width:160px;height:1px;background:var(--line);position:relative;overflow:hidden}
+.splash-loader-line::after{content:"";position:absolute;left:-50%;top:0;width:50%;height:100%;background:var(--gold);animation:splashLoadAnim 1.5s ease-in-out infinite}
+.splash-loader-text{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--gold);letter-spacing:2px;text-transform:uppercase;animation:splashTextPulse 1.5s ease-in-out infinite}
+@keyframes splashContentIn{0%{opacity:0;transform:translateY(20px) scale(0.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes splashPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+@keyframes splashLoadAnim{0%{left:-50%}100%{left:100%}}
+@keyframes splashTextPulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@media(prefers-reduced-motion:reduce){.splash-content{animation:none;opacity:1}.splash-logo img,.splash-loader-line::after,.splash-loader-text{animation:none}}
 </style>
 </head>
 <body>
+<div id="splashScreen">
+  <div class="splash-content">
+    <div class="splash-logo">
+      <img src="logo-mark.png" alt="Ranah Saham">
+      RANAH SAHAM
+    </div>
+    <div class="splash-tagline">BACA ARAH PASAR APA ADANYA</div>
+    <div class="splash-loader">
+      <div class="splash-loader-line"></div>
+      <div class="splash-loader-text">MEMUAT DATA PASAR...</div>
+    </div>
+  </div>
+</div>
 <header><div class="wrap nav">
   <div class="brand" onclick="route('beranda')" style="cursor:pointer"><span class="brand-mark"><img src="logo-mark.png" alt="Ranah Saham"></span><span>RANAH SAHAM</span><sup>IDX</sup></div>
   <!-- diisi renderNav() dari NAV_GROUPS -- SATU sumber utk desktop & drawer
@@ -6962,6 +6993,15 @@ if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.s
 loadMarketStrip();
 loadTickerMarquee();
 loaded.beranda=1; loadHome();
+// Hide splash screen smoothly after a brief delay
+setTimeout(()=>{
+  const splash=document.getElementById('splashScreen');
+  if(splash){
+    splash.style.opacity='0';
+    splash.style.visibility='hidden';
+    setTimeout(()=>splash.remove(),600);
+  }
+},1500);
 </script>
 </body>
 </html>
