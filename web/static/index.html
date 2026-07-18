@@ -2016,14 +2016,21 @@ setInterval(loadTickerMarquee,60000);
 
 async function loadNewsMarquee(){
   const track=$('#newsTrack'); if(!track)return;
-  let items; try{items=await api('/api/ihsgnews')}catch{return}
+  let res; try{res=await api('/api/ihsgnews')}catch{return}
+  const items=res&&res.items?res.items:res;
   if(!items||!items.length){$('#newsMarquee').style.display='none';return}
   $('#newsMarquee').style.display='';
+  const sep='<span style="color:var(--gold-dim);margin:0 18px;font-size:10px">◆</span>';
   const row=items.map(x=>{
-    return `<span class="news-ticker-item" onclick="window.open('${x.link}','_blank')">
-      <span class="source">${x.source}</span> ${x.title}</span>`;
-  }).join('<span style="color:var(--line);margin:0 12px">•</span>');
-  track.innerHTML=row+'<span style="color:var(--line);margin:0 12px">•</span>'+row;
+    const s=x.source||'';
+    const t=(x.title||'').replace(/'/g,'&#39;');
+    const l=(x.link||'').replace(/'/g,'&#39;');
+    return `<span class="news-ticker-item" onclick="window.open('${l}','_blank')"><span class="source">${s}</span> ${t}</span>`;
+  }).join(sep);
+  track.innerHTML=row+sep+row;
+  // Sesuaikan kecepatan animasi berdasarkan jumlah item
+  const dur=Math.max(40,items.length*8);
+  track.style.animationDuration=dur+'s';
 }
 setInterval(loadNewsMarquee,120000);
 
