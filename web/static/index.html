@@ -1187,35 +1187,110 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .forum-img:hover{transform:scale(1.02)}
 .forum-img-preview-grid{display:grid;gap:8px;margin-top:10px;grid-template-columns:repeat(auto-fill,minmax(60px,1fr))}
 .forum-img-preview{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
-/* ===== SPLASH SCREEN ===== */
-#splashScreen{position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s ease-out, visibility .6s;overflow:hidden}
-#splashScreen::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at center, rgba(199,154,42,0.08) 0%, transparent 60%);pointer-events:none}
-.splash-content{text-align:center;position:relative;z-index:2;animation:splashContentIn 1s cubic-bezier(0.16,1,0.3,1) forwards;opacity:0}
-.splash-logo{margin-bottom:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--text);font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:32px;letter-spacing:1.5px}
-.splash-logo img{width:56px;height:56px;animation:splashPulse 2s ease-in-out infinite}
-.splash-tagline{color:var(--faint);font-size:11px;letter-spacing:4px;text-transform:uppercase;margin-bottom:50px;opacity:0.7}
-.splash-loader{display:flex;flex-direction:column;align-items:center;gap:16px}
-.splash-loader-line{width:160px;height:1px;background:var(--line);position:relative;overflow:hidden}
-.splash-loader-line::after{content:"";position:absolute;left:-50%;top:0;width:50%;height:100%;background:var(--gold);animation:splashLoadAnim 1.5s ease-in-out infinite}
-.splash-loader-text{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--gold);letter-spacing:2px;text-transform:uppercase;animation:splashTextPulse 1.5s ease-in-out infinite}
-@keyframes splashContentIn{0%{opacity:0;transform:translateY(20px) scale(0.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
-@keyframes splashPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
-@keyframes splashLoadAnim{0%{left:-50%}100%{left:100%}}
-@keyframes splashTextPulse{0%,100%{opacity:1}50%{opacity:0.4}}
-@media(prefers-reduced-motion:reduce){.splash-content{animation:none;opacity:1}.splash-logo img,.splash-loader-line::after,.splash-loader-text{animation:none}}
+/* ===== LANDING PAGE HERO ===== */
+#landingHero{position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;transition:opacity .7s cubic-bezier(.4,0,.2,1),visibility .7s}
+#landingHero.hide{opacity:0;visibility:hidden;pointer-events:none}
+.landing-bg{position:fixed;inset:0;z-index:0;overflow:hidden}
+.landing-bg::before{content:"";position:absolute;top:-30%;left:50%;transform:translateX(-50%);width:140%;height:100%;background:radial-gradient(ellipse at 50% 0%, rgba(199,154,42,0.10) 0%, rgba(18,60,50,0.12) 30%, transparent 65%);pointer-events:none}
+.landing-bg::after{content:"";position:absolute;bottom:0;left:0;right:0;height:40%;background:linear-gradient(to top, var(--bg) 0%, transparent 100%);pointer-events:none}
+.landing-glow{position:absolute;border-radius:50%;filter:blur(100px);opacity:.15;pointer-events:none}
+.landing-glow-1{width:500px;height:500px;background:var(--gold);top:-10%;left:30%;animation:landGlow1 8s ease-in-out infinite alternate}
+.landing-glow-2{width:400px;height:400px;background:rgba(0,180,120,0.5);top:20%;right:-5%;animation:landGlow2 10s ease-in-out infinite alternate}
+.landing-glow-3{width:300px;height:300px;background:rgba(199,154,42,0.4);bottom:10%;left:10%;animation:landGlow3 7s ease-in-out infinite alternate}
+@keyframes landGlow1{0%{transform:translate(0,0) scale(1)}100%{transform:translate(30px,20px) scale(1.1)}}
+@keyframes landGlow2{0%{transform:translate(0,0) scale(1)}100%{transform:translate(-20px,30px) scale(1.15)}}
+@keyframes landGlow3{0%{transform:translate(0,0) scale(1)}100%{transform:translate(20px,-20px) scale(1.05)}}
+.landing-content{position:relative;z-index:2;max-width:900px;margin:0 auto;padding:120px 24px 60px;text-align:center;display:flex;flex-direction:column;align-items:center;min-height:100vh;justify-content:center}
+.landing-badge{display:inline-flex;align-items:center;gap:10px;background:rgba(199,154,42,0.08);border:1px solid rgba(199,154,42,0.2);border-radius:100px;padding:8px 20px;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold);margin-bottom:36px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.1s;opacity:0}
+.landing-badge .dot{width:5px;height:5px;border-radius:50%;background:var(--gold);animation:landDotPulse 2s ease-in-out infinite}
+.landing-h1{font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:clamp(38px,7vw,72px);line-height:1.05;letter-spacing:-1px;color:var(--text);margin-bottom:8px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.25s;opacity:0}
+.landing-h1 em{font-style:normal;background:linear-gradient(135deg, var(--gold) 0%, #d4a843 40%, #7ecfb3 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.landing-sub{font-size:clamp(15px,2.2vw,18px);color:var(--muted);line-height:1.7;max-width:600px;margin:0 auto 44px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.4s;opacity:0}
+.landing-cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:48px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.55s;opacity:0}
+.landing-btn-primary{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;border-radius:10px;font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:15px;letter-spacing:.5px;color:#0a1612;background:linear-gradient(135deg,var(--gold),#d4a843);border:none;cursor:pointer;transition:transform .2s,box-shadow .2s}
+.landing-btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(199,154,42,0.35)}
+.landing-btn-primary svg{width:16px;height:16px}
+.landing-btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;border-radius:10px;font-family:"Space Grotesk",sans-serif;font-weight:600;font-size:15px;color:var(--text);background:rgba(255,255,255,0.04);border:1px solid var(--line);cursor:pointer;transition:all .2s}
+.landing-btn-secondary:hover{border-color:var(--gold-dim);background:rgba(199,154,42,0.06);color:var(--gold)}
+.landing-search{display:flex;align-items:center;width:100%;max-width:520px;background:rgba(255,255,255,0.03);border:1px solid var(--line);border-radius:12px;padding:4px 6px 4px 18px;margin-bottom:44px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.65s;opacity:0;transition:border-color .2s}
+.landing-search:focus-within{border-color:var(--gold-dim)}
+.landing-search input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:14px;font-family:"Space Grotesk",sans-serif;padding:12px 0}
+.landing-search input::placeholder{color:var(--faint)}
+.landing-search button{padding:10px 22px;border-radius:8px;background:var(--gold);color:#0a1612;font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:13px;border:none;cursor:pointer;transition:opacity .2s;white-space:nowrap}
+.landing-search button:hover{opacity:.85}
+.landing-stats{display:flex;gap:48px;justify-content:center;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.8s;opacity:0;margin-bottom:60px}
+.landing-stat .num{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:clamp(28px,4vw,40px);color:var(--text);letter-spacing:-1px}
+.landing-stat .num em{font-style:normal;color:var(--gold)}
+.landing-stat .label{font-size:12px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;margin-top:4px}
+.landing-preview{position:relative;width:100%;max-width:800px;margin:0 auto;animation:landFadeUp 1s cubic-bezier(.16,1,.3,1) both;animation-delay:1s;opacity:0}
+.landing-preview-glow{position:absolute;inset:-20px;background:linear-gradient(135deg,rgba(199,154,42,0.08),rgba(0,180,120,0.06));border-radius:20px;filter:blur(40px);z-index:0}
+.landing-preview-frame{position:relative;z-index:1;border-radius:14px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02);padding:16px;box-shadow:0 20px 60px rgba(0,0,0,0.5)}
+.landing-preview-mockup{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.landing-mock-card{border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);padding:16px;text-align:left}
+.landing-mock-card .mk-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+.landing-mock-card .mk-val{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:22px;color:var(--text)}
+.landing-mock-card .mk-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.landing-mock-card .mk-tag{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;margin-top:8px}
+.landing-scroll-hint{margin-top:40px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:1.3s;opacity:0;display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--faint);font-size:11px;letter-spacing:2px;text-transform:uppercase}
+.landing-scroll-hint .chevron{width:20px;height:20px;border-right:2px solid var(--faint);border-bottom:2px solid var(--faint);transform:rotate(45deg);animation:landBounce 2s ease-in-out infinite;opacity:.5}
+@keyframes landFadeUp{0%{opacity:0;transform:translateY(30px)}100%{opacity:1;transform:translateY(0)}}
+@keyframes landDotPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+@keyframes landBounce{0%,100%{transform:rotate(45deg) translateY(0)}50%{transform:rotate(45deg) translateY(6px)}}
+@media(max-width:600px){
+  .landing-content{padding:80px 18px 40px}
+  .landing-stats{gap:28px}
+  .landing-preview-mockup{grid-template-columns:1fr}
+  .landing-cta-row{flex-direction:column;align-items:center}
+}
+@media(prefers-reduced-motion:reduce){.landing-badge,.landing-h1,.landing-sub,.landing-cta-row,.landing-search,.landing-stats,.landing-preview,.landing-scroll-hint{animation:none!important;opacity:1!important}.landing-glow,.landing-glow-1,.landing-glow-2,.landing-glow-3{animation:none!important}.chevron{animation:none!important}}
 </style>
 </head>
 <body>
-<div id="splashScreen">
-  <div class="splash-content">
-    <div class="splash-logo">
-      <img src="logo-mark.png" alt="Ranah Saham">
-      RANAH SAHAM
+<div id="landingHero">
+  <div class="landing-bg">
+    <div class="landing-glow landing-glow-1"></div>
+    <div class="landing-glow landing-glow-2"></div>
+    <div class="landing-glow landing-glow-3"></div>
+  </div>
+  <div class="landing-content">
+    <div class="landing-badge"><span class="dot"></span> 100% GRATIS &bull; RISET SAHAM IDX &bull; REAL-TIME</div>
+    <h1 class="landing-h1">Satu terminal.<br><em>Baca pasar apa adanya.</em></h1>
+    <p class="landing-sub">Terminal riset saham Indonesia yang transparan, edukatif, dan tanpa klaim profit instan. Analisis teknikal, screener, heatmap, dan AI scoring — semuanya gratis.</p>
+    <div class="landing-cta-row">
+      <button class="landing-btn-primary" onclick="enterDashboard()">Masuk Dashboard <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+      <button class="landing-btn-secondary" onclick="enterDashboard();setTimeout(()=>route('screener'),300)">Lihat Screener</button>
     </div>
-    <div class="splash-tagline">BACA ARAH PASAR APA ADANYA</div>
-    <div class="splash-loader">
-      <div class="splash-loader-line"></div>
-      <div class="splash-loader-text">MEMUAT DATA PASAR...</div>
+    <div class="landing-search">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="landingSearchInput" placeholder="Ketik kode saham... BBCA, TLKM, GOTO" autocomplete="off">
+      <button onclick="landingAnalyze()">Analisis</button>
+    </div>
+    <div class="landing-stats">
+      <div class="landing-stat"><div class="num"><em>45</em>+</div><div class="label">Saham Dianalisis</div></div>
+      <div class="landing-stat"><div class="num"><em>12</em>+</div><div class="label">Fitur Riset</div></div>
+      <div class="landing-stat"><div class="num"><em>0</em></div><div class="label">Biaya Langganan</div></div>
+    </div>
+    <div class="landing-preview">
+      <div class="landing-preview-glow"></div>
+      <div class="landing-preview-frame">
+        <div class="landing-preview-mockup" id="landingMockup">
+          <div class="landing-mock-card">
+            <div class="mk-label">IHSG</div>
+            <div class="mk-val" id="lm-ihsg">—</div>
+            <div class="mk-sub" id="lm-ihsg-chg">memuat...</div>
+          </div>
+          <div class="landing-mock-card">
+            <div class="mk-label">Breadth Pasar</div>
+            <div class="mk-val" id="lm-breadth">—</div>
+            <div class="mk-sub" id="lm-breadth-sub">saham naik vs turun</div>
+          </div>
+          <div class="landing-mock-card">
+            <div class="mk-label">AI Score Teratas</div>
+            <div class="mk-val" id="lm-top">—</div>
+            <div class="mk-sub" id="lm-top-sub">saham terkuat hari ini</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -7019,15 +7094,59 @@ loadMarketStrip();
 loadTickerMarquee();
 loadNewsMarquee();
 loaded.beranda=1; loadHome();
-// Hide splash screen smoothly after a brief delay
-setTimeout(()=>{
-  const splash=document.getElementById('splashScreen');
-  if(splash){
-    splash.style.opacity='0';
-    splash.style.visibility='hidden';
-    setTimeout(()=>splash.remove(),600);
-  }
-},1500);
+
+/* ===== LANDING PAGE HERO ===== */
+function enterDashboard(){
+  const hero=$('#landingHero');
+  if(hero){hero.classList.add('hide');setTimeout(()=>hero.remove(),800)}
+  sessionStorage.setItem('rs_entered','1');
+}
+function landingAnalyze(){
+  const v=($('#landingSearchInput')||{}).value||'';
+  if(!v.trim())return;
+  enterDashboard();
+  setTimeout(()=>{route('analisis');analyze(v.trim().toUpperCase())},300);
+}
+// Enter key di search bar landing
+const _lsi=$('#landingSearchInput');
+if(_lsi)_lsi.addEventListener('keydown',e=>{if(e.key==='Enter')landingAnalyze()});
+// Skip landing kalau sudah pernah masuk (session ini)
+if(sessionStorage.getItem('rs_entered')){
+  const hero=$('#landingHero');if(hero)hero.remove();
+} else {
+  // Isi mockup cards dengan data live
+  (async()=>{
+    try{
+      const data=await api('/api/marketstrip');
+      if(data){
+        const ihsgEl=$('#lm-ihsg'),chgEl=$('#lm-ihsg-chg');
+        if(ihsgEl&&data.ihsg_val)ihsgEl.textContent=fmt(data.ihsg_val);
+        if(chgEl&&data.ihsg_pct!=null){
+          const up=data.ihsg_pct>=0;
+          chgEl.innerHTML=`<span style="color:var(--${up?'bull':'bear'})">${up?'+':''}${fmt(data.ihsg_pct,2)}%</span>`;
+        }
+      }
+    }catch{}
+    try{
+      const uni=await fetchUniverse();
+      if(uni&&uni.length){
+        const up=uni.filter(x=>x.change_1d>=0).length;
+        const dn=uni.length-up;
+        const bEl=$('#lm-breadth'),bSub=$('#lm-breadth-sub');
+        if(bEl)bEl.innerHTML=`<span style="color:var(--bull)">${up}</span> / <span style="color:var(--bear)">${dn}</span>`;
+        if(bSub)bSub.textContent=Math.round(up/uni.length*100)+'% saham naik';
+        // Top AI score
+        const sorted=[...uni].sort((a,b)=>(b.ai_score||0)-(a.ai_score||0));
+        const best=sorted[0];
+        if(best){
+          const tEl=$('#lm-top'),tSub=$('#lm-top-sub');
+          if(tEl)tEl.textContent=best.kode;
+          if(tSub)tSub.innerHTML=`AI Score: <span style="color:var(--gold)">${fmt(best.ai_score||0,1)}</span>`;
+        }
+      }
+    }catch{}
+  })();
+}
 </script>
 </body>
 </html>
