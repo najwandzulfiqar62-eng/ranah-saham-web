@@ -2406,6 +2406,28 @@ async def signals():
     return _py(report)
 
 
+@app.get("/api/signals/ringkas")
+async def signals_ringkas():
+    """Ringkasan Audit Sinyal READ-ONLY (murni baca DB, TIDAK memicu audit)
+    untuk kartu teaser di landing page. Audit tetap dijaga terbaru oleh
+    background loop (_signal_auto_loop), jadi tak perlu memicu ulang audit
+    yang berat (~detik) tiap kali homepage dibuka. Sengaja ringan: hanya
+    statistik agregat + beberapa sinyal terakhir (field seperlunya), bukan
+    seluruh laporan + floating P&L live seperti /api/signals."""
+    from core.signal_history import get_signal_report
+
+    report = await asyncio.to_thread(get_signal_report)
+    fields = ("kode", "status", "entry_price", "direction",
+              "tp_level_hit", "resolved_at", "recorded_at", "source")
+    slim = [{k: s.get(k) for k in fields} for s in report.get("signals", [])]
+    return _py({
+        "stats": report.get("stats"),
+        "n_total": report.get("n_total"),
+        "n_open": report.get("n_open"),
+        "signals": slim,
+    })
+
+
 @app.get("/api/signals/riwayat-harian")
 async def api_signals_riwayat_harian(tanggal: str | None = None):
     """Riwayat HARIAN Audit Sinyal -- permintaan user langsung: "track
