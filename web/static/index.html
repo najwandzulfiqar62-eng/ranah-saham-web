@@ -344,6 +344,10 @@
   .ticker-item{display:inline-flex;align-items:center;gap:7px;padding:8px 20px;font-family:'JetBrains Mono',monospace;
     font-size:12px;color:var(--faint);cursor:pointer;flex-shrink:0}
   .ticker-item b{color:var(--text);font-family:'Space Grotesk',sans-serif;font-weight:700;letter-spacing:.02em}
+  .news-marquee{background:#050c0b;border-bottom:1px solid var(--line)}
+  .news-ticker-item{display:inline-flex;align-items:center;gap:12px;padding:8px 24px;font-size:12px;color:var(--muted);cursor:pointer;flex-shrink:0;transition:color .2s}
+  .news-ticker-item span.source{font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:1px}
+  .news-ticker-item:hover{color:var(--text)}
 
   /* ===== ANIMASI ===== */
 
@@ -1236,6 +1240,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 <div class="mstrip" id="mstrip"><div class="wrap" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;width:100%">
   <span class="mi">IHSG <b id="ms-ihsg">memuat…</b></span></div></div>
 <div class="ticker-marquee" id="tickerMarquee"><div class="ticker-track" id="tickerTrack"></div></div>
+<div class="ticker-marquee news-marquee" id="newsMarquee"><div class="ticker-track" id="newsTrack"></div></div>
 
 <main class="wrap">
   <!-- ANALISIS -->
@@ -2008,6 +2013,19 @@ async function loadTickerMarquee(){
   track.querySelectorAll('.ticker-item[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
 }
 setInterval(loadTickerMarquee,60000);
+
+async function loadNewsMarquee(){
+  const track=$('#newsTrack'); if(!track)return;
+  let items; try{items=await api('/api/ihsgnews')}catch{return}
+  if(!items||!items.length){$('#newsMarquee').style.display='none';return}
+  $('#newsMarquee').style.display='';
+  const row=items.map(x=>{
+    return `<span class="news-ticker-item" onclick="window.open('${x.link}','_blank')">
+      <span class="source">${x.source}</span> ${x.title}</span>`;
+  }).join('<span style="color:var(--line);margin:0 12px">•</span>');
+  track.innerHTML=row+'<span style="color:var(--line);margin:0 12px">•</span>'+row;
+}
+setInterval(loadNewsMarquee,120000);
 
 /* ---------- LIVE BADGE (harga real-time, ticking "X lalu") ---------- */
 const _liveTs={};
@@ -6992,6 +7010,7 @@ function _toggleNotifPanel(){
 if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{})})}
 loadMarketStrip();
 loadTickerMarquee();
+loadNewsMarquee();
 loaded.beranda=1; loadHome();
 // Hide splash screen smoothly after a brief delay
 setTimeout(()=>{
