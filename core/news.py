@@ -67,10 +67,15 @@ NEWS_SOURCES = [
     {"name": "ANTARA Bursa",   "url": "https://www.antaranews.com/rss/ekonomi-bursa.xml"},
     {"name": "ANTARA Bisnis",  "url": "https://www.antaranews.com/rss/ekonomi-bisnis.xml"},
     {"name": "ANTARA Ekonomi", "url": "https://www.antaranews.com/rss/ekonomi.xml"},
-    {"name": "Bisnis.com",     "url": "https://ekonomi.bisnis.com/rss"},
-    {"name": "Kompas Ekonomi", "url": "https://ekonomi.kompas.com/rss/"},
-    {"name": "Tempo Bisnis",   "url": "https://bisnis.tempo.co/rss/20"},
-    {"name": "Investor.id",    "url": "https://investor.id/feed"},
+    # DIBUANG (laporan user "gagal muat data" + spam log tiap fetch, diverifikasi
+    # langsung 2026-07-20): Bisnis.com (ekonomi.bisnis.com/rss -> 404), Kompas
+    # Ekonomi (ekonomi.kompas.com/rss/ -> 404), Tempo Bisnis (bisnis.tempo.co/
+    # rss/20 -> 200 tapi BUKAN XML, ParseError tiap parse), Investor.id
+    # (investor.id/feed -> 404). Keempatnya gagal SETIAP fetch -- tiap
+    # kegagalan makan waktu (koneksi/timeout/retry) & mengotori log, tanpa
+    # pernah menyumbang satu berita pun. 9 sumber sehat yang tersisa (CNBC,
+    # CNN, Detik, ANTARA x3, Google News x3) sudah lebih dari cukup. Kalau
+    # nanti ada URL RSS baru yang valid utk media ini, tinggal tambah lagi.
     # ── Google News RSS ── aggregasi berbagai media, selalu bisa diakses,
     # tiap item menyertakan tag <source> berisi nama penerbit aslinya.
     {"name": "Google News", "url": "https://news.google.com/rss/search?q=IHSG+saham+bursa+efek+Indonesia&hl=id&gl=ID&ceid=ID:id", "google": True},

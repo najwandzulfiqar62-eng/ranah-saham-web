@@ -990,6 +990,16 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
     _ensure_table()
     if _is_bursa_weekend():
         return []  # lihat _is_bursa_weekend() -- jangan catat sinyal "baru" dgn harga basi
+    # Gate jam bursa (BUG NYATA, laporan user: SMART_MONEY BBCA/BMRI/BBNI/BRIS
+    # tercatat 00:02 tengah malam "Berjalan" padahal market belum buka). Sama
+    # persis dgn guard di record_top_picks() -- yang SUDAH punya guard ini,
+    # itu sebabnya TOP_PICK tercatat 09:02 (jam bursa) tapi SMART_MONEY bocor
+    # ke tengah malam. Smart Money masuk LANGSUNG OPEN (tanpa fase pending),
+    # jadi kalau lolos pre-market ia langsung dipajang sbg posisi "berjalan"
+    # dari harga closing Jumat yang basi -- mustahil dieksekusi saat market
+    # tutup. Sinyal baru HANYA lahir saat bursa benar-benar buka.
+    if not _is_bursa_trading_hours():
+        return []
     candidates = [
         it for it in items
         if it.get("pola") in SMART_MONEY_BUY_POLA | SMART_MONEY_SELL_POLA
