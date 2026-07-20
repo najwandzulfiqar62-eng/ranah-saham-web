@@ -1321,6 +1321,17 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @keyframes landGlow1{0%{transform:translate(0,0) scale(1)}100%{transform:translate(30px,20px) scale(1.1)}}
 @keyframes landGlow2{0%{transform:translate(0,0) scale(1)}100%{transform:translate(-20px,30px) scale(1.15)}}
 @keyframes landGlow3{0%{transform:translate(0,0) scale(1)}100%{transform:translate(20px,-20px) scale(1.05)}}
+/* PERF mobile (lanjutan anti-lag backdrop-filter): menganimasikan
+   filter:blur(100px) + scale = GPU meraster ulang area blur BESAR tiap
+   frame -- jank berat di HP, dan ini di halaman PERTAMA yang dilihat user.
+   Di layar kecil animasinya dimatikan (blur statis tetap tampil, cuma tak
+   bergerak -- visual nyaris sama, jauh lebih ringan). Sama utk aurora +
+   logo-drift hero dashboard (::after gradien besar, ::before logo). Hanya
+   ANIMASI yang dimatikan, bukan elemennya, jadi tampilan tetap. */
+@media(max-width:768px){
+  .landing-glow,.landing-glow-1,.landing-glow-2,.landing-glow-3{animation:none!important}
+  .rs-research-hero::after,.rs-research-hero::before{animation:none!important}
+}
 .landing-content{position:relative;z-index:2;max-width:900px;margin:0 auto;padding:120px 24px 60px;text-align:center;display:flex;flex-direction:column;align-items:center;min-height:100vh;justify-content:center;flex-shrink:0}
 .landing-badge{display:inline-flex;align-items:center;gap:10px;background:rgba(199,154,42,0.08);border:1px solid rgba(199,154,42,0.2);border-radius:100px;padding:8px 20px;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold);margin-bottom:36px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.1s;opacity:0}
 .landing-badge .dot{width:5px;height:5px;border-radius:50%;background:var(--gold);animation:landDotPulse 2s ease-in-out infinite}
@@ -6990,13 +7001,19 @@ function goAnalyze(k){k=(k||'').trim().toUpperCase();if(k){route('analisis');ana
 })();
 
 async function loadHome(){
+  // Konten utama Beranda -- langsung.
   loadHomePulse();
   loadHomeMovers();
   loadHomeSectors();
   loadHomeNews();
-  loadHomeMakroStrip();
-  loadHomeAsingStrip();
   loadHomeSignals();
+  // Strip pelengkap (kurs/komoditas & foreign flow, keduanya DI BAWAH fold di
+  // HP) DITUNDA keluar dari burst awal -- mengurangi jumlah request bersamaan
+  // saat load pertama (permintaan user "kurangi request awal"). Tetap dimuat,
+  // cuma setelah browser idle / konten utama settle. Masing-masing punya
+  // skeleton & gagal mandiri, jadi penundaan tak terasa mengganggu.
+  const _deferStrips=()=>{loadHomeMakroStrip();loadHomeAsingStrip()};
+  (window.requestIdleCallback||((f)=>setTimeout(f,600)))(_deferStrips,{timeout:1500});
 }
 
 async function loadHomeMakroStrip(){
