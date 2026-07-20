@@ -1,7 +1,7 @@
 /* RANAH SAHAM service worker.
    Strategi: cache "shell" aplikasi agar bisa dibuka cepat / offline, TAPI
    JANGAN pernah cache data live (/api/*) karena harga & analisis sensitif waktu. */
-const CACHE = 'ranahsaham-v5';
+const CACHE = 'ranahsaham-v14';
 const SHELL = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -15,6 +15,32 @@ self.addEventListener('activate', (e) => {
     caches.keys()
       .then((ks) => Promise.all(ks.map((k) => (k !== CACHE ? caches.delete(k) : null))))
       .then(() => self.clients.claim())
+  );
+});
+
+// ---------- Web Push: tampilkan notifikasi walau app tertutup ----------
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
+  const title = d.title || 'Ranah Saham';
+  e.waitUntil(self.registration.showNotification(title, {
+    body: d.body || '',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: d.tag || 'ranah',
+    renotify: true,
+    data: { url: d.url || '/' }
+  }));
+});
+// Klik notifikasi -> fokus tab yang sudah ada, atau buka baru
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) { if ('focus' in c) { c.focus(); return; } }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
   );
 });
 

@@ -138,6 +138,110 @@ def _determine_entry_points(current_price: float, atr: float, sr: dict) -> dict:
     }
 
 
+def classify_entry_mode(
+    df,
+    *,
+    is_breakout: bool = False,
+    volume_confirmation: bool = False,
+) -> str:
+    """Klasifikasi momentum entry: AGRESIF vs AREA_AMAN.
+
+    Permintaan user langsung: "nentuin entry audit sinyalnya lebih akurat
+    lagi jadi kamu tuh tau nih momentum saham yg masuk sinyal harus masuk
+    agresif atau masuk area aman dlu gitu".
+
+    AGRESIF (dua jalur -- menunggu pullback berisiko KETINGGALAN karena
+    harga cenderung terus naik, jadi entry LANGSUNG di market):
+    - Jalur breakout: breakout R1 + volume >2x (walk-forward validated) --
+      StochRSI overbought TIDAK jadi syarat di sini (saat breakout momentum,
+      StochRSI wajar mentok tinggi; itu ciri momentum, bukan reversal).
+    - Jalur momentum konfluent (tanpa breakout resmi): MACD bullish menguat
+      + RSI zona optimal + harga > MA20 + StochRSI belum overbought -- tetap
+      ketat karena tanpa breakout, overbought benar menaikkan risiko reversal.
+
+    Entry AGRESIF dicatat di harga MARKET (skenario 'normal'), BUKAN level
+    breakout R1+ATR -- permintaan user: breakout kadang FAKE (lihat
+    web/app.py::confidence & record_top_picks).
+
+    AREA_AMAN = momentum belum cukup konfluent, entry skenario pullback
+    (tunggu harga turun ke support) lebih aman -- salah satu atau lebih
+    kondisi "agresif" tidak terpenuhi (volume lemah, MACD bearish, RSI
+    terlalu rendah/tinggi, harga < MA20, StochRSI overbought).
+
+    INDIKATOR YANG DIPAKAI -- semuanya SUDAH ADA & teruji di codebase:
+    - is_breakout + volume_confirmation: dari calculate_fixed_entry_levels_
+      from_df() / condition_breakout() di screening_pro.py (walk-forward
+      validated)
+    - MACD histogram: dari core/indicators.py::calculate_macd()
+    - RSI(14): dari core/indicators.py::calculate_rsi()
+    - MA20: rolling 20 standar
+    - StochRSI: dari core/indicators.py::calculate_stochrsi()
+
+    Fungsi ini MURNI kalkulasi (tidak melakukan I/O), aman ditest dengan
+    data dummy."""
+    import math
+    from core.indicators import calculate_macd, calculate_rsi, calculate_stochrsi
+
+    if df is None or len(df) < 50:
+        return "AREA_AMAN"
+
+    close = df["Close"]
+    current_price = float(close.iloc[-1])
+
+    def safe(v, default=0.0):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return default
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    # 1. MACD bullish & menguat (histogram > 0 DAN naik vs kemarin)
+    _, _, histogram = calculate_macd(close)
+    hist_now = safe(histogram.iloc[-1])
+    hist_prev = safe(histogram.iloc[-2])
+    macd_bullish_strong = hist_now > 0 and hist_now > hist_prev
+
+    # 2. RSI di zona optimal (40-70, bukan overbought bukan oversold)
+    rsi = calculate_rsi(close)
+    rsi_now = safe(rsi.iloc[-1], 50)
+    rsi_optimal = 40 <= rsi_now <= 70
+
+    # 3. Harga > MA20 (tren pendek positif)
+    ma20 = safe(close.rolling(20).mean().iloc[-1], current_price)
+    above_ma20 = current_price > ma20
+
+    # 4. StochRSI BUKAN overbought (K < 80)
+    stoch_k, _ = calculate_stochrsi(close)
+    k_now = safe(stoch_k.iloc[-1], 50)
+    not_overbought = k_now < 80
+
+    # 5. Volume dipakai dari is_breakout + volume_confirmation yang sudah
+    #    dihitung caller (walk-forward validated, bukan ambang baru)
+
+    # ----- Keputusan -----
+    # Jalur 1 (PALING kuat): breakout + volume confirmed -- sudah terbukti
+    # walk-forward, jadi langsung AGRESIF. StochRSI overbought SENGAJA TIDAK
+    # dijadikan syarat di jalur ini (keputusan user): saat breakout momentum
+    # sungguhan, StochRSI justru WAJAR mentok ~100 -- itu CIRI momentum kuat,
+    # bukan sinyal reversal. Menjadikannya gate malah memblokir entry agresif
+    # TEPAT ketika momentumnya paling kuat (temuan nyata: dari 25 saham cuma
+    # SSIA yang breakout + volume >2x, dan itu pun ter-AREA_AMAN semata-mata
+    # gara2 StochRSI 100 -- jalur AGRESIF jadi praktis mati).
+    if is_breakout and volume_confirmation:
+        return "AGRESIF"
+
+    # Jalur 2: BUKAN breakout resmi, tapi momentum teknikal SANGAT konfluent
+    # (MACD + RSI + MA20 + StochRSI semua selaras) -- SENGAJA tetap ketat,
+    # termasuk not_overbought (keputusan user: jalur non-breakout tetap
+    # ketat). Tanpa struktur breakout yang mengonfirmasi, StochRSI overbought
+    # di sini memang menaikkan risiko reversal, jadi gate-nya dipertahankan.
+    if macd_bullish_strong and rsi_optimal and above_ma20 and not_overbought:
+        return "AGRESIF"
+
+    return "AREA_AMAN"
+
+
 def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | None:
     """Hitung 4 skenario fixed entry levels (dipakai saat add ke watchlist).
     Murni kalkulasi -- caller bertanggung jawab menyediakan df yang sudah
@@ -205,6 +309,10 @@ def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | No
         volume_confirmation = False
     recommended_scenario = "breakout" if (is_breakout and volume_confirmation) else "pullback"
 
+    entry_mode = classify_entry_mode(
+        df, is_breakout=is_breakout, volume_confirmation=volume_confirmation,
+    )
+
     return {
         "created_date": created_date_str,
         "price_at_create": round(current_price, 0),
@@ -212,6 +320,7 @@ def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | No
         "is_breakout": is_breakout,
         "volume_confirmation": volume_confirmation,
         "recommended_scenario": recommended_scenario,
+        "entry_mode": entry_mode,
     }
 
 

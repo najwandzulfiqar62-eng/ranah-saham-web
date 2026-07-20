@@ -632,6 +632,17 @@ def _ensure_table():
             ON signal_history(kode)
             WHERE status IN ('OPEN', 'PENDING_ENTRY')
         ''')
+        # Migrasi ketujuh belas: permintaan user langsung ("nentuin entry
+        # audit sinyalnya lebih akurat lagi ... momentum saham yg masuk
+        # sinyal harus masuk agresif atau masuk area aman dlu") -- kolom
+        # entry_mode menyimpan klasifikasi momentum SAAT sinyal lahir:
+        # 'AGRESIF' (breakout + volume / momentum konfluent, masuk langsung)
+        # atau 'AREA_AMAN' (tunggu pullback ke support). NULL utk baris
+        # lama (jujur: kita tidak tahu momentum saat itu, bukan dikarang
+        # retroaktif). Lihat classify_entry_mode() di core/trading_plan.py.
+        cols3 = {r["name"] for r in conn.execute("PRAGMA table_info(signal_history)").fetchall()}
+        if "entry_mode" not in cols3:
+            conn.execute("ALTER TABLE signal_history ADD COLUMN entry_mode TEXT")
     _ensured = True
 
 
@@ -799,6 +810,15 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         # kena area pullback ... udh kena area tp"). price_lookup (real-
         # time) HANYA dipakai sbg fallback kalau caller tidak menyediakan
         # entry_price skenario sama sekali (mis. item lama/pemanggil lain).
+        # entry_mode = klasifikasi momentum SAAT sinyal lahir (lihat
+        # classify_entry_mode di core/trading_plan.py). AGRESIF = "masuk
+        # langsung" di harga MARKET (skenario 'normal', entry = harga saat
+        # ini -- app.py sudah memilihkannya utk AGRESIF); AREA_AMAN = tunggu
+        # pullback (skenario pullback). Menentukan status awal & apakah
+        # validasi entry-pullback di bawah berlaku.
+        entry_mode = it.get("entry_mode")
+        is_agresif = entry_mode == "AGRESIF"
+
         entry_price = it.get("entry_price")
         if entry_price is None:
             entry_price = it["harga"]
@@ -809,10 +829,13 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
                         entry_price = live_price
                 except Exception:
                     pass  # fail-open: tetap pakai closing harian, jangan gagalkan pencatatan
-        else:
+        elif not is_agresif:
             # Validasi entry skenario thd harga LIVE saat pencatatan (BARU,
             # jawaban utk keluhan user "banyak entry yang ga kecapai" + kasus
-            # PPRE entry di atas pasar):
+            # PPRE entry di atas pasar) -- HANYA utk AREA_AMAN (entry pullback,
+            # di bawah harga, MENUNGGU tersentuh). AGRESIF SENGAJA dilewati:
+            # entry-nya memang di market (~= harga live), jadi "entry >= live"
+            # itu NORMAL, bukan alasan skip.
             # - entry >= harga live -> BUKAN pullback lagi (pasar sudah di
             #   bawah entry saat sinyal lahir) -- rekomendasi tidak valid, skip.
             # - entry terlalu DALAM di bawah harga live (> MAX_ENTRY_DISCOUNT_
@@ -843,6 +866,15 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         tp2_pct = it.get("tp2_pct") or (tp_pct * 2)
         tp3_pct = it.get("tp3_pct") or (tp_pct * 3)
         pattern = it.get("pattern")
+        # Status awal berdasar entry_mode:
+        # - AGRESIF -> "masuk langsung": LANGSUNG OPEN (posisi aktif sekarang
+        #   di harga market), entry_filled_at = saat pencatatan. TP/SL mulai
+        #   berlaku seketika -- persis maksud user (momentum kuat, jangan
+        #   nunggu pullback yang sering tak datang & bikin EXPIRED_NO_ENTRY).
+        # - AREA_AMAN (default/None) -> PENDING_ENTRY: entry pullback yang
+        #   DITUNGGU tersentuh dulu (perilaku lama), entry_filled_at NULL.
+        status = "OPEN" if is_agresif else "PENDING_ENTRY"
+        entry_filled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if is_agresif else None
         # Re-cek TEPAT sebelum INSERT, TANPA `await` lagi di antaranya --
         # menutup celah race yang ditemukan lewat verifikasi adversarial:
         # klausul (b) _has_open_signal (resolved HARI INI) TIDAK dijamin
@@ -859,11 +891,12 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'), 'PENDING_ENTRY')
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, status, entry_filled_at, entry_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'TOP_PICK', datetime('now', 'localtime'), ?, ?, ?)
             ''', (
                 it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
                 it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern,
+                status, entry_filled_at, entry_mode,
             ))
             # OR IGNORE: kalau baris ini SEBENARNYA sudah tercatat proses/
             # task lain di celah antara SELECT di atas dan INSERT ini
@@ -882,6 +915,7 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
             "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
             "source": "TOP_PICK", "direction": "BUY",
+            "entry_mode": entry_mode, "status": status,
         })
     return saved
 
@@ -1015,6 +1049,7 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
         tp2_pct = tp2_pct or (tp_pct * 2)
         tp3_pct = tp3_pct or (tp_pct * 3)
         pattern = it.get("pola")
+        entry_mode = it.get("entry_mode")
         # Re-cek TEPAT sebelum INSERT, TANPA `await` lagi di antaranya --
         # lihat catatan sama di record_top_picks() soal race klausul (b).
         if _has_open_signal(it["kode"]):
@@ -1022,11 +1057,11 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
         with get_db() as conn:
             cur = conn.execute('''
                 INSERT OR IGNORE INTO signal_history
-                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, direction)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'), ?)
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, confidence_score, ai_score, recommendation, pattern, source, recorded_at, direction, entry_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SMART_MONEY', datetime('now', 'localtime'), ?, ?)
             ''', (
                 it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
-                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern, direction,
+                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"), pattern, direction, entry_mode,
             ))
             # Lihat catatan sama di record_top_picks(): OR IGNORE + index
             # unique adalah pengaman ATOMIC terakhir terhadap race antara
@@ -1046,6 +1081,7 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
             "tp_price": tp_price, "sl_price": sl_price,
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
             "source": "SMART_MONEY", "direction": direction,
+            "entry_mode": entry_mode,
         })
     return saved
 
@@ -1066,8 +1102,13 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
     PENDING_ENTRY saat ini -- SMART_MONEY punya logic entry-nya sendiri
     dan bisa BUY/SELL, belum diikutkan ke alur ini).
 
-    price_lookup: sama persis kontraknya dgn audit_open_signals (async
-    callable(kode) -> (harga, tanggal_bar) | None).
+    price_lookup: async callable(kode) -> (harga, tanggal_bar) | (harga,
+    low_intraday, tanggal_bar) | None. Bentuk 3-tuple (dgn LOW intraday hari
+    ini) adalah yang dipakai produksi -- entry limit-buy dianggap tersentuh
+    saat low <= entry (harga MENYENTUH level entry intraday), bukan hanya
+    saat snapshot harga kebetulan <= entry (celah lama yang membiarkan wick
+    sesaat ke entry lolos, kasus KIJA 17 Juli). Bentuk 2-tuple lama tetap
+    diterima (low := harga) demi kompatibilitas tes & pemanggil lama.
 
     SKIP total (return []) di luar jam bursa -- sama alasan dgn
     audit_open_signals (_is_bursa_trading_hours()), supaya tidak mengklaim
@@ -1087,9 +1128,20 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
         result = await price_lookup(row["kode"])
         if result is None:
             continue
-        price, price_date = result
+        # Kontrak fleksibel demi kompatibilitas: lookup boleh mengembalikan
+        # (price, date) [spot-only; kontrak lama, dipakai tes & audit_open_
+        # signals] ATAU (price, low, date) [baru: low = TERENDAH intraday
+        # hari ini]. Tanpa low, low := price -> perilaku identik sebelum
+        # perbaikan (tidak ada regresi utk pemanggil 2-tuple).
+        if len(result) >= 3:
+            price, low, price_date = result[0], result[1], result[2]
+        else:
+            price, price_date = result
+            low = price
         if price is None or price <= 0:
             continue
+        if low is None or low <= 0:
+            low = price
 
         recorded_at = datetime.fromisoformat(row["recorded_at"])
         is_stale = price_date is not None and price_date < recorded_at.date()
@@ -1127,7 +1179,19 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
                 "reason": ("anomaly" if price < row["entry_price"] * ENTRY_ANOMALY_RATIO else "gap"),
                 "source": row["source"], "pattern": row["pattern"],
             })
-        elif not is_stale and price <= row["entry_price"]:
+        elif not is_stale and row["entry_price"] * ENTRY_ANOMALY_RATIO <= low <= row["entry_price"]:
+            # Entry limit-buy tereksekusi begitu harga MENYENTUH level entry
+            # secara intraday (low harian <= entry) -- BUKAN hanya saat
+            # snapshot last_price yang dipolling berkala kebetulan <= entry.
+            # Celah lama: wick sesaat ke area entry yang langsung balik naik
+            # (KIJA 17 Juli: low 133 sentuh entry 134 lalu tutup 135) tak
+            # pernah tertangkap, sinyal nyangkut PENDING_ENTRY. Batas bawah
+            # ENTRY_ANOMALY_RATIO menahan low ber-skala-beda (split spt RAJA)
+            # memicu fill palsu; gap/crash LIVE tetap dijaring cabang di atas
+            # (price < fill_floor, berbasis spot) yang diperiksa lebih dulu.
+            # fill_price DIANGGAP di harga entry (harga limit); kalau spot
+            # sendiri sudah <= entry (dip live), pakai yang lebih baik (min).
+            fill_price = min(price, row["entry_price"])
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with get_db() as conn:
                 cur = conn.execute(
@@ -1139,7 +1203,7 @@ async def audit_pending_entries(price_lookup) -> list[dict]:
                     continue  # sudah diproses task lain (race), lewati
             events.append({
                 "kind": "entry_filled", "id": row["id"], "kode": row["kode"],
-                "entry_price": row["entry_price"], "fill_price": price,
+                "entry_price": row["entry_price"], "fill_price": fill_price,
                 "tp_pct": row["tp_pct"], "tp2_pct": row["tp2_pct"], "tp3_pct": row["tp3_pct"],
                 "sl_pct": row["sl_pct"], "source": row["source"], "pattern": row["pattern"],
             })

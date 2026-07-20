@@ -192,6 +192,37 @@ def list_threads(
     return [dict(r) for r in rows]
 
 
+def stats() -> dict:
+    """Ringkasan angka forum untuk strip "denyut komunitas" di header
+    (social proof supaya forum terasa hidup, bukan halaman kosong). SEMUA
+    global -- TIDAK terpengaruh filter/pencarian di list_threads(), sengaja,
+    karena ini gambaran seluruh forum, bukan hasil filter saat ini.
+
+    `terjawab` = thread yang punya >=1 balasan (EXISTS, bukan JOIN, supaya
+    tidak menggandakan baris thread yang punya banyak balasan). `kontributor`
+    = jumlah nama UNIK gabungan penanya + pembalas -- karena tidak ada akun
+    (lihat catatan modul), "nama" cuma teks bebas, jadi ini perkiraan ukuran
+    komunitas yang longgar (best-effort), bukan hitungan orang terverifikasi."""
+    _ensure_table()
+    with get_db() as conn:
+        threads = conn.execute("SELECT COUNT(*) AS c FROM forum_thread").fetchone()["c"]
+        replies = conn.execute("SELECT COUNT(*) AS c FROM forum_reply").fetchone()["c"]
+        answered = conn.execute(
+            "SELECT COUNT(*) AS c FROM forum_thread t "
+            "WHERE EXISTS (SELECT 1 FROM forum_reply r WHERE r.thread_id = t.id)"
+        ).fetchone()["c"]
+        contributors = conn.execute(
+            "SELECT COUNT(*) AS c FROM "
+            "(SELECT nama FROM forum_thread UNION SELECT nama FROM forum_reply)"
+        ).fetchone()["c"]
+    return {
+        "threads": threads,
+        "replies": replies,
+        "answered": answered,
+        "contributors": contributors,
+    }
+
+
 def get_thread(thread_id: int) -> dict | None:
     _ensure_table()
     with get_db() as conn:

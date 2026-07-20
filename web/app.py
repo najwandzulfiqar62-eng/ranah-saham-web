@@ -258,17 +258,22 @@ def _load_shares():
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
     """Nyalakan background task auto-audit sinyal (_signal_auto_loop,
-    didefinisikan di bawah dekat kode signal_history lainnya) saat
-    aplikasi start, matikan bersih saat berhenti. TIDAK ADA proses/infra
-    baru -- cuma 1 asyncio task dalam proses yang sama (bukan Celery/cron
-    terpisah), cukup untuk skala aplikasi ini."""
-    task = asyncio.create_task(_signal_auto_loop())
+    didefinisikan di bawah dekat kode signal_history lainnya) DAN loop push
+    forum (_forum_push_loop, jauh lebih ringan -- murni query DB, tanpa
+    yfinance -- jadi dipisah dari siklus sinyal yang berat supaya bisa jalan
+    lebih sering tanpa risiko rate-limit apa pun) saat aplikasi start,
+    matikan bersih saat berhenti. TIDAK ADA proses/infra baru -- cuma 2
+    asyncio task dalam proses yang sama (bukan Celery/cron terpisah), cukup
+    untuk skala aplikasi ini."""
+    tasks = [asyncio.create_task(_signal_auto_loop()), asyncio.create_task(_forum_push_loop())]
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for t in tasks:
+        t.cancel()
+    for t in tasks:
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Ranah Saham API", version="1.0", lifespan=_lifespan)
@@ -338,13 +343,30 @@ async def _realtime_price(ticker: str) -> dict | None:
         fi = yf.Ticker(ticker).fast_info
         last = fi.last_price
         prev = fi.previous_close
+        # day_low/day_high: rentang intraday hari ini. day_low dipakai audit
+        # PENDING_ENTRY utk deteksi entry limit-buy tersentuh saat harga
+        # MENYENTUH entry intraday (bukan cuma saat snapshot last_price
+        # kebetulan <= entry) -- lihat _signal_pending_audit_price_lookup.
+        # Dibungkus try masing-masing krn fast_info bisa tak punya field ini
+        # utk ticker tertentu; None -> pemakai fallback ke last_price.
+        try:
+            dlow = fi.day_low
+        except Exception:
+            dlow = None
+        try:
+            dhigh = fi.day_high
+        except Exception:
+            dhigh = None
         return (float(last) if last else None,
-                float(prev) if prev else None)
+                float(prev) if prev else None,
+                float(dlow) if dlow else None,
+                float(dhigh) if dhigh else None)
 
-    last, prev = await asyncio.to_thread(_fetch)
+    last, prev, dlow, dhigh = await asyncio.to_thread(_fetch)
     if last and last > 0:
         change = ((last - prev) / prev * 100) if (prev and prev > 0) else 0.0
-        result = {"price": last, "prev_close": prev, "change_1d": round(change, 4)}
+        result = {"price": last, "prev_close": prev, "change_1d": round(change, 4),
+                  "day_low": dlow, "day_high": dhigh}
     else:
         result = None
 
@@ -629,6 +651,14 @@ def _forum_tickers(teks: str) -> list[str]:
     return deteksi_emiten(teks, kandidat_kode=candidates)
 
 
+@app.get("/api/forum/stats")
+async def api_forum_stats():
+    """Angka ringkas forum (global, bukan hasil filter) untuk strip denyut
+    komunitas di header -- lihat core/forum.py::stats()."""
+    from core.forum import stats
+    return _py(await asyncio.to_thread(stats))
+
+
 @app.get("/api/forum/threads")
 async def api_forum_list_threads(request: Request):
     from core.forum import list_threads
@@ -784,6 +814,119 @@ _FORUM_NOTIF_MAX_THREADS = 50  # cap id thread yang bisa ditanya sekali (anti qu
 async def api_notif_signals(since_id: int = 0):
     from core.signal_history import get_signal_notifications
     return _py(await asyncio.to_thread(get_signal_notifications, since_id))
+
+
+# ---------- Web Push (notifikasi HP walau app tertutup) ----------
+# Butuh HTTPS (ngrok sudah HTTPS) + service worker. Lihat core/push.py.
+@app.get("/api/push/public-key")
+async def api_push_public_key():
+    from core.push import public_key
+    return {"key": await asyncio.to_thread(public_key)}
+
+
+@app.post("/api/push/subscribe")
+async def api_push_subscribe(request: Request):
+    from core.push import save_subscription
+    body = await request.json()
+    ok = await asyncio.to_thread(save_subscription, body)
+    if not ok:
+        raise HTTPException(400, "Langganan push tidak valid.")
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+async def api_push_unsubscribe(request: Request):
+    from core.push import delete_subscription
+    body = await request.json()
+    endpoint = (body.get("endpoint") or "").strip()
+    if endpoint:
+        await asyncio.to_thread(delete_subscription, endpoint)
+    return {"ok": True}
+
+
+@app.post("/api/push/sync-forum-follows")
+async def api_push_sync_forum_follows(request: Request):
+    """Klien kirim {"endpoint": ..., "follows": {thread_id: last_reply_id}}
+    -- MIRROR persis peta localStorage rs_forum_follows ke server, supaya
+    balasan forum baru bisa di-push WALAU app tertutup (_forum_push_loop
+    yang mengecek server-side). Dipanggil klien tiap kali _forumFollowThread
+    berubah (buat/balas thread) SELAMA push aktif, dan sekali lagi tiap kali
+    _subscribePush() berhasil (baseline awal)."""
+    from core.push import sync_forum_follows
+    body = await request.json()
+    endpoint = (body.get("endpoint") or "").strip()
+    follows = body.get("follows") or {}
+    if not endpoint:
+        raise HTTPException(400, "endpoint wajib diisi.")
+    ok = await asyncio.to_thread(sync_forum_follows, endpoint, follows)
+    if not ok:
+        raise HTTPException(404, "Endpoint belum terdaftar sbg langganan push.")
+    return {"ok": True}
+
+
+@app.post("/api/push/test")
+async def api_push_test():
+    """Kirim notifikasi tes ke SEMUA langganan (tombol 'Kirim tes' di panel
+    lonceng) -- supaya user bisa memverifikasi push sampai ke HP tanpa
+    menunggu sinyal nyata."""
+    from core.push import send_to_all
+    res = await asyncio.to_thread(
+        send_to_all,
+        "Ranah Saham",
+        "Notifikasi tes berhasil masuk ke HP kamu \U0001F514",
+        "/",
+        "test",
+    )
+    return res
+
+
+async def _push_new_signals(saved):
+    """Kirim Web Push utk sinyal Top Pick yang BARU tercatat. Best-effort:
+    kegagalan push TIDAK boleh mengganggu pencatatan/respons. Skip cepat
+    kalau belum ada perangkat terdaftar (hemat, tidak buka koneksi sia-sia)."""
+    try:
+        from core.push import subscription_count, send_to_all
+        if await asyncio.to_thread(subscription_count) == 0:
+            return
+        n = len(saved)
+        first = saved[0] or {}
+        kode = first.get("kode", "")
+        entry = first.get("entry_price")
+        if n == 1:
+            title = f"Sinyal baru: {kode}"
+            body = f"Entry Rp{entry} · cek Audit Sinyal"
+        else:
+            title = f"{n} sinyal baru masuk"
+            body = f"{kode} dan {n - 1} lainnya · cek Audit Sinyal"
+        await asyncio.to_thread(send_to_all, title, body, "/", "signal")
+    except Exception:
+        pass
+
+
+# Interval loop push forum -- MURNI query DB (reply_counts_for_threads),
+# TIDAK ADA panggilan yfinance/jaringan berat sama sekali, jadi aman jalan
+# jauh lebih sering drpd siklus sinyal (SIGNAL_AUTO_INTERVAL_SECONDS) tanpa
+# risiko rate-limit apa pun -- permintaan user langsung "balasan forum
+# cepat". 30 detik cukup responsif tanpa membebani SQLite berlebihan.
+FORUM_PUSH_INTERVAL_SECONDS = int(os.getenv("FORUM_PUSH_INTERVAL_SECONDS", "30"))
+
+
+async def _forum_push_loop():
+    """Loop background TERPISAH dari _signal_auto_loop (beda karakter beban
+    total -- lihat catatan interval di atas): cek server-side apakah ada
+    balasan forum baru utk thread yang diikuti tiap langganan push, kirim
+    push per-endpoint (BUKAN broadcast -- forum inherently per-follower,
+    beda dari sinyal yang relevan utk semua orang). Ini menutup celah nyata
+    yang ada sebelumnya: notifikasi forum HANYA lewat poll klien 45 detik
+    yang berhenti total saat tab/app tertutup -- push forum server-side
+    TIDAK PERNAH terjadi sebelum loop ini ada."""
+    while True:
+        await asyncio.sleep(FORUM_PUSH_INTERVAL_SECONDS)
+        try:
+            from core.push import check_forum_follows_and_push
+            await asyncio.to_thread(check_forum_follows_and_push)
+        except Exception as e:
+            print(f"⚠️ forum-push-loop: {type(e).__name__}: {e}")
 
 
 @app.post("/api/notifications/forum")
@@ -1907,6 +2050,37 @@ async def _signal_audit_price_lookup(kode: str):
         return None
 
 
+async def _signal_pending_audit_price_lookup(kode: str):
+    """Seperti _signal_audit_price_lookup TAPI juga membawa LOW intraday hari
+    ini -> return (price, low, date). Khusus audit_pending_entries: entry
+    limit-buy ke-fill saat harga MENYENTUH level entry secara intraday
+    (low <= entry), BUKAN cuma saat snapshot last_price yang di-polling
+    berkala kebetulan <= entry.
+
+    BUG NYATA yang diperbaiki (dilaporkan user): KIJA entry 134 (17 Juli)
+    -- low harian 133 (sempat sentuh 134/133 jam 15:35-15:45) tapi tiap bar
+    TUTUP balik ke 135, jadi dip-nya cuma wick sesaat. last_price yang
+    dipolling tak pernah baca <=134, sinyal nyangkut PENDING_ENTRY padahal
+    limit 134 secara realistis sudah tereksekusi. Memakai day_low menutup
+    celah ini. Dipisah dari _signal_audit_price_lookup (yang tetap 2-tuple)
+    supaya audit_open_signals -- yang membongkar (price, date) -- tidak
+    tersentuh sama sekali.
+
+    Fallback: kalau day_low tak tersedia (fast_info tak punya field-nya utk
+    ticker itu), low := price -> perilaku identik dgn sebelum perbaikan."""
+    try:
+        from datetime import date as _date
+        rt = await _realtime_price(kode + ".JK")
+        if rt is None or not rt.get("price"):
+            return None
+        price = float(rt["price"])
+        low = rt.get("day_low")
+        low = float(low) if low else price
+        return price, low, _date.today()
+    except Exception:
+        return None
+
+
 async def _run_pending_entry_audit() -> list[dict]:
     """Audit semua sinyal PENDING_ENTRY (entry tersentuh -> OPEN, atau
     kadaluarsa -> EXPIRED_NO_ENTRY). Dipanggil SEBELUM _run_signal_audit
@@ -1916,7 +2090,7 @@ async def _run_pending_entry_audit() -> list[dict]:
     kemana-mana)."""
     from core.signal_history import audit_pending_entries
 
-    return await audit_pending_entries(_signal_audit_price_lookup)
+    return await audit_pending_entries(_signal_pending_audit_price_lookup)
 
 
 async def _run_signal_audit() -> list[dict]:
@@ -1930,10 +2104,21 @@ async def _run_signal_audit() -> list[dict]:
     return await audit_open_signals(_signal_audit_price_lookup)
 
 
-# Interval siklus auto-audit background (detik) -- default 600 (10 menit),
-# meniru cadence kompetitor yang jadi rujukan user. Bisa diubah lewat env
-# var tanpa redeploy kode kalau perlu diperlambat/dipercepat.
-SIGNAL_AUTO_INTERVAL_SECONDS = int(os.getenv("SIGNAL_AUTO_INTERVAL_SECONDS", "600"))
+# Interval siklus auto-audit background (detik) -- REVISI KEDUA. Percobaan
+# pertama (180s, "opsi aman" dipilih user) SALAH PERHITUNGAN: klaim "tidak
+# menambah beban" cuma menghitung FREKUENSI panggilan yfinance, BUKAN
+# DURASI scan itu sendiri. Diukur langsung: satu scan penuh universe 178
+# ticker makan ~63 DETIK wall-clock. Dengan interval 180s, itu artinya
+# server AKTIF scan ~35% dari waktu -- selama jendela itu, request
+# bersamaan (mis. submit forum, laporan user "lag ketika mau kirim
+# pertanyaan") ikut berebut thread pool & lock SQLite yang sama dgn
+# panggilan yfinance yang sedang berjalan. BUKAN soal notifikasi forum --
+# forum punya loop SENDIRI yang independen & tetap cepat (lihat
+# FORUM_PUSH_INTERVAL_SECONDS=30, TIDAK terpengaruh nilai ini sama sekali).
+# 400s (~6,7 menit) -> scan hanya aktif ~16% dari waktu (63/400), jauh lebih
+# aman utk konkurensi, TETAP 33% lebih cepat dari nilai awal 600s. Bisa
+# diubah lewat env var tanpa redeploy kode kalau perlu disetel ulang.
+SIGNAL_AUTO_INTERVAL_SECONDS = int(os.getenv("SIGNAL_AUTO_INTERVAL_SECONDS", "400"))
 
 
 async def _run_signal_auto_cycle():
@@ -1988,40 +2173,23 @@ async def _signal_auto_loop():
             print(f"⚠️ signal auto loop error tak terduga: {type(e).__name__}: {e}")
 
 
-async def _confidence_raw_signals() -> list[dict]:
-    """Hitung AI Score + Minervini + Confluence + likuiditas + risk/reward
-    + proxy bandar untuk SCREENER_UNIVERSE dari satu fetch period=1y
-    bersama. Cache global 300 detik (sama untuk semua user, tidak
-    bergantung personalisasi)."""
-    cached = _cache_get("confidence:raw")
-    if cached is not None:
-        return cached
-
+def _compute_confidence_items(data, shares, market_close) -> list[dict]:
+    """Loop CPU-bound MURNI (indikator teknikal, Minervini, confluence,
+    pattern, entry-level) per ticker -- diekstrak dari _confidence_raw_signals
+    SUPAYA bisa dijalankan di worker thread (asyncio.to_thread), BUKAN
+    langsung di event loop (yang membekukan SELURUH server -- laporan user
+    "lag ketika mau kirim pertanyaan" forum, ternyata SEMUA request macet,
+    bahkan static file GET / -- karena loop 178 saham ini TIDAK PERNAH
+    `await`, jadi event loop asyncio yang single-threaded tidak punya
+    kesempatan melayani request lain sama sekali selama loop berjalan). Logika di dalam
+    TIDAK diubah sama sekali dari versi inline sebelumnya -- murni dipindah.
+    """
+    # Import ini SEBELUMNYA lokal di _confidence_raw_signals (pemanggil) --
+    # dipindah ke sini krn Python's `from X import Y` di dalam suatu fungsi
+    # HANYA mengikat Y ke local namespace fungsi ITU, TIDAK otomatis
+    # tersedia utk fungsi lain yang dipanggilnya (termasuk fungsi
+    # module-level terpisah spt ini) -- dibutuhkan langsung di loop bawah.
     from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns
-
-    ihsg_raw = await _clean("^JKSE", period="1y")
-    market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
-
-    shares = _load_shares()
-    # Universe DIPERLUAS (permintaan user: "di top pick tambahin jgn cuman
-    # lq45") dari SCREENER_UNIVERSE (~45, LQ45-ish) ke LIQUID_250 (178
-    # saham likuid, SUDAH dipakai fitur lain scope='medium' di scale yang
-    # sama -- lihat async_download_many, batching+retry sudah teruji utk
-    # ~200 ticker). SCREENER_UNIVERSE ⊂ LIQUID_250 penuh, jadi fitur lain
-    # yang masih pakai SCREENER_UNIVERSE (Screener default, Smart Money
-    # scanner _SM_UNIVERSE, Backtest, dst) TIDAK terpengaruh -- join-nya
-    # (_record_smart_money_cycle) tetap valid krn cuma superset, bukan
-    # ganti universe. record_top_picks() di confidence() tetap MAX_
-    # RECORDED_PER_DAY=10/hari, jadi Audit Sinyal tidak dibanjiri meski
-    # kandidat yang di-scan sekarang jauh lebih banyak.
-    tickers = [t + ".JK" for t in LIQUID_250]
-    data = await async_download_many(tickers, period="1y", interval="1d")
-    data = {t: fix_yf_columns(d).apply(pd.to_numeric, errors="coerce").dropna() for t, d in data.items()}
-    # Tambal celah bar harian terbaru (lihat _backfill_recent_gap) -- SATU
-    # panggilan batch tambahan utk semua ticker, bukan N panggilan per-
-    # ticker (lihat _backfill_recent_gap_batch).
-    data = await _backfill_recent_gap_batch(data)
-
     items = []
     for ticker, df in data.items():
         kode = ticker.replace(".JK", "")
@@ -2088,6 +2256,15 @@ async def _confidence_raw_signals() -> list[dict]:
             plan = calculate_fixed_entry_levels_from_df(df, "")
             scenarios = (plan or {}).get("scenarios") or {}
             recommended_key = (plan or {}).get("recommended_scenario", "pullback")
+            # AGRESIF (masuk langsung): permintaan user "gausah make breakout,
+            # masuk langsung aja ketika disuruh masuk agresif karena BREAKOUT
+            # KADANG FAKE" -- entry di MARKET (skenario 'normal', entry = harga
+            # saat ini), BUKAN level breakout (R1+ATR yg bisa fake) maupun
+            # pullback. TP/SL ikut ter-anchor ke harga market lewat skenario
+            # normal. record_top_picks() lalu mencatatnya LANGSUNG OPEN (bukan
+            # PENDING_ENTRY) -- lihat classify_entry_mode() di core/trading_plan.py.
+            if (plan or {}).get("entry_mode") == "AGRESIF":
+                recommended_key = "normal"
             chosen = scenarios.get(recommended_key) or scenarios.get("pullback") or scenarios.get("normal")
             potensi_naik_pct = chosen["tp1_pct"] if chosen else None
             risiko_turun_pct = chosen["risk_pct"] if chosen else None
@@ -2141,9 +2318,62 @@ async def _confidence_raw_signals() -> list[dict]:
                 "bandar": None if not ad else {"label": ad["label"], "sinyal": ad["sinyal"], "confidence": ad["confidence"]},
                 "pattern": pattern_name,
                 "pattern_bias": pattern_bias,
+                "entry_mode": (plan or {}).get("entry_mode"),
             })
         except Exception:
             continue
+    return items
+
+
+async def _confidence_raw_signals() -> list[dict]:
+    """Hitung AI Score + Minervini + Confluence + likuiditas + risk/reward
+    + proxy bandar untuk SCREENER_UNIVERSE dari satu fetch period=1y
+    bersama. Cache global 300 detik (sama untuk semua user, tidak
+    bergantung personalisasi)."""
+    cached = _cache_get("confidence:raw")
+    if cached is not None:
+        return cached
+
+    ihsg_raw = await _clean("^JKSE", period="1y")
+    market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
+
+    shares = _load_shares()
+    # Universe DIPERLUAS (permintaan user: "di top pick tambahin jgn cuman
+    # lq45") dari SCREENER_UNIVERSE (~45, LQ45-ish) ke LIQUID_250 (178
+    # saham likuid, SUDAH dipakai fitur lain scope='medium' di scale yang
+    # sama -- lihat async_download_many, batching+retry sudah teruji utk
+    # ~200 ticker). SCREENER_UNIVERSE ⊂ LIQUID_250 penuh, jadi fitur lain
+    # yang masih pakai SCREENER_UNIVERSE (Screener default, Smart Money
+    # scanner _SM_UNIVERSE, Backtest, dst) TIDAK terpengaruh -- join-nya
+    # (_record_smart_money_cycle) tetap valid krn cuma superset, bukan
+    # ganti universe. record_top_picks() di confidence() tetap MAX_
+    # RECORDED_PER_DAY=10/hari, jadi Audit Sinyal tidak dibanjiri meski
+    # kandidat yang di-scan sekarang jauh lebih banyak.
+    tickers = [t + ".JK" for t in LIQUID_250]
+    data = await async_download_many(tickers, period="1y", interval="1d")
+    data = {t: fix_yf_columns(d).apply(pd.to_numeric, errors="coerce").dropna() for t, d in data.items()}
+    # Tambal celah bar harian terbaru (lihat _backfill_recent_gap) -- SATU
+    # panggilan batch tambahan utk semua ticker, bukan N panggilan per-
+    # ticker (lihat _backfill_recent_gap_batch).
+    data = await _backfill_recent_gap_batch(data)
+
+    # BUG NYATA (laporan user: "lag ketika mau kirim pertanyaan" forum, dan
+    # SEMUA request lain -- bahkan static file GET / -- ikut macet sampai
+    # 15-21 detik): loop di bawah MURNI CPU-bound (indikator teknikal,
+    # Minervini, confluence, pattern, entry-level utk 178 saham) TANPA satu
+    # pun `await` di dalamnya -- sebelum perbaikan ini, loop itu jalan
+    # LANGSUNG di event loop, MEMBEKUKAN SELURUH SERVER (bukan cuma endpoint
+    # ini) selama loop berjalan, karena Python asyncio single-threaded: satu
+    # coroutine yang tidak pernah `await` tidak memberi kesempatan coroutine
+    # lain (request user lain, bahkan file statis) jalan sama sekali.
+    # asyncio.to_thread SUDAH dipakai di seluruh file ini utk panggilan
+    # yfinance (I/O-bound) -- pola yang SAMA sekarang diperluas ke loop
+    # CPU-bound ini: jalankan di worker thread terpisah, event loop tetap
+    # bebas melayani request lain SELAMA scan 178 saham berlangsung (diukur
+    # ~63 detik). Logika di dalam _compute_confidence_items TIDAK diubah
+    # sama sekali -- murni dipindah dari inline jadi fungsi terpisah.
+    items = await asyncio.to_thread(_compute_confidence_items, data, shares, market_close)
+
 
     # ===== FUNDAMENTAL (permintaan user) =====
     # SENGAJA BUKAN komponen skor berbobot (percobaan awal sempat membuat
@@ -2211,19 +2441,15 @@ async def _confidence_raw_signals() -> list[dict]:
         for it in items:
             it.setdefault("kepemilikan_change_pct", None)
 
-    # TTL LEBIH PANJANG dari _CACHE_TTL default (300s) -- SENGAJA, ditemukan
-    # lewat pengukuran latency live setelah universe diperluas ke LIQUID_250
-    # (178 saham, sebelumnya SCREENER_UNIVERSE ~45): compute dingin sekarang
-    # ~44 detik (diverifikasi langsung), sedangkan auto-cycle background
-    # (_run_signal_auto_cycle, lihat SIGNAL_AUTO_INTERVAL_SECONDS=600s) yang
-    # SEHARUSNYA menjaga cache tetap hangat cuma jalan tiap 10 menit -- kalau
-    # TTL cache tetap 300s (5 menit), ada jendela 5 menit tiap siklus di
-    # mana cache SUDAH kadaluarsa tapi auto-cycle BELUM refresh lagi, jadi
-    # user pertama yang buka Top Pick di jendela itu kena compute dingin
-    # penuh 44 detik. TTL 900s (>600s interval auto-cycle + jeda aman) --
-    # cache SELALU sempat di-refresh auto-cycle sebelum kadaluarsa, user
-    # nyaris tidak pernah kena compute dingin lagi di luar restart server.
-    _cache_set("confidence:raw", items, ttl=900)
+    # TTL LEBIH PANJANG dari _CACHE_TTL default (300s) -- SENGAJA. Compute
+    # dingin diukur langsung: ~63 DETIK utk scan penuh 178 saham (LIQUID_250).
+    # Auto-cycle background (_run_signal_auto_cycle, lihat
+    # SIGNAL_AUTO_INTERVAL_SECONDS=400s) yang SEHARUSNYA menjaga cache tetap
+    # hangat jalan tiap ~6,7 menit -- TTL cache HARUS tetap > interval
+    # auto-cycle + jeda aman supaya cache SELALU sempat di-refresh sebelum
+    # kadaluarsa (user nyaris tidak pernah kena compute dingin di luar
+    # restart server). TTL 600s (10 menit) > interval 400s.
+    _cache_set("confidence:raw", items, ttl=600)
     return items
 
 
@@ -2278,7 +2504,12 @@ async def confidence():
     try:
         from core.signal_history import record_top_picks
 
-        await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
+        saved_signals = await record_top_picks(items, price_lookup=_signal_entry_price_lookup)
+        # Web Push utk sinyal yang BENAR-BENAR baru tercatat. record_top_picks
+        # sudah dedup, jadi `saved_signals` kosong di pemanggilan berikutnya ->
+        # push tidak spam (sekali per sinyal baru). Best-effort.
+        if saved_signals:
+            await _push_new_signals(saved_signals)
     except Exception as e:
         print(f"⚠️ Gagal mencatat signal history (Top Pick): {type(e).__name__}: {e}")
 
@@ -2494,6 +2725,57 @@ async def api_backtest(request: Request):
     return _py(result)
 
 
+def _compute_universe_items(tickers, cleaned, shares) -> list[dict]:
+    """Loop CPU-bound MURNI (skor AI + VWAP fair value per saham) --
+    diekstrak dari universe() SUPAYA bisa dijalankan di worker thread
+    (asyncio.to_thread), BUKAN langsung di event loop -- pola & alasan SAMA
+    dgn _compute_confidence_items (lihat catatan lengkap di situ: loop
+    tanpa `await` yang jalan langsung di event loop membekukan SELURUH
+    server, bukan cuma endpoint ini). Logika TIDAK diubah dari versi
+    inline sebelumnya -- murni dipindah."""
+    items = []
+    for t in tickers:
+        kode = t.replace(".JK", "")
+        df = cleaned.get(t)
+        if df is None or len(df) < 50:
+            continue
+        try:
+            ai = calculate_ai_score_from_df(df)
+            if ai is None:
+                continue
+            price = float(df["Close"].iloc[-1])
+            prev = float(df["Close"].iloc[-2]) if len(df) > 1 else price
+            change_1d = (price / prev - 1) * 100 if prev else 0.0
+
+            def _pct(n):
+                if len(df) > n:
+                    base = float(df["Close"].iloc[-1 - n])
+                    return (price / base - 1) * 100 if base else 0.0
+                return 0.0
+            change_5d = _pct(5)
+            change_20d = _pct(20)
+            fv = _vwap_fair_value(df)
+            ma20 = ai.get("ma20") or price
+            firing = bool(ai.get("macd_bullish") and price > ma20 and (ai.get("rsi") or 0) > 50)
+            mcap = (shares.get(kode, 0) * price) or None
+            avg_val = float((df["Close"] * df["Volume"]).tail(20).mean())
+            last_vol = float(df["Volume"].iloc[-1])
+            items.append({
+                "kode": kode, "sector": SECTOR_MAP_UNIVERSE.get(kode, "Lainnya"),
+                "grup": GRUP_KONGLOMERASI.get(kode, "Independen"),
+                "price": round(price), "change_1d": round(change_1d, 2),
+                "score": ai.get("score"), "rating": ai.get("rating"),
+                "rsi": ai.get("rsi"), "macd_bullish": ai.get("macd_bullish"),
+                "vwap_label": (fv or {}).get("label"), "vwap_dev": (fv or {}).get("dev_pct"),
+                "firing": firing, "market_cap": mcap, "avg_value": avg_val,
+                "volume": last_vol, "value": price * last_vol,
+                "change_5d": round(change_5d, 2), "change_20d": round(change_20d, 2),
+            })
+        except Exception:
+            continue
+    return items
+
+
 @app.get("/api/universe")
 async def universe(scope: str = "core"):
     """Pindai universe, hitung metrik per saham (untuk screener multi-filter
@@ -2542,46 +2824,11 @@ async def universe(scope: str = "core"):
     # cache sisi klien sudah diperbaiki).
     cleaned = await _backfill_recent_gap_batch(cleaned)
 
-    items = []
-    for t in tickers:
-        kode = t.replace(".JK", "")
-        df = cleaned.get(t)
-        if df is None or len(df) < 50:
-            continue
-        try:
-            ai = calculate_ai_score_from_df(df)
-            if ai is None:
-                continue
-            price = float(df["Close"].iloc[-1])
-            prev = float(df["Close"].iloc[-2]) if len(df) > 1 else price
-            change_1d = (price / prev - 1) * 100 if prev else 0.0
-
-            def _pct(n):
-                if len(df) > n:
-                    base = float(df["Close"].iloc[-1 - n])
-                    return (price / base - 1) * 100 if base else 0.0
-                return 0.0
-            change_5d = _pct(5)
-            change_20d = _pct(20)
-            fv = _vwap_fair_value(df)
-            ma20 = ai.get("ma20") or price
-            firing = bool(ai.get("macd_bullish") and price > ma20 and (ai.get("rsi") or 0) > 50)
-            mcap = (shares.get(kode, 0) * price) or None
-            avg_val = float((df["Close"] * df["Volume"]).tail(20).mean())
-            last_vol = float(df["Volume"].iloc[-1])
-            items.append({
-                "kode": kode, "sector": SECTOR_MAP_UNIVERSE.get(kode, "Lainnya"),
-                "grup": GRUP_KONGLOMERASI.get(kode, "Independen"),
-                "price": round(price), "change_1d": round(change_1d, 2),
-                "score": ai.get("score"), "rating": ai.get("rating"),
-                "rsi": ai.get("rsi"), "macd_bullish": ai.get("macd_bullish"),
-                "vwap_label": (fv or {}).get("label"), "vwap_dev": (fv or {}).get("dev_pct"),
-                "firing": firing, "market_cap": mcap, "avg_value": avg_val,
-                "volume": last_vol, "value": price * last_vol,
-                "change_5d": round(change_5d, 2), "change_20d": round(change_20d, 2),
-            })
-        except Exception:
-            continue
+    # Loop CPU-bound (indikator per saham) dijalankan di worker thread --
+    # SAMA alasan & pola dgn _compute_confidence_items (lihat catatan
+    # panjang di situ): loop sinkron tanpa `await` yang jalan langsung di
+    # event loop membekukan SELURUH server, bukan cuma endpoint ini.
+    items = await asyncio.to_thread(_compute_universe_items, tickers, cleaned, shares)
 
     payload = {"items": items, "count": len(items), "scope": scope,
                "scanned": len(tickers),

@@ -57,6 +57,11 @@
   body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;
     line-height:1.55;overflow-x:hidden;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
     font-feature-settings:"tnum" 1;}
+    /* CATATAN safe-area: body SENGAJA TIDAK memberi padding-top safe-area lagi.
+       Dulu body DAN header sama-sama pakai env(safe-area-inset-top) -> di
+       iPhone ber-notch offset dihitung DUA KALI (gap kosong besar di atas
+       header, laporan user). Sekarang HANYA header (sticky, top:0) yang
+       memegang safe-area; landing hero & drawer punya penanganannya sendiri. */
   a{color:var(--gold);text-decoration:none}
   .wrap{max-width:1120px;margin:0 auto;padding:0 22px}
   ::selection{background:rgba(199,154,42,.32);color:#fff}
@@ -64,7 +69,9 @@
   /* nav */
   header{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--line);
     background:rgba(6,17,15,.72);backdrop-filter:blur(16px) saturate(140%);
-    box-shadow:0 8px 24px -12px rgba(0,0,0,.6)}
+    box-shadow:0 8px 24px -12px rgba(0,0,0,.6);
+    /* iOS PWA: geser header turun supaya tidak ketimpa status bar */
+    padding-top:env(safe-area-inset-top,0)}
   .nav{display:flex;align-items:center;gap:8px;padding:13px 0}
   .brand{font-family:"Space Grotesk";font-weight:700;letter-spacing:.04em;font-size:16px;
     color:var(--text);margin-right:18px;white-space:nowrap;display:inline-flex;align-items:center}
@@ -110,6 +117,20 @@
   .kbd kbd{font-family:"JetBrains Mono";background:var(--panel2);border-radius:4px;padding:1px 6px;
     font-size:11px;border:1px solid var(--line)}
 
+  /* Tombol back mengambang (mobile) -- lihat penjelasan lengkap di media
+     query @768px (display:flex!important di situ yang benar2 menampilkannya
+     di mobile; default di sini display:none supaya tak pernah nongol di
+     desktop). Posisi bottom-left, TIDAK bentrok dgn .toast-stack yang di
+     bottom-RIGHT. TANPA backdrop-filter (pelajaran lag kartu notif) --
+     background solid pekat langsung. */
+  .mob-back-btn{display:none;position:fixed;left:14px;
+    bottom:calc(16px + env(safe-area-inset-bottom,0));z-index:32;
+    width:44px;height:44px;border-radius:50%;align-items:center;justify-content:center;
+    background:var(--panel);border:1px solid var(--line);color:var(--text);
+    cursor:pointer;box-shadow:0 4px 16px -4px rgba(0,0,0,.5);transition:transform .12s,border-color .15s}
+  .mob-back-btn:active{transform:scale(.92)}
+  .mob-back-btn:hover{border-color:var(--gold-dim)}
+
   /* hamburger */
   .hbg{display:none;flex-direction:column;justify-content:center;align-items:center;gap:5px;
     width:40px;height:40px;background:var(--panel);border:1px solid var(--line);border-radius:9px;
@@ -125,7 +146,7 @@
   .mob-drawer.on{display:block}
   .mob-menu{position:fixed;top:0;right:0;bottom:0;width:260px;
     background:var(--panel);border-left:1px solid var(--line);
-    overflow-y:auto;padding:64px 10px 20px;display:flex;flex-direction:column;gap:1px;
+    overflow-y:auto;padding:calc(64px + env(safe-area-inset-top,0)) 10px 20px;display:flex;flex-direction:column;gap:1px;
     transform:translateX(100%);transition:transform .25s cubic-bezier(.16,1,.3,1);z-index:31}
   .mob-drawer.on .mob-menu{transform:none}
   .mob-menu .tab{text-align:left;padding:11px 14px;border-radius:8px;font-size:14px;width:100%;
@@ -141,9 +162,46 @@
     text-transform:uppercase;padding:14px 14px 5px;flex-shrink:0}
 
   @media(max-width:768px){
-    .tabs,.kbd,.tour-btn{display:none}
+    .tabs,.kbd,.tour-btn{display:none!important}
     .hbg{display:flex}
-    .nav{padding:10px 0}
+    .nav{padding:10px 0;gap:6px}
+    /* notif bell tetap tampil di sebelah hamburger di mobile */
+    .notif-btn{
+      display:inline-flex!important;
+      flex-shrink:0;
+      position:relative;
+      z-index:35;
+      pointer-events:auto;
+      margin-left:auto; /* dorong ke sisi kanan */
+    }
+    .hbg{order:100;flex-shrink:0;margin-left:0}
+    /* brand di mobile: shrink supaya tidak mendorong tombol keluar */
+    .brand{font-size:13px;margin-right:0;flex-shrink:0}
+    /* PERF mobile (laporan user "masih ngelag ngelag" -- ronde 1 cuma
+       nangkep <header>, MASIH ada backdrop-filter lain yang sama-sama
+       GPU-blur tiap frame/animasi di HP: panel notifikasi (persis yang
+       kefoto user saat lapor lag ini), search Ctrl+K, tour onboarding,
+       header landing page. Semua diganti bg solid pekat -- tampilan nyaris
+       sama, jauh lebih ringan). !important WAJIB -- rule aslinya (mis.
+       .notif-panel didefinisikan ratusan baris di BAWAH blok ini, spesifisitas
+       SAMA) menang di cascade kalau tidak dipaksa, TERBUKTI lewat verifikasi
+       browser (backdrop-filter masih 'blur(18px)' walau media query ini
+       sudah match sebelum !important ditambahkan). */
+    header,.landing-nav{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(6,17,15,.95)!important}
+    .mob-drawer{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(5,8,15,.88)!important}
+    .notif-panel{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:#0e1a16!important}
+    .cmdk,.tourk{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(5,9,16,.92)!important}
+    /* Tombol back mengambang -- permintaan user langsung: "tambahkan klik
+       balik ke halaman sebelumnya di mobile". SPA ini SUDAH terhubung ke
+       browser history (pushState/popstate, lihat route()), jadi hardware
+       back Android seharusnya sudah jalan -- TAPI begitu app di-Add to
+       Home Screen sbg PWA (dibutuhkan utk Web Push), Safari iOS di mode
+       standalone KEHILANGAN gesture swipe-back sepenuhnya (chrome browser
+       tidak ada) -- affordance klik di layar jadi wajib, bukan sekadar
+       nice-to-have. Muncul HANYA di mobile (desktop punya tab nav yang
+       jelas + tombol back browser asli) & HANYA saat bukan di Beranda
+       (lihat _applyRoute -- toggle hidden di situ).*/
+    .mob-back-btn{display:flex!important}
   }
 
   main{padding:26px 0 60px;animation:fadeUp .4s ease}
@@ -321,6 +379,25 @@
   .forum-vote-btn:hover{border-color:var(--gold)}
   .forum-vote-btn[disabled]{color:var(--gold);border-color:var(--gold)66;cursor:default;opacity:.85}
   .forum-best{border-color:var(--gold)66!important;box-shadow:0 0 0 1px rgba(199,154,42,.3)}
+  /* Forum — denyut komunitas + kartu thread yang lebih hidup */
+  .forum-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+  .forum-stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:11px;transition:border-color .15s}
+  .forum-stat:hover{border-color:var(--gold-dim)}
+  .forum-stat .fs-ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--gold-soft);color:var(--gold);flex-shrink:0}
+  .forum-stat .fs-val{font-family:"Space Grotesk";font-weight:700;font-size:21px;line-height:1;color:var(--text)}
+  .forum-stat .fs-lbl{font-size:11px;color:var(--muted);margin-top:3px}
+  .forum-card{position:relative;overflow:hidden;transition:transform .15s var(--ease-premium),border-color .15s,box-shadow .15s}
+  .forum-card:hover{transform:translateY(-2px);border-color:var(--gold-dim);box-shadow:var(--shadow-sm)}
+  .forum-card .fc-accent{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .forum-snippet{color:var(--muted);font-size:12.5px;line-height:1.5;margin-top:5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .forum-status{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap}
+  .forum-status.answered{color:var(--bull);background:rgba(47,181,126,.12);border:1px solid rgba(47,181,126,.28)}
+  .forum-status.pending{color:var(--muted);background:var(--panel);border:1px solid var(--line)}
+  .forum-metric{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--muted)}
+  /* Entry mode badges (audit sinyal) */
+  .entry-mode{display:inline-flex;align-items:center;gap:3px;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;letter-spacing:.02em}
+  .entry-mode.agresif{color:#2FB57E;background:rgba(47,181,126,.12);border:1px solid rgba(47,181,126,.25)}
+  .entry-mode.aman{color:var(--gold);background:rgba(199,154,42,.10);border:1px solid rgba(199,154,42,.22)}
   .bigval{font-family:"JetBrains Mono";font-weight:700;font-size:34px;line-height:1}
   /* sector tags (warna per sektor, gaya pill) */
   .sectag{display:inline-block;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:600;
@@ -1008,7 +1085,8 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   .analysis-title{font-size:30px}
   .decision-grid,.level-grid,.thesis-grid{grid-template-columns:1fr}
   .chart-panel #chart{height:320px}
-  .site-footer .footer-grid{grid-template-columns:1fr 1fr}
+  .rs-research-hero .home-brandline,
+  .rs-research-hero .home-kicker { display: none; }
 }
 
 /* ---------- FOOTER ---------- */
@@ -1031,6 +1109,9 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .footer-col .footer-divider{border-top:1px solid rgba(255,255,255,0.06);margin:18px 0}
 .footer-col .footer-sub{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
 .site-footer .footer-disclaimer{border-top:1px solid rgba(255,255,255,0.06);padding:24px;color:var(--faint);font-size:12px;line-height:1.6;text-align:center;background:#050c0b}
+@media(max-width:640px){
+  .site-footer .footer-grid{grid-template-columns:1fr;gap:32px;padding:32px 20px}
+}
 
 /* ===== ANIMASI: kartu tambahan yang belum kebagian hover (lihat "polish
    pass 1" di atas, ===== ANIMASI ===== dekat awal <style>) -- ditaruh di
@@ -1165,6 +1246,19 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .zeta-grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
 .zeta-card{background:var(--elev);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;justify-content:center;transition:border-color .2s, transform .2s}
 .zeta-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow-xs)}
+.zeta-signal-card{background:var(--elev);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;transition:transform .2s,box-shadow .2s;position:relative;}
+.zeta-signal-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3);border-color:var(--line-soft);}
+.zeta-signal-card.bull:hover{border-color:rgba(47,181,126,.3);box-shadow:0 8px 24px rgba(47,181,126,.15);}
+.zeta-signal-card.bear:hover{border-color:rgba(214,90,74,.3);box-shadow:0 8px 24px rgba(214,90,74,.15);}
+.zeta-mini-chart{width:100%;height:140px;border-bottom:1px solid var(--line);background:rgba(0,0,0,0.2);position:relative}
+.zeta-mini-chart .loader{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace}
+.zeta-sig-body{padding:14px;display:flex;flex-direction:column;gap:10px;}
+.zeta-sig-header{display:flex;justify-content:space-between;align-items:center;}
+.zeta-sig-tk{font-size:18px;font-weight:700;color:var(--text);font-family:'Space Grotesk',sans-serif;line-height:1}
+.zeta-sig-src{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;background:rgba(255,255,255,0.04);padding:3px 6px;border-radius:4px;border:1px solid var(--line)}
+.zeta-sig-row{display:flex;justify-content:space-between;font-size:11.5px;align-items:center}
+.zeta-sig-lbl{color:var(--muted);}
+.zeta-sig-val{color:var(--text);font-family:'JetBrains Mono',monospace;}
 .zeta-label{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
 .zeta-value{font-size:28px;font-weight:700;line-height:1;margin-bottom:6px;font-family:'Space Grotesk',sans-serif;letter-spacing:-0.5px;text-shadow:0 2px 12px rgba(0,0,0,0.4)}
 .zeta-value.green{color:var(--bull);text-shadow:0 2px 14px rgba(47,181,126,0.3)}
@@ -1181,6 +1275,14 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
    tak terbaca di panel gelap) */
 #auditFilter .chip{cursor:pointer;color:var(--text)}
 #auditFilter .chip.active{border-color:var(--gold);color:var(--gold)}
+/* Audit — tab lensa (segmented underline, bukan tumpukan panel). Cuma 1 pane
+   tampil sekaligus: memangkas scroll & jumlah chart yang dirender bersamaan. */
+.audit-tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 16px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.audit-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);padding:10px 15px;margin-bottom:-1px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:color .15s,border-color .15s}
+.audit-tab .icon{width:13px;height:13px;flex:none}
+.audit-tab:hover{color:var(--text)}
+.audit-tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+.audit-pane[hidden]{display:none}
 /* Forum Images */
 .forum-img-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .forum-img{max-width:100%;max-height:300px;border-radius:8px;object-fit:cover;border:1px solid var(--line);transition:transform 0.2s}
@@ -1207,7 +1309,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @keyframes splashTextPulse{0%,100%{opacity:1}50%{opacity:0.4}}
 @media(prefers-reduced-motion:reduce){.splash-content{animation:none;opacity:1}.splash-logo img,.splash-loader-line::after,.splash-loader-text{animation:none}}
 /* ===== LANDING PAGE HERO ===== */
-#landingHero{position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;transition:opacity .7s cubic-bezier(.4,0,.2,1),visibility .7s}
+#landingHero{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;transition:opacity .7s cubic-bezier(.4,0,.2,1),visibility .7s;padding-top:env(safe-area-inset-top,0)}
 #landingHero.hide{opacity:0;visibility:hidden;pointer-events:none}
 .landing-bg{position:fixed;inset:0;z-index:0;overflow:hidden}
 .landing-bg::before{content:"";position:absolute;top:-30%;left:50%;transform:translateX(-50%);width:140%;height:100%;background:radial-gradient(ellipse at 50% 0%, rgba(199,154,42,0.10) 0%, rgba(18,60,50,0.12) 30%, transparent 65%);pointer-events:none}
@@ -1219,7 +1321,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @keyframes landGlow1{0%{transform:translate(0,0) scale(1)}100%{transform:translate(30px,20px) scale(1.1)}}
 @keyframes landGlow2{0%{transform:translate(0,0) scale(1)}100%{transform:translate(-20px,30px) scale(1.15)}}
 @keyframes landGlow3{0%{transform:translate(0,0) scale(1)}100%{transform:translate(20px,-20px) scale(1.05)}}
-.landing-content{position:relative;z-index:2;max-width:900px;margin:0 auto;padding:120px 24px 60px;text-align:center;display:flex;flex-direction:column;align-items:center;min-height:100vh;justify-content:center}
+.landing-content{position:relative;z-index:2;max-width:900px;margin:0 auto;padding:120px 24px 60px;text-align:center;display:flex;flex-direction:column;align-items:center;min-height:100vh;justify-content:center;flex-shrink:0}
 .landing-badge{display:inline-flex;align-items:center;gap:10px;background:rgba(199,154,42,0.08);border:1px solid rgba(199,154,42,0.2);border-radius:100px;padding:8px 20px;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold);margin-bottom:36px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.1s;opacity:0}
 .landing-badge .dot{width:5px;height:5px;border-radius:50%;background:var(--gold);animation:landDotPulse 2s ease-in-out infinite}
 .landing-h1{font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:clamp(38px,7vw,72px);line-height:1.05;letter-spacing:-1px;color:var(--text);margin-bottom:8px;animation:landFadeUp .8s cubic-bezier(.16,1,.3,1) both;animation-delay:.25s;opacity:0}
@@ -1278,7 +1380,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 .landing-nav .ln-cta{display:inline-flex;align-items:center;gap:7px;padding:9px 18px;border-radius:9px;background:var(--gold);color:#0a1612;font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:13px;border:none;cursor:pointer;transition:transform .18s var(--ease-premium),box-shadow .18s}
 .landing-nav .ln-cta:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(199,154,42,.32)}
 /* --- kerangka seksi --- */
-.landing-section{position:relative;z-index:2;padding:clamp(64px,9vw,120px) clamp(18px,5vw,32px);max-width:1120px;margin:0 auto}
+.landing-section{position:relative;z-index:2;padding:clamp(64px,9vw,120px) clamp(18px,5vw,32px);max-width:1120px;margin:0 auto;flex-shrink:0}
 .lp-eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold);margin-bottom:18px}
 .lp-eyebrow::before{content:"";width:22px;height:1px;background:var(--gold-dim)}
 .lp-title{font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:clamp(28px,4.4vw,46px);line-height:1.08;letter-spacing:-.5px;color:var(--text);text-wrap:balance;margin-bottom:14px}
@@ -1388,6 +1490,26 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     </div>
   </div>
 </div>
+<script>
+/* Penutup splash — SENGAJA script kecil independen & DI ATAS (bukan menunggu
+   script utama ~530KB di bawah selesai diunduh/dieksekusi tanpa error).
+   BUG NYATA (laporan user, HP via ngrok): splash "MEMUAT DATA PASAR" nyangkut
+   lama. Penyebab: penutup splash lama ada di BARIS PALING BAWAH script utama,
+   jadi kalau script itu belum tuntas terunduh/terparse ATAU error di mana pun
+   sebelum baris itu, splash tak pernah ditutup. Timer di sini di-queue jauh
+   lebih awal & tak bergantung script utama: begitu main thread bebas (selesai
+   atau kena error), splash tetap memudar. */
+(function(){
+  function hideSplash(){
+    var s=document.getElementById('splashScreen');
+    if(!s)return;
+    s.style.opacity='0'; s.style.visibility='hidden';
+    setTimeout(function(){ if(s&&s.parentNode) s.parentNode.removeChild(s); },600);
+  }
+  setTimeout(hideSplash,1200);              // jalur utama: maksimal 1,2 dtk
+  window.addEventListener('load',hideSplash); // cadangan
+})();
+</script>
 <div id="landingHero">
   <div class="landing-bg">
     <div class="landing-glow landing-glow-1"></div>
@@ -1570,6 +1692,9 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     <span></span><span></span><span></span>
   </button>
 </div></header>
+<button id="mobBackBtn" class="mob-back-btn" aria-label="Kembali ke halaman sebelumnya" hidden>
+  <svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+</button>
 
 <!-- Mobile drawer -- isinya dirender renderNav() dari NAV_GROUPS -->
 <div class="mob-drawer" id="mobDrawer" onclick="closeMobMenu()">
@@ -2115,6 +2240,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="view" id="v-forum">
     <section class="panel">
       <p class="eyebrow">Forum — Tanya Jawab</p>
+      <p class="muted" style="font-size:13px;margin:2px 0 10px;line-height:1.55">Bingung baca sinyal, mau second opinion soal setup, atau nanya fitur? Lempar pertanyaanmu — dijawab komunitas & admin. Sebut kode saham (mis. <b style="color:var(--gold)">BBCA</b>) dan otomatis jadi link analisis.</p>
       <div class="note-wrap" style="margin:0 0 8px"><button type="button" class="note-toggle"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Tentang forum</button><div class="note-body">Tanya seputar analisis saham ke komunitas atau admin. Konten dari pengguna (tanpa akun/verifikasi identitas) — bukan nasihat investasi resmi, DYOR.</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn" id="forumNewBtn">+ Pertanyaan Baru</button>
@@ -2531,6 +2657,9 @@ function _applyRoute(v){
     view.classList.add('on','view-enter');
     window.scrollTo(0,0);
     _currentView=v;
+    // Tombol back mengambang: sembunyi di Beranda (tidak ada "sebelumnya"
+    // yang masuk akal dari titik masuk app), tampil di view lain manapun.
+    const mbb=$('#mobBackBtn');if(mbb)mbb.hidden=(v==='beranda');
     if(v==='beranda'&&!loaded.beranda){loaded.beranda=1;loadHome()}
     if(v==='ihsg'&&!loaded.ihsg){loaded.ihsg=1;showIhsg()}
     if(v==='makro'&&!loaded.makro){loaded.makro=1;loadMakro()}
@@ -2566,6 +2695,10 @@ function route(v){
   _applyRoute(v);
 }
 window.addEventListener('popstate',e=>{_applyRoute((e.state&&e.state.view)||'beranda')});
+// Tombol back mengambang (mobile, permintaan user langsung) -- reuse
+// history.back() SUPAYA sinkron persis dgn mekanisme popstate yang sama
+// dipakai hardware/gesture back, bukan mekanisme kedua yang bisa menyimpang.
+$('#mobBackBtn')?.addEventListener('click',()=>history.back());
 /* Deep-link: hormati hash di URL saat load (mis. share link /#pemegang
    harus mendarat di Pemegang, BUKAN Beranda) -- dulu hash langsung
    ditimpa #beranda tanpa pernah dibaca, jadi semua link share bentuk
@@ -3715,6 +3848,7 @@ $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});
 function _auditStatusColor(s){return s==='TP_HIT'?'var(--bull)':s==='SL_HIT'?'var(--bear)':(s==='EXPIRED'||s==='EXPIRED_NO_ENTRY')?'var(--muted)':s==='PENDING_ENTRY'?'var(--accent)':'var(--gold)'}
 function _auditStatusLabel(s){return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan',PENDING_ENTRY:'Menunggu Entry',EXPIRED_NO_ENTRY:'Entry Tidak Tercapai'}[s]||s}
 function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money'}[s]||s||'Top Pick'}
+function _entryModeBadge(mode){if(!mode)return '';return mode==='AGRESIF'?'<span class="entry-mode agresif">🚀 Agresif</span>':'<span class="entry-mode aman">🛡️ Area Aman</span>';}
 // YYYY-MM-DD lokal (BUKAN toISOString, itu UTC -- bisa mundur 1 hari dari
 // tanggal WIB sungguhan kalau dipakai sesudah tengah malam UTC/jam 7 pagi WIB).
 function _todayLocalStr(){return new Date().toLocaleDateString('sv-SE')}
@@ -3912,10 +4046,40 @@ async function loadSignalAudit(){
       pct=_tpLevelPct(s);
       sub=`Rp${fmt(s.entry_price)} → sempat TP${lv}, lalu SL`;
     }
-    return `<div class="decision-card glow-bull">
-      <div class="label">${s.kode} · ${_sourceLabel(s.source)}</div>
-      <div class="value" style="color:var(--bull)">${pct>=0?'+':''}${fmt(pct,2)}%</div>
-      <div class="sub">${sub}</div>
+    const isSell=s.direction==='SELL';
+    const tpSign=isSell?'-':'+';
+    const tpLevelFinal=s.status==='TP_HIT'?3:(s.tp_level_hit||0);
+    const tpRow=(n,price,pct)=>{
+      if(price==null||pct==null)return'';
+      const hit=tpLevelFinal>=n;
+      return `<div style="${hit?'':'opacity:.5'}">${hit?icon('check',{size:11})+' ':''}TP${n} Rp${fmt(price)} <span class="muted" style="font-size:9.5px">(${tpSign}${fmt(pct,1)}%)</span></div>`;
+    };
+
+    return `<div class="zeta-signal-card bull" data-k="${s.kode}" data-entry="${s.entry_price}" data-tp="${s.tp_price}" data-sl="${s.sl_price}" data-tp2="${s.tp2_price||''}" data-tp3="${s.tp3_price||''}" data-is-sell="${s.direction==='SELL'?1:0}" style="cursor:pointer">
+      <div class="zeta-mini-chart"><div class="loader">Memuat chart...</div></div>
+      <div class="zeta-sig-body">
+        <div class="zeta-sig-header">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span class="zeta-sig-tk">${tickerTag(s.kode)}</span>
+            ${s.direction==='SELL'?`<span style="font-size:9.5px;font-weight:700;color:var(--bear);border:1px solid var(--bear)55;border-radius:4px;padding:1px 5px;margin-left:5px">SELL</span>`:''}
+          </div>
+          <span class="zeta-sig-src">${_sourceLabel(s.source)}</span>
+        </div>
+        <div class="zeta-sig-row" style="margin-top:4px">
+          <span class="zeta-sig-lbl">Detail</span>
+          <span class="zeta-sig-val">${sub}</span>
+        </div>
+        <div class="zeta-sig-row" style="margin-top:4px;align-items:flex-start">
+          <span class="zeta-sig-lbl">Target (TP)</span>
+          <div style="text-align:right;color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">
+            ${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}
+          </div>
+        </div>
+        <div class="zeta-sig-row" style="margin-top:2px">
+          <span class="zeta-sig-lbl">Return</span>
+          <span class="zeta-sig-val" style="color:var(--bull);font-size:14px;font-weight:700">${pct>=0?'+':''}${fmt(pct,2)}%</span>
+        </div>
+      </div>
     </div>`;
   };
   const confirmed=signals.filter(s=>(s.tp_level_hit||0)>=1);
@@ -4086,15 +4250,6 @@ async function loadSignalAudit(){
   // memuat ulang HANYA panel ini via /api/signals/riwayat-harian?tanggal=
   // -- BUKAN loadSignalAudit() penuh, karena /api/signals lambat (~30an
   // detik, real-time price lookup per sinyal OPEN).
-  //
-  // SEMPAT dicoba jadi timeline semua-hari-sekaligus (permintaan user:
-  // "dari semua tanggal dong ... di jadiin perhari aja"), TAPI dibalikin
-  // lagi ke satu-hari + navigasi (permintaan user langsung sesudah lihat
-  // hasilnya: "tampilan yg tanggalnya kaya sebelumnya aja biar ga
-  // terlalu panjang ngescroll") -- isi tiap hari di sini CUKUP PANJANG
-  // (stats + banyak chip menang/kalah/naik/turun), beda dgn kartu Signal
-  // Confirmed yang lebih ringkas per item, jadi timeline-nya TETAP
-  // dipertahankan cuma di situ (lihat confirmedHtml di bawah).
   const rhHtml=`<section class="panel">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <p class="eyebrow" style="margin:0">${icon('calendar',{size:14})} Riwayat Harian</p>
@@ -4122,104 +4277,238 @@ async function loadSignalAudit(){
       </div>`;
     }).join('')}</div>
   </section>`:'';
+
   if(!signals.length){
     body.innerHTML=rhHtml+statsHtml+`<section class="panel">${emptyState('Belum ada sinyal tercatat.','calendar')}</section>`;
     _wireRiwayatHarianControls();
     animateStatCards(body);
     return;
   }
-  const rows=signals.map(s=>{
-    const tanggal=(s.recorded_at||'').slice(0,10);
-    const isOpen=s.status==='OPEN';
-    const isPending=s.status==='PENDING_ENTRY';
-    let retTxt,retColor,retSub='';
-    if(isPending){
-      // Belum ada posisi sungguhan -- BUKAN untung/rugi, cuma "tinggal
-      // berapa % lagi harga turun supaya kena entry yang disarankan".
-      if(s.distance_to_entry_pct!=null){
-        retTxt=(s.distance_to_entry_pct>=0?'+':'')+fmt(s.distance_to_entry_pct,2)+'%';
-        retColor='var(--accent)';
-        retSub=`<div class="muted" style="font-size:10px;font-style:italic">ke entry Rp${fmt(s.current_price)}</div>`;
-      }else{
-        retTxt='–';retColor='var(--muted)';
-      }
-    }else if(isOpen){
-      // floating: hasil BELUM final, cuma mark-to-market harga sekarang --
-      // jangan pernah dicampur visual dgn return_pct yang sudah final.
-      if(s.floating_anomaly){
-        // Harga live beda skala dari entry (indikasi stock split, kasus
-        // nyata RAJA 1:5 tampil "-79,55%") -- itu artefak skala harga,
-        // bukan rugi. Server sudah menolak menghitung %-nya
-        // (floating_return_pct null + flag ini); bilang apa adanya.
-        retTxt='–';retColor='var(--muted)';
-        retSub=`<div class="muted" style="font-size:10px;font-style:italic">indikasi split</div>`;
-      }else if(s.floating_return_pct!=null){
-        retTxt=(s.floating_return_pct>=0?'+':'')+fmt(s.floating_return_pct,2)+'%';
-        retColor=s.floating_return_pct>=0?'var(--bull)':'var(--bear)';
-        retSub=`<div class="muted" style="font-size:10px;font-style:italic">Rp${fmt(s.floating_price)}</div>`;
-      }else{
-        retTxt='–';retColor='var(--muted)';
-      }
-    }else{
-      retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
-      retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
+
+  // --- Filter & Pagination State ---
+  let auditViewMode = rsGet('rs_audit_view_mode', 'card');
+  let auditFilter = 'ALL';
+  let auditLimit = 12;
+  
+  const renderAuditList = () => {
+    let filtered = signals;
+    if(auditFilter !== 'ALL'){
+      if(auditFilter === 'EXPIRED') filtered = signals.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY');
+      // CONFIRMED = tp_level_hit>=1 di status apa pun (menggantikan panel
+      // "Signal Confirmed" yang dulu berdiri sendiri -- sekarang cuma satu
+      // klik filter di daftar yang sama, tidak menduplikasi kartu).
+      else if(auditFilter === 'CONFIRMED') filtered = signals.filter(s => (s.tp_level_hit||0) >= 1);
+      else filtered = signals.filter(s => s.status === auditFilter);
     }
-    // direction (BUY/SELL): tanda +/- pada TP/SL mengikuti ARAH HARGA,
-    // bukan untung/rugi -- BUY untung kalau harga naik (TP="+", SL="-"),
-    // SELL untung kalau harga turun (TP="-", SL="+"). Default 'BUY' utk
-    // baris lama/source yang murni long-only (TOP_PICK/MACD_CROSS).
-    const isSell=s.direction==='SELL';
-    const dirBadge=isSell?`<span style="font-size:9.5px;font-weight:700;color:var(--bear);border:1px solid var(--bear)55;border-radius:4px;padding:1px 5px;margin-left:5px">SELL</span>`:'';
-    const tpSign=isSell?'-':'+', slSign=isSell?'+':'-';
-    // Progres TP1/TP2/TP3: kena TP1/TP2 TIDAK menutup posisi (tetap OPEN),
-    // cuma naikkan tp_level_hit -- lihat core/signal_history.py::audit_open_signals.
-    const tpLevelFinal=s.status==='TP_HIT'?3:(s.tp_level_hit||0);
-    const tpRow=(n,price,pct)=>{
-      if(price==null||pct==null)return'';
-      const hit=tpLevelFinal>=n;
-      return `<div style="${hit?'':'opacity:.5'}">${hit?icon('check',{size:11})+' ':''}TP${n} Rp${fmt(price)} <span class="muted" style="font-size:9.5px">(${tpSign}${fmt(pct,1)}%)</span></div>`;
-    };
-    return `<tr data-k="${s.kode}" data-status="${s.status}" style="cursor:pointer">
-      <td class="tk">${tickerTag(s.kode)}${dirBadge}<div class="muted" style="font-size:10.5px;font-weight:400;margin-top:2px">${tanggal}</div></td>
-      <td class="hide-xs">${_sourceLabel(s.source)}</td>
-      <td>Rp${fmt(s.entry_price)}</td>
-      <td style="color:var(--bull)">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
-      <td class="hide-xs" style="color:var(--bear)">Rp${fmt(s.sl_price)}<div class="muted" style="font-size:10.5px">${slSign}${fmt(s.sl_pct,1)}%</div></td>
-      <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
-      <td style="text-align:right;color:${retColor}">${retTxt}<br>${retSub}</td></tr>`;
-  }).join('');
-  const filterChips = `
-    <div id="auditFilter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <span class="muted" style="font-size:12px;margin-right:4px">${icon('filter',{size:12})} Filter:</span>
-      <button class="chip active" data-f="ALL">Semua</button>
-      <button class="chip" data-f="PENDING_ENTRY">Belum Entry</button>
-      <button class="chip" data-f="OPEN">Sedang Berjalan</button>
-      <button class="chip" data-f="TP_HIT">TP Tercapai</button>
-      <button class="chip" data-f="SL_HIT">Kena SL</button>
-      <button class="chip" data-f="EXPIRED">Kadaluarsa</button>
-    </div>
-  `;
-  body.innerHTML=rhHtml+confirmedHtml+statsHtml+partialProgressHtml+bySourceHtml+`<section class="panel">
-    ${filterChips}
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th class="hide-xs">Sumber</th><th>Entry</th><th>Target TP</th><th class="hide-xs">Stop Loss</th><th>Status</th><th style="text-align:right">Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>
-  </section>`;
-  body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
-  staggerRows(body.querySelector('.ctable'), 12);
-  const tbody = body.querySelector('#auditTbody');
-  const fChips = body.querySelectorAll('#auditFilter .chip');
-  fChips.forEach(btn => {
-    btn.addEventListener('click', () => {
-      fChips.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const f = btn.dataset.f;
-      tbody.querySelectorAll('tr[data-status]').forEach(tr => {
-        const s = tr.dataset.status;
-        if (f === 'ALL') tr.style.display = '';
-        else if (f === 'EXPIRED') tr.style.display = (s === 'EXPIRED' || s === 'EXPIRED_NO_ENTRY') ? '' : 'none';
-        else tr.style.display = (s === f) ? '' : 'none';
-      });
+    
+    const isMore = auditLimit < filtered.length;
+    const toRender = filtered.slice(0, auditLimit);
+
+    const rows = toRender.map(s => {
+      const tanggal=(s.recorded_at||'').slice(0,10);
+      const isOpen=s.status==='OPEN';
+      const isPending=s.status==='PENDING_ENTRY';
+      let retTxt,retColor,retSub='';
+      if(isPending){
+        if(s.distance_to_entry_pct!=null){
+          retTxt=(s.distance_to_entry_pct>=0?'+':'')+fmt(s.distance_to_entry_pct,2)+'%';
+          retColor='var(--accent)';
+          retSub=`<div class="muted" style="font-size:10px;font-style:italic">ke entry Rp${fmt(s.current_price)}</div>`;
+        }else{
+          retTxt='–';retColor='var(--muted)';
+        }
+      }else if(isOpen){
+        if(s.floating_anomaly){
+          retTxt='–';retColor='var(--muted)';
+          retSub=`<div class="muted" style="font-size:10px;font-style:italic">indikasi split</div>`;
+        }else if(s.floating_return_pct!=null){
+          retTxt=(s.floating_return_pct>=0?'+':'')+fmt(s.floating_return_pct,2)+'%';
+          retColor=s.floating_return_pct>=0?'var(--bull)':'var(--bear)';
+          retSub=`<div class="muted" style="font-size:10px;font-style:italic">Rp${fmt(s.floating_price)}</div>`;
+        }else{
+          retTxt='–';retColor='var(--muted)';
+        }
+      }else{
+        retTxt=s.return_pct!=null?(s.return_pct>=0?'+':'')+fmt(s.return_pct,2)+'%':'–';
+        retColor=s.return_pct==null?'var(--muted)':s.return_pct>=0?'var(--bull)':'var(--bear)';
+      }
+
+      const isSell=s.direction==='SELL';
+      const dirBadge=isSell?`<span style="font-size:9.5px;font-weight:700;color:var(--bear);border:1px solid var(--bear)55;border-radius:4px;padding:1px 5px;margin-left:5px">SELL</span>`:'';
+      const tpSign=isSell?'-':'+', slSign=isSell?'+':'-';
+      const tpLevelFinal=s.status==='TP_HIT'?3:(s.tp_level_hit||0);
+      const tpRow=(n,price,pct)=>{
+        if(price==null||pct==null)return'';
+        const hit=tpLevelFinal>=n;
+        return `<div style="${hit?'':'opacity:.5'}">${hit?icon('check',{size:11})+' ':''}TP${n} Rp${fmt(price)} <span class="muted" style="font-size:9.5px">(${tpSign}${fmt(pct,1)}%)</span></div>`;
+      };
+
+      if(auditViewMode === 'table') {
+        return `<tr style="cursor:pointer" data-k="${s.kode}">
+          <td>${tickerTag(s.kode)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div></td>
+          <td class="hide-xs">${_sourceLabel(s.source)} ${dirBadge}</td>
+          <td>Rp${fmt(s.entry_price)}</td>
+          <td style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
+          <td style="color:var(--bear);font-family:'JetBrains Mono',monospace;font-size:11px">Rp${fmt(s.sl_price)} <div class="muted" style="font-size:9.5px">(${slSign}${fmt(s.sl_pct,1)}%)</div></td>
+          <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
+          <td style="text-align:right"><b style="color:${retColor};font-size:14px">${retTxt}</b>${retSub}</td>
+        </tr>`;
+      }
+
+      return `<div class="zeta-signal-card" data-k="${s.kode}" data-status="${s.status}" data-entry="${s.entry_price}" data-tp="${s.tp_price}" data-tp2="${s.tp2_price||''}" data-tp3="${s.tp3_price||''}" data-sl="${s.sl_price}" data-is-sell="${isSell?1:0}" style="cursor:pointer">
+        <div class="zeta-mini-chart"><div class="loader">Memuat chart...</div></div>
+        <div class="zeta-sig-body">
+          <div class="zeta-sig-header">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="zeta-sig-tk">${tickerTag(s.kode)}</span>
+              ${dirBadge}
+            </div>
+            <span class="zeta-sig-src">${_sourceLabel(s.source)}</span>
+          </div>
+          <div class="zeta-sig-row" style="margin-top:4px">
+            <span class="zeta-sig-lbl">Entry</span>
+            <span class="zeta-sig-val">Rp${fmt(s.entry_price)}</span>
+          </div>
+          <div class="zeta-sig-row" style="margin-top:4px;align-items:flex-start">
+            <span class="zeta-sig-lbl">Target (TP)</span>
+            <div style="text-align:right;color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">
+              ${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}
+            </div>
+          </div>
+          <div class="zeta-sig-row">
+            <span class="zeta-sig-lbl">Status</span>
+            <span class="zeta-sig-val" style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</span>
+          </div>
+          <div class="zeta-sig-row">
+            <span class="zeta-sig-lbl">Return</span>
+            <span class="zeta-sig-val" style="color:${retColor};font-size:14px;font-weight:700">${retTxt}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+    const filterChips = `
+      <div id="auditFilter" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:center;justify-content:space-between">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span class="muted" style="font-size:12px;margin-right:4px">${icon('filter',{size:12})} Filter:</span>
+          <button class="chip ${auditFilter==='ALL'?'active':''}" data-f="ALL">Semua</button>
+          <button class="chip ${auditFilter==='CONFIRMED'?'active':''}" data-f="CONFIRMED">Confirmed (TP1+)</button>
+          <button class="chip ${auditFilter==='PENDING_ENTRY'?'active':''}" data-f="PENDING_ENTRY">Belum Entry</button>
+          <button class="chip ${auditFilter==='OPEN'?'active':''}" data-f="OPEN">Sedang Berjalan</button>
+          <button class="chip ${auditFilter==='TP_HIT'?'active':''}" data-f="TP_HIT">TP Tercapai</button>
+          <button class="chip ${auditFilter==='SL_HIT'?'active':''}" data-f="SL_HIT">Kena SL</button>
+          <button class="chip ${auditFilter==='EXPIRED'?'active':''}" data-f="EXPIRED">Kadaluarsa</button>
+        </div>
+        <div style="display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:8px;border:1px solid var(--line-soft)">
+          <button class="chip ${auditViewMode==='card'?'active':''}" data-v="card" style="margin:0;padding:5px 12px;border:none">${icon('layers',{size:12})} Kartu</button>
+          <button class="chip ${auditViewMode==='table'?'active':''}" data-v="table" style="margin:0;padding:5px 12px;border:none">${icon('sliders',{size:12})} Tabel</button>
+        </div>
+      </div>
+    `;
+
+    const listHtml = auditViewMode === 'table' ? 
+      `<div style="overflow-x:auto"><table class="ctable" style="width:100%"><thead><tr><th>Saham</th><th class="hide-xs">Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th style="text-align:right">Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>` : 
+      `<div class="decision-grid" id="auditTbody">${rows}</div>`;
+
+    const loadMoreHtml = isMore ? `<div style="text-align:center;margin-top:24px"><button class="btn ghost" id="btnLoadMoreAudit" style="width:100%;max-width:320px;border:1px solid var(--line);padding:10px">Muat Lebih Banyak &darr;</button></div>` : '';
+
+    $('#auditDynamicPanel').innerHTML = filterChips + listHtml + loadMoreHtml;
+
+    // Attach row/card clicks
+    $('#auditDynamicPanel').querySelectorAll(auditViewMode === 'table' ? 'tr[data-k]' : '.zeta-signal-card[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+    
+    // Attach filter clicks
+    $('#auditDynamicPanel').querySelectorAll('#auditFilter .chip[data-f]').forEach(btn => {
+      btn.addEventListener('click', () => { auditFilter = btn.dataset.f; auditLimit = 12; renderAuditList(); });
     });
-  });
+    
+    // Attach view mode clicks
+    $('#auditDynamicPanel').querySelectorAll('#auditFilter .chip[data-v]').forEach(btn => {
+      btn.addEventListener('click', () => { auditViewMode = btn.dataset.v; localStorage.setItem('rs_audit_view_mode', auditViewMode); auditLimit = 12; renderAuditList(); });
+    });
+
+    // Attach load more
+    if(isMore) $('#btnLoadMoreAudit').addEventListener('click', () => { auditLimit += 12; renderAuditList(); });
+
+    // Stagger animation and IntersectionObserver (charts)
+    staggerRows($('#auditTbody'), auditViewMode === 'card' ? 12 : 20);
+
+    if(auditViewMode === 'card') {
+      const io = new IntersectionObserver((entries, obs) => {
+        entries.forEach(ent => {
+          if(ent.isIntersecting) {
+            obs.unobserve(ent.target);
+            const card = ent.target;
+            const kode = card.dataset.k;
+            const entry = parseFloat(card.dataset.entry);
+            const tp = parseFloat(card.dataset.tp);
+            const tp2 = parseFloat(card.dataset.tp2);
+            const tp3 = parseFloat(card.dataset.tp3);
+            const sl = parseFloat(card.dataset.sl);
+            const chartDiv = card.querySelector('.zeta-mini-chart');
+            if(!chartDiv || !kode) return;
+            api('/api/ohlc/'+kode+'?days=40').then(data => {
+              chartDiv.innerHTML = '';
+              if(!data.candles || !window.LightweightCharts) return;
+              const chart = LightweightCharts.createChart(chartDiv, {
+                width: chartDiv.clientWidth || 280, height: chartDiv.clientHeight || 140,
+                layout: { background: { color: 'transparent' }, textColor: '#9AA69F', fontFamily: 'JetBrains Mono' },
+                grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(33,56,50,0.5)' } },
+                rightPriceScale: { visible: false }, timeScale: { visible: false, rightOffset: 3 },
+                crosshair: { mode: 0 }
+              });
+              const series = chart.addCandlestickSeries({ upColor: '#2FB57E', downColor: '#D65A4A', borderVisible: false, wickUpColor: '#2FB57E', wickDownColor: '#D65A4A' });
+              series.setData(data.candles);
+              if(!isNaN(entry)) series.createPriceLine({ price: entry, color: '#3a82f7', lineWidth: 1, lineStyle: 2, title: 'Entry' });
+              if(!isNaN(tp)) series.createPriceLine({ price: tp, color: '#2FB57E', lineWidth: 1, lineStyle: 2, title: 'TP1' });
+              if(!isNaN(tp2)) series.createPriceLine({ price: tp2, color: '#2FB57E', lineWidth: 1, lineStyle: 2, title: 'TP2' });
+              if(!isNaN(tp3)) series.createPriceLine({ price: tp3, color: '#2FB57E', lineWidth: 1, lineStyle: 2, title: 'TP3' });
+              if(!isNaN(sl)) series.createPriceLine({ price: sl, color: '#D65A4A', lineWidth: 1, lineStyle: 2, title: 'SL' });
+              chart.timeScale().fitContent();
+              // ResizeObserver dihapus untuk mini-chart karena memicu infinite loop
+              // layout thrashing di mobile (canvas merubah lebar container -> RO trigger lagi)
+            }).catch(() => { chartDiv.innerHTML = '<div class="loader">Gagal</div>'; });
+          }
+        });
+      }, { rootMargin: '200px' });
+      $('#auditDynamicPanel').querySelectorAll('.zeta-signal-card').forEach(c => io.observe(c));
+      // IntersectionObserver TIDAK fire callback awal utk kartu yang baru
+      // terlihat (pane hidden->show, atau ganti filter/view) sampai ada
+      // recompute intersection -- terbukti di verifikasi: tanpa scroll,
+      // mini-chart layar pertama kosong permanen. Nudge scroll 1px yang
+      // BERTAHAN 1 frame lalu balik ke posisi semula (imperceptible)
+      // memaksa IO menghitung ulang -> chart layar pertama termuat tanpa
+      // menunggu user scroll dulu.
+      requestAnimationFrame(()=>{const y=window.scrollY;window.scrollTo(0,y+1);requestAnimationFrame(()=>window.scrollTo(0,y));});
+    }
+  };
+
+  // Empat lensa jadi TAB (bukan tumpukan 7 panel) -- cuma 1 tampil sekaligus.
+  // Ringkasan default (jawab "kredibel gak?" tanpa scroll). Panel "Signal
+  // Confirmed" & "Partial Progress" yang dulu berdiri sendiri DIHAPUS dari
+  // tumpukan: fungsinya pindah ke filter "Confirmed (TP1+)" di tab Sinyal
+  // (tidak lagi menduplikasi kartu) & rekap per-tanggal di tab Harian.
+  const _atab=(id,ic,label,active)=>`<button class="audit-tab${active?' active':''}" data-tab="${id}">${icon(ic,{size:13})} ${label}</button>`;
+  const tabsHtml=`<div class="audit-tabs">${_atab('ringkasan','activity','Ringkasan',true)}${_atab('sinyal','layers','Semua Sinyal',false)}${_atab('harian','calendar','Harian',false)}${bySourceHtml?_atab('teori','bar-chart','Per Teori',false):''}</div>`;
+  body.innerHTML=tabsHtml
+    +`<div class="audit-pane" data-pane="ringkasan">${statsHtml}</div>`
+    +`<div class="audit-pane" data-pane="sinyal" hidden><section class="panel" id="auditDynamicPanel"></section></div>`
+    +`<div class="audit-pane" data-pane="harian" hidden>${rhHtml}</div>`
+    +(bySourceHtml?`<div class="audit-pane" data-pane="teori" hidden>${bySourceHtml}</div>`:'');
+  let _sinyalRendered=false;
+  const _showAuditTab=(name)=>{
+    body.querySelectorAll('.audit-tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));
+    body.querySelectorAll('.audit-pane').forEach(p=>{p.hidden=(p.dataset.pane!==name)});
+    // Daftar sinyal dirender BARU saat tab-nya pertama dibuka -- kartu
+    // di-observe dalam keadaan TERLIHAT supaya IntersectionObserver benar
+    // memicu load mini-chart. Kalau dirender saat pane masih display:none,
+    // kartu tak punya layout -> IO tak pernah fire -> mini-chart kosong
+    // (terbukti di verifikasi: 12 kartu, 0 canvas). Chart equity/P&L di tab
+    // Ringkasan tetap aman (Ringkasan default terlihat + ResizeObserver).
+    if(name==='sinyal' && !_sinyalRendered){ _sinyalRendered=true; renderAuditList(); }
+  };
+  body.querySelectorAll('.audit-tab').forEach(tb=>tb.addEventListener('click',()=>_showAuditTab(tb.dataset.tab)));
+
   _wireRiwayatHarianControls();
   if(zetaCharts&&window.LightweightCharts){
     // BUG NYATA (screenshot user): /api/signals lambat (~30 dtk) -- kalau
@@ -4238,10 +4527,17 @@ async function loadSignalAudit(){
         rightPriceScale:{borderVisible:false},timeScale:{borderVisible:false}});
       mount(chart);
       chart.timeScale().fitContent();
-      new ResizeObserver(()=>{
-        if(!cont.clientWidth)return;
-        chart.applyOptions({width:cont.clientWidth});
-        chart.timeScale().fitContent();
+      let lastW = 0, resizeTimeout;
+      new ResizeObserver((entries)=>{
+        const w = entries[0].contentRect.width;
+        if(w && Math.abs(w - lastW) > 1) {
+          clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(() => {
+            lastW = w;
+            chart.applyOptions({width:w});
+            chart.timeScale().fitContent();
+          }, 150);
+        }
       }).observe(cont);
     };
     if(zetaCharts.equity.length)_zetaChart('zetaEquityChart',c=>c.addLineSeries({color:'#C79A2A',lineWidth:2,crosshairMarkerRadius:4}).setData(zetaCharts.equity));
@@ -4278,6 +4574,11 @@ let _forumCurrentThreadId=null;
 // satu-satunya yang memvalidasi) -- sama pola dgn map label lain di file
 // ini (mis. REC_ICON), bukan fetch terpisah utk 5 label tetap.
 const FORUM_KATEGORI={umum:'Umum',pertanyaan:'Pertanyaan',teknikal:'Analisis Teknikal',fundamental:'Analisis Fundamental',fitur:'Fitur Website'};
+// Warna aksen per kategori utk garis kiri kartu thread -- murni visual
+// (server tetap sumber kebenaran kategori). Fallback ke muted kalau slug
+// tak dikenal supaya kartu tak pernah kehilangan aksen.
+const FORUM_KAT_COLOR={umum:'#9AA69F',pertanyaan:'#C79A2A',teknikal:'#2FB57E',fundamental:'#5B9BD5',fitur:'#A78BDA'};
+function _forumKatColor(k){return FORUM_KAT_COLOR[k]||FORUM_KAT_COLOR.umum}
 
 function _forumFmtDate(iso){
   const d=new Date((iso||'').replace(' ','T'));
@@ -4524,9 +4825,27 @@ function _forumWireFilterBar(){
 
 async function loadForum(){
   const body=$('#forumBody');
-  body.innerHTML=_forumFilterBarHtml()+'<div id="forumList"></div>';
+  body.innerHTML='<div id="forumStats"></div>'+_forumFilterBarHtml()+'<div id="forumList"></div>';
   _forumWireFilterBar();
+  _forumRenderStats();// non-blocking: strip terisi begitu angka datang
   await _forumFetchList();
+}
+
+// Strip "denyut komunitas" -- social proof supaya forum terasa hidup.
+// Global (tidak ikut filter). Gagal diam-diam: kalau /stats error, strip
+// dibiarkan kosong drpd menampilkan error yang mengganggu daftar thread.
+async function _forumRenderStats(){
+  const el=$('#forumStats'); if(!el)return;
+  let s; try{s=await api('/api/forum/stats')}catch(e){return}
+  const pct=s.threads?Math.round(s.answered/s.threads*100):0;
+  const tile=(ic,val,lbl)=>`<div class="forum-stat"><div class="fs-ic">${icon(ic,{size:17})}</div><div><div class="fs-val" data-animate="${val}|0">0</div><div class="fs-lbl">${lbl}</div></div></div>`;
+  el.innerHTML=`<div class="forum-stats">
+    ${tile('message-square',s.threads,'Pertanyaan')}
+    ${tile('check-circle',s.answered,`Terjawab · ${pct}%`)}
+    ${tile('thumbs-up',s.replies,'Total Balasan')}
+    ${tile('user',s.contributors,'Kontributor')}
+  </div>`;
+  animateStatCards(el);
 }
 
 async function _forumFetchList(){
@@ -4542,18 +4861,30 @@ async function _forumFetchList(){
   if(!threads.length){
     list.innerHTML=`<section class="panel">${emptyState('Belum ada pertanyaan yang cocok. Coba filter lain atau jadilah yang pertama bertanya!','message-square')}</section>`;
   }else{
-    const rows=threads.map(t=>`<div class="panel" data-tid="${t.id}" style="cursor:pointer">
-      <div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap">
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:700">${_forumLinkTickers(escHtml(t.judul),t.tickers)}</div>
-          <div class="muted" style="font-size:12px;margin-top:3px">${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)} · <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span> · ${_forumKategoriBadge(t.kategori)}</div>
+    const rows=threads.map(t=>{
+      const answered=t.reply_count>0;
+      const snippet=(t.isi||'').replace(/\s+/g,' ').trim().slice(0,180);
+      const status=answered
+        ? `<span class="forum-status answered">${icon('check-circle',{size:11})} Terjawab</span>`
+        : `<span class="forum-status pending">Belum dijawab</span>`;
+      return `<div class="panel forum-card" data-tid="${t.id}" style="cursor:pointer">
+        <span class="fc-accent" style="background:${_forumKatColor(t.kategori)}"></span>
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${_forumKategoriBadge(t.kategori)}${status}</div>
+            <div style="font-weight:700;font-size:15px;line-height:1.35;margin-top:6px">${_forumLinkTickers(escHtml(t.judul),t.tickers)}</div>
+            ${snippet?`<div class="forum-snippet">${_forumLinkTickers(escHtml(snippet),t.tickers)}</div>`:''}
+            <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+              <span>${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)}</span>
+              <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span>
+              <span class="forum-metric">${icon('message-square',{size:12})} ${t.reply_count}</span>
+              ${t.total_upvotes>0?`<span class="forum-metric">${icon('thumbs-up',{size:12})} ${t.total_upvotes}</span>`:''}
+            </div>
+          </div>
+          ${t.images && t.images.length ? `<img src="${escHtml(t.images[0])}" style="width:52px;height:52px;object-fit:cover;border-radius:8px;background:var(--panel2);border:1px solid var(--line)" alt="Thumb">` : ''}
         </div>
-        <div style="display:flex;gap:6px;align-items:center">
-          ${t.images && t.images.length ? `<img src="${escHtml(t.images[0])}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;background:var(--panel2);border:1px solid var(--line)" alt="Thumb">` : ''}
-          <span class="chip" style="font-size:11px;white-space:nowrap">${icon('message-square',{size:11})} ${t.reply_count}</span>
-        </div>
-      </div>
-    </div>`).join('');
+      </div>`;
+    }).join('');
     list.innerHTML=`<div style="display:flex;flex-direction:column;gap:10px">${rows}</div>`;
     list.querySelectorAll('[data-tid]').forEach(el=>el.addEventListener('click',()=>renderForumThread(el.dataset.tid)));
     staggerPanels(list,40);
@@ -7225,6 +7556,25 @@ function _forumFollows(){try{return JSON.parse(rsGet('rs_forum_follows')||'{}')}
 function _forumFollowThread(tid,lastReplyId){
   const f=_forumFollows();f[String(tid)]=lastReplyId||0;
   rsSet('rs_forum_follows',JSON.stringify(f));
+  _syncForumFollowsToServer(); // best-effort, no-op kalau push belum aktif
+}
+/* Cerminkan rs_forum_follows (localStorage) ke server -- TANPA ini, push
+   forum server-side (_forum_push_loop di web/app.py) tidak tahu thread
+   mana yang harus dipantau utk endpoint ini, jadi balasan forum baru TIDAK
+   PERNAH ter-push saat app tertutup (celah nyata yang diperbaiki --
+   sebelumnya forum HANYA lewat poll klien 45 detik yang mati kalau tab
+   tertutup). Diam-diam gagal (best-effort, notifikasi bukan fitur kritis)
+   kalau push belum aktif / SW belum siap / offline. */
+async function _syncForumFollowsToServer(){
+  try{
+    if(rsGet('rs_notif_browser')!=='1')return;
+    if(!('serviceWorker'in navigator))return;
+    const reg=await navigator.serviceWorker.ready;
+    const sub=await reg.pushManager.getSubscription();
+    if(!sub)return;
+    await fetch('/api/push/sync-forum-follows',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({endpoint:sub.endpoint,follows:_forumFollows()})});
+  }catch(e){/* diam -- best-effort */}
 }
 function _notifPushToQueue(items){
   // items terbaru di depan; dedup via key unik supaya poll berulang tidak
@@ -7244,12 +7594,76 @@ function _updateNotifBadge(){
   else{badge.hidden=true;btn.classList.remove('has-new')}
 }
 function _maybeBrowserNotif(title,body){
-  // Notifikasi OS hanya kalau user sudah kasih izin (tombol lonceng) DAN
-  // tab sedang tidak fokus (kalau lagi lihat web, toast in-app sudah cukup).
+  // Notifikasi OS kalau user sudah kasih izin (tombol lonceng) & browser
+  // mendukung. CATATAN: guard "visibilityState!=='visible'" DIHAPUS -- dulu
+  // bikin notif OS TIDAK PERNAH terpicu, karena polling HANYA jalan saat tab
+  // visible sementara guard itu MENOLAK saat visible (kontradiktif). Di
+  // Safari iOS tab biasa Notification API tak jalan (butuh PWA Add to Home
+  // Screen 16.4+); di Android/desktop/PWA terpasang, ini muncul.
   if(rsGet('rs_notif_browser')!=='1')return;
   if(!('Notification'in window)||Notification.permission!=='granted')return;
-  if(document.visibilityState==='visible')return;
   try{new Notification(title,{body,icon:'/icon-192.png',silent:false})}catch(e){}
+}
+/* --- Bunyi notifikasi (permintaan user: "pas ada notifikasi bunyiin di
+   hp"). Web Audio -- nada pendek dua nada, TANPA file eksternal, jadi kebal
+   di Safari iOS tab sekalipun. Mobile memblokir audio sampai ada interaksi
+   user, jadi AudioContext di-unlock (dibuat/di-resume) pada sentuhan
+   PERTAMA. Bekerja SELAMA app terbuka. Bisa dimatikan (rs_notif_sound='0'). */
+let _audioCtx=null;
+function _unlockAudio(){
+  if(_audioCtx)return;
+  try{_audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(_audioCtx.state==='suspended')_audioCtx.resume();}catch(e){}
+}
+document.addEventListener('pointerdown',_unlockAudio,{once:true});
+document.addEventListener('touchstart',_unlockAudio,{once:true});
+function _notifSound(){
+  if(rsGet('rs_notif_sound')==='0')return;
+  try{
+    const ctx=_audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    _audioCtx=ctx; if(ctx.state==='suspended')ctx.resume();
+    const now=ctx.currentTime;
+    [[880,0],[1174.66,0.13]].forEach(([f,t])=>{  // A5 -> D6, chime pendek
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.type='sine';o.frequency.value=f;
+      g.gain.setValueAtTime(0.0001,now+t);
+      g.gain.exponentialRampToValueAtTime(0.2,now+t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,now+t+0.22);
+      o.connect(g);g.connect(ctx.destination);
+      o.start(now+t);o.stop(now+t+0.24);
+    });
+  }catch(e){}
+}
+/* --- Web Push: langganan supaya notifikasi tetap masuk KE HP walau app
+   TERTUTUP (beda dari _maybeBrowserNotif yang cuma jalan saat app terbuka).
+   Butuh HTTPS (ngrok OK) + service worker + izin Notification. Di iPhone
+   HANYA jalan kalau app di-Add to Home Screen (PWA), iOS 16.4+. --- */
+function _urlB64ToUint8(b64){
+  const pad='='.repeat((4-b64.length%4)%4);
+  const s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(s),arr=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);
+  return arr;
+}
+async function _subscribePush(){
+  try{
+    if(!('serviceWorker'in navigator)||!('PushManager'in window))return false;
+    if(!('Notification'in window)||Notification.permission!=='granted')return false;
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub){
+      const r=await api('/api/push/public-key');
+      if(!r||!r.key)return false;
+      sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:_urlB64ToUint8(r.key)});
+    }
+    const resp=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});
+    if(resp.ok){
+      rsSet('rs_push_on','1');
+      _syncForumFollowsToServer(); // baseline: thread yg SUDAH diikuti sebelum push aktif ikut ke-sync
+      return true;
+    }
+    return false;
+  }catch(e){return false}
 }
 async function _pollNotifications(silent){
   // silent=true saat poll pertama pas load: TIDAK memunculkan toast utk
@@ -7271,6 +7685,7 @@ async function _pollNotifications(silent){
       rsSet('rs_notif_sig_seen',String(sd.latest_id||sigSeen));
       if(added&&!silent){
         toast(`${added} sinyal baru masuk Audit Sinyal`,'info');
+        _notifSound();
         _maybeBrowserNotif('Ranah Saham — sinyal baru',`${fresh[0].title} (${fresh[0].sub})`);
       }
     }
@@ -7295,6 +7710,7 @@ async function _pollNotifications(silent){
           const added=_notifPushToQueue(freshReplies);
           if(added&&!silent){
             toast('Ada balasan baru di forum','info');
+            _notifSound();
             _maybeBrowserNotif('Ranah Saham — balasan forum',freshReplies[0].sub);
           }
         }
@@ -7314,8 +7730,19 @@ function _renderNotifPanel(){
         <span class="ni-body"><span class="ni-title">${escHtml(n.title)}</span><span class="ni-sub">${escHtml(n.sub)}</span></span>
       </button>`).join('')
     :`<div class="notif-empty">Belum ada notifikasi.<br>Sinyal baru & balasan forummu akan muncul di sini.</div>`;
-  return `<div class="notif-head"><b>Notifikasi</b>${q.length?'<button id="notifClear">Tandai terbaca</button>':''}</div>
-    <div class="notif-list">${list}</div>${perm}`;
+  const soundOn=rsGet('rs_notif_sound')!=='0';
+  // Petunjuk iOS: Safari tab TIDAK bisa notifikasi OS -- hanya PWA terpasang.
+  const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent);
+  const standalone=window.navigator.standalone===true||(window.matchMedia&&matchMedia('(display-mode: standalone)').matches);
+  const iosHint=(isIOS&&!standalone)?`<div class="notif-perm">Di iPhone (Safari, Chrome, browser apa pun — semua wajib pakai mesin Safari di iOS), notifikasi HP hanya muncul kalau app ditambahkan ke Layar Utama lewat <b>Safari</b> (tombol Bagikan → <b>Tambah ke Layar Utama</b>), lalu dibuka dari ikonnya — "Tambah ke Layar Utama" di Chrome iOS TIDAK memberi kemampuan ini. Bunyi tetap berfungsi di tab browser mana pun selama app dibuka.</div>`:'';
+  const testBtn=rsGet('rs_push_on')==='1'?`<div class="notif-perm"><button class="btn ghost" id="notifTestBtn" style="width:100%">Kirim notifikasi tes ke HP</button></div>`:'';
+  return `<div class="notif-head"><b>Notifikasi</b>
+      <span style="display:flex;gap:12px;align-items:center">
+        <button id="notifSoundToggle" title="${soundOn?'Bunyi notifikasi: aktif':'Bunyi notifikasi: mati'}" style="opacity:${soundOn?1:.4};display:inline-flex;align-items:center">${icon('bell',{size:14})}</button>
+        ${q.length?'<button id="notifClear">Tandai terbaca</button>':''}
+      </span>
+    </div>
+    <div class="notif-list">${list}</div>${perm}${iosHint}${testBtn}`;
 }
 let _notifPanelEl=null;
 function _toggleNotifPanel(){
@@ -7335,8 +7762,33 @@ function _toggleNotifPanel(){
   }));
   const clr=el.querySelector('#notifClear');if(clr)clr.addEventListener('click',()=>{_notifSetQueue([]);_updateNotifBadge();_toggleNotifPanel()});
   const pb=el.querySelector('#notifPermBtn');if(pb)pb.addEventListener('click',async()=>{
-    try{const p=await Notification.requestPermission();if(p==='granted'){rsSet('rs_notif_browser','1');toast('Notifikasi browser aktif.','ok')}else{toast('Izin notifikasi ditolak.','err')}}catch(e){}
+    try{
+      const p=await Notification.requestPermission();
+      if(p==='granted'){
+        rsSet('rs_notif_browser','1');
+        const pushed=await _subscribePush();  // langganan push -> masuk walau app tertutup
+        toast(pushed?'Notifikasi HP aktif — masuk walau app tertutup.':'Notifikasi browser aktif.','ok');
+      }else{toast('Izin notifikasi ditolak.','err')}
+    }catch(e){}
     _toggleNotifPanel();
+  });
+  const tb=el.querySelector('#notifTestBtn');if(tb)tb.addEventListener('click',async(e)=>{
+    e.stopPropagation();
+    const old=tb.textContent;tb.disabled=true;tb.textContent='Mengirim…';
+    try{
+      const r=await fetch('/api/push/test',{method:'POST'}).then(x=>x.json());
+      toast(r.sent?`Notifikasi tes terkirim ke ${r.sent} perangkat.`:'Belum ada perangkat terdaftar (aktifkan dulu) / gagal.',r.sent?'ok':'err');
+    }catch(e2){toast('Gagal kirim tes.','err')}
+    tb.disabled=false;tb.textContent=old;
+  });
+  const st=el.querySelector('#notifSoundToggle');if(st)st.addEventListener('click',e=>{
+    e.stopPropagation();
+    const newOn=(rsGet('rs_notif_sound')==='0'); // sedang mati -> nyalakan
+    rsSet('rs_notif_sound',newOn?'1':'0');
+    if(newOn){_unlockAudio();_notifSound();}     // tes bunyi saat dinyalakan
+    st.style.opacity=newOn?1:.4;
+    st.title=newOn?'Bunyi notifikasi: aktif':'Bunyi notifikasi: mati';
+    toast(newOn?'Bunyi notifikasi aktif.':'Bunyi notifikasi dimatikan.','info');
   });
 }
 (function(){
@@ -7347,6 +7799,7 @@ function _toggleNotifPanel(){
   _updateNotifBadge();
   // poll pertama silent (tetapkan baseline), lalu berkala saat tab terlihat
   _pollNotifications(true);
+  if(rsGet('rs_notif_browser')==='1')_subscribePush(); // segarkan langganan push tiap load
   setInterval(()=>{if(document.visibilityState==='visible')_pollNotifications(false)},NOTIF_POLL_MS);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')_pollNotifications(false)});
 })();

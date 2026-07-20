@@ -27,3 +27,6 @@ pillow>=10.0
 # Membaca Excel daftar emiten (data/saham.xlsx)
 openpyxl>=3.1
 redis>=5.0.0
+
+# Web Push (notifikasi HP walau app tertutup) — VAPID + enkripsi payload
+pywebpush>=2.0.0

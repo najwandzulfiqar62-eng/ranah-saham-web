@@ -1469,6 +1469,110 @@ def test_record_top_picks_falls_back_to_live_price_when_no_scenario_entry(clean_
     assert by_kode["ZZNOENTRYSCEN"]["entry_price"] == 1042.0  # fallback ke harga real-time
 
 
+def _synthetic_ohlcv(closes, volumes=None):
+    import pandas as pd
+    n = len(closes)
+    idx = pd.date_range("2026-01-01", periods=n, freq="D")
+    vol = volumes if volumes is not None else [1_000_000] * n
+    return pd.DataFrame({
+        "Open": closes,
+        "High": [c * 1.01 for c in closes],
+        "Low": [c * 0.99 for c in closes],
+        "Close": closes,
+        "Volume": vol,
+    }, index=idx)
+
+
+def test_classify_entry_mode_breakout_volume_is_agresif_regardless_of_stochrsi():
+    """Keputusan user (kalibrasi): breakout + volume >2x -> AGRESIF TANPA
+    gate StochRSI. Uptrend kuat bikin StochRSI mentok ~100; Path 1 tetap
+    HARUS AGRESIF (StochRSI overbought bukan alasan blokir saat breakout)."""
+    from core.trading_plan import classify_entry_mode
+    closes = [100 + i for i in range(60)]  # uptrend -> StochRSI pin tinggi
+    df = _synthetic_ohlcv(closes)
+    assert classify_entry_mode(df, is_breakout=True, volume_confirmation=True) == "AGRESIF"
+
+
+def test_classify_entry_mode_breakout_without_volume_not_forced_agresif():
+    """Breakout TANPA konfirmasi volume tidak otomatis AGRESIF via Path 1 --
+    jatuh ke Path 2 (momentum konfluent). Downtrend jelas -> AREA_AMAN."""
+    from core.trading_plan import classify_entry_mode
+    closes = [160 - i for i in range(60)]  # downtrend jelas
+    df = _synthetic_ohlcv(closes)
+    assert classify_entry_mode(df, is_breakout=True, volume_confirmation=False) == "AREA_AMAN"
+
+
+def test_classify_entry_mode_insufficient_data_is_area_aman():
+    """Guard: < 50 baris -> AREA_AMAN (default aman), walau flag breakout/
+    volume di-set -- data tak cukup utk menilai momentum dgn yakin."""
+    from core.trading_plan import classify_entry_mode
+    df = _synthetic_ohlcv([100 + i for i in range(30)])
+    assert classify_entry_mode(df, is_breakout=True, volume_confirmation=True) == "AREA_AMAN"
+
+
+def test_record_top_picks_agresif_opens_immediately(clean_signal_db):
+    """Permintaan user 'masuk langsung ketika agresif ... BREAKOUT KADANG
+    FAKE': sinyal ber-entry_mode AGRESIF dicatat LANGSUNG sbg OPEN (posisi
+    aktif di harga market saat itu juga) dgn entry_filled_at terisi -- BUKAN
+    PENDING_ENTRY yang menunggu pullback. Validasi entry-pullback (skip kalau
+    entry >= harga live) TIDAK berlaku utk AGRESIF (entry-nya memang di market)."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    item = {
+        **_fake_confidence_item("ZZAGR", MIN_SCORE_TO_RECORD + 5, harga=1000.0),
+        "entry_price": 1000.0,  # skenario 'normal' -> entry = harga market
+        "entry_mode": "AGRESIF",
+    }
+
+    async def fake_lookup(kode):
+        return 1000.0
+
+    saved = asyncio.run(record_top_picks([item], price_lookup=fake_lookup))
+    assert len(saved) == 1
+    assert saved[0]["status"] == "OPEN"
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, entry_filled_at, entry_mode FROM signal_history WHERE kode='ZZAGR'"
+        ).fetchone()
+    assert row["status"] == "OPEN"
+    assert row["entry_filled_at"] is not None
+    assert row["entry_mode"] == "AGRESIF"
+
+
+def test_record_top_picks_area_aman_stays_pending_entry(clean_signal_db):
+    """Kebalikan: AREA_AMAN tetap PENDING_ENTRY -- entry pullback yang
+    ditunggu tersentuh dulu (perilaku lama tidak berubah), entry_filled_at
+    NULL sampai audit_pending_entries menandai fill."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import record_top_picks, MIN_SCORE_TO_RECORD
+
+    item = {
+        **_fake_confidence_item("ZZAMAN", MIN_SCORE_TO_RECORD + 5, harga=1000.0),
+        "entry_price": 960.0,  # entry pullback DI BAWAH harga live
+        "entry_mode": "AREA_AMAN",
+    }
+
+    async def fake_lookup(kode):
+        return 1000.0
+
+    saved = asyncio.run(record_top_picks([item], price_lookup=fake_lookup))
+    assert len(saved) == 1
+    assert saved[0]["status"] == "PENDING_ENTRY"
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, entry_filled_at FROM signal_history WHERE kode='ZZAMAN'"
+        ).fetchone()
+    assert row["status"] == "PENDING_ENTRY"
+    assert row["entry_filled_at"] is None
+
+
 def test_record_top_picks_concurrent_calls_never_duplicate(clean_signal_db):
     """Regresi BUG NYATA ditemukan lewat inspeksi data produksi: /api/signals
     berisi ~12 kode tercatat 2x dengan recorded_at berselisih ~1 detik.
@@ -2536,6 +2640,66 @@ def test_audit_pending_entries_fills_when_price_reaches_entry(clean_signal_db):
     assert row["status"] == "OPEN"
     assert row["entry_filled_at"] is not None
     assert len(events) == 1 and events[0]["kind"] == "entry_filled" and events[0]["kode"] == "ZZFILL"
+
+
+def test_audit_pending_entries_fills_on_intraday_low_touch(clean_signal_db):
+    """Regresi bug KIJA (17 Juli): harga SNAPSHOT terakhir DI ATAS entry,
+    TAPI low intraday sempat MENYENTUH entry (wick sesaat lalu balik naik).
+    Entry limit-buy realistis sudah tereksekusi -> HARUS jadi OPEN. Sebelum
+    perbaikan hanya last_price yang dicek, jadi fill terlewat & sinyal
+    nyangkut PENDING_ENTRY. Lookup bentuk 3-tuple (price, low, date)."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_pending_entries
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZWICK', 134, 4.1, 4.1, 'PENDING_ENTRY', 'BUY')"
+        )
+
+    async def fake_lookup(kode):
+        return 135.0, 133.0, date.today()  # spot 135 di ATAS entry 134, low 133 sentuh entry
+
+    events = asyncio.run(audit_pending_entries(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status, entry_filled_at FROM signal_history WHERE kode='ZZWICK'").fetchone()
+    assert row["status"] == "OPEN", "low intraday sentuh entry -> fill walau last_price di atas entry"
+    assert row["entry_filled_at"] is not None
+    assert len(events) == 1 and events[0]["kind"] == "entry_filled" and events[0]["kode"] == "ZZWICK"
+
+
+def test_audit_pending_entries_no_fill_when_intraday_low_above_entry(clean_signal_db):
+    """Batas kebalikan: kalau low intraday PUN tidak menyentuh entry (harga
+    seharian di atas entry, belum sampai TP1), TETAP PENDING_ENTRY -- low
+    yang lebih rendah dari last_price tidak boleh 'menciptakan' fill selama
+    low itu sendiri masih di atas entry."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_pending_entries
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, direction) "
+            "VALUES ('ZZNOWICK', 1000, 5, 3, 'PENDING_ENTRY', 'BUY')"
+        )
+
+    async def fake_lookup(kode):
+        return 1030.0, 1010.0, date.today()  # low 1010 masih DI ATAS entry 1000
+
+    events = asyncio.run(audit_pending_entries(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute("SELECT status FROM signal_history WHERE kode='ZZNOWICK'").fetchone()
+    assert row["status"] == "PENDING_ENTRY"
+    assert events == []
 
 
 def test_audit_pending_entries_stays_pending_when_price_above_entry(clean_signal_db):
