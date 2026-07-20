@@ -262,10 +262,16 @@ async def _lifespan(_app: "FastAPI"):
     forum (_forum_push_loop, jauh lebih ringan -- murni query DB, tanpa
     yfinance -- jadi dipisah dari siklus sinyal yang berat supaya bisa jalan
     lebih sering tanpa risiko rate-limit apa pun) saat aplikasi start,
-    matikan bersih saat berhenti. TIDAK ADA proses/infra baru -- cuma 2
-    asyncio task dalam proses yang sama (bukan Celery/cron terpisah), cukup
-    untuk skala aplikasi ini."""
-    tasks = [asyncio.create_task(_signal_auto_loop()), asyncio.create_task(_forum_push_loop())]
+    matikan bersih saat berhenti. Plus _cache_warmer_loop (scaling #1):
+    menghangatkan dataset berat bersama (universe) supaya request USER
+    membaca dari cache & TIDAK memicu fetch Yahoo dingin. TIDAK ADA
+    proses/infra baru -- cuma 3 asyncio task dalam proses yang sama (bukan
+    Celery/cron terpisah), cukup untuk skala aplikasi ini."""
+    tasks = [
+        asyncio.create_task(_signal_auto_loop()),
+        asyncio.create_task(_forum_push_loop()),
+        asyncio.create_task(_cache_warmer_loop()),
+    ]
     yield
     for t in tasks:
         t.cancel()
@@ -320,6 +326,48 @@ def _cache_set(key, val, ttl=None):
     except Exception:
         # fallback: do nothing (cache miss next time)
         pass
+
+
+# ---------- Serve-stale + single-flight (scaling #1: request USER tidak
+# pernah memicu fetch Yahoo dingin) ----------
+# _cache_set_durable menyimpan SATU salinan "last known good" tambahan yang
+# bertahan JAUH lebih lama dari TTL normal -- dipakai serve-stale: kalau
+# refresh gagal (Yahoo rate-limit/error), sajikan data terakhir yang sah
+# alih-alih melempar "gagal muat data" ke user. Menutup persis keluhan user.
+_STALE_TTL = int(os.getenv("STALE_CACHE_TTL", str(6 * 3600)))  # 6 jam
+
+
+def _cache_set_durable(key, val, ttl=None):
+    _cache_set(key, val, ttl=ttl)
+    try:
+        _redis.setex(f"stale:{key}", _STALE_TTL, pickle.dumps(val))
+    except Exception:
+        pass
+
+
+def _cache_get_stale(key):
+    try:
+        val = _redis.get(f"stale:{key}")
+        return pickle.loads(val) if val is not None else None
+    except Exception:
+        return None
+
+
+async def _single_flight(key: str, factory):
+    """Jalankan factory() (async, no-arg) HANYA SATU KALI walau banyak request
+    datang bersamaan utk key yang sama -- sisanya menunggu hasil yang SAMA,
+    tidak menembak Yahoo dobel/tripel. Reuse _inflight (mekanisme yang sudah
+    dipakai _clean utk per-ticker); key namespace berbeda (mis. 'universe:core'
+    vs 'df:BBCA:...') jadi tidak bentrok."""
+    existing = _inflight.get(key)
+    if existing is not None:
+        return await existing
+    task = asyncio.ensure_future(factory())
+    _inflight[key] = task
+    try:
+        return await task
+    finally:
+        _inflight.pop(key, None)
 
 
 # ---------- harga real-time (cache 60 detik, terpisah dari cache analisis) ----------
@@ -2326,14 +2374,28 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
 
 
 async def _confidence_raw_signals() -> list[dict]:
-    """Hitung AI Score + Minervini + Confluence + likuiditas + risk/reward
-    + proxy bandar untuk SCREENER_UNIVERSE dari satu fetch period=1y
-    bersama. Cache global 300 detik (sama untuk semua user, tidak
-    bergantung personalisasi)."""
+    """Jalur baca confidence:raw (scaling #1, pola SAMA dgn endpoint
+    universe): cache hangat (dijaga auto-cycle) -> SINGLE-FLIGHT compute
+    (banyak user cold bersamaan = 1 fetch Yahoo) -> SERVE-STALE data terakhir
+    kalau fetch gagal (bukan lempar error). Compute beratnya di
+    _build_confidence_raw()."""
     cached = _cache_get("confidence:raw")
     if cached is not None:
         return cached
+    try:
+        return await _single_flight("confidence:raw", _build_confidence_raw)
+    except Exception:
+        stale = _cache_get_stale("confidence:raw")
+        if stale is not None:
+            return stale
+        raise
 
+
+async def _build_confidence_raw() -> list[dict]:
+    """Hitung AI Score + Minervini + Confluence + likuiditas + risk/reward
+    + proxy bandar untuk LIQUID_250 dari satu fetch period=1y bersama.
+    Bagian BERAT -- dipanggil via single-flight (lihat _confidence_raw_signals)
+    & oleh auto-cycle (yang ikut menghangatkan cache-nya)."""
     ihsg_raw = await _clean("^JKSE", period="1y")
     market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
 
@@ -2449,7 +2511,7 @@ async def _confidence_raw_signals() -> list[dict]:
     # auto-cycle + jeda aman supaya cache SELALU sempat di-refresh sebelum
     # kadaluarsa (user nyaris tidak pernah kena compute dingin di luar
     # restart server). TTL 600s (10 menit) > interval 400s.
-    _cache_set("confidence:raw", items, ttl=600)
+    _cache_set_durable("confidence:raw", items, ttl=600)
     return items
 
 
@@ -2776,22 +2838,11 @@ def _compute_universe_items(tickers, cleaned, shares) -> list[dict]:
     return items
 
 
-@app.get("/api/universe")
-async def universe(scope: str = "core"):
-    """Pindai universe, hitung metrik per saham (untuk screener multi-filter
-    & heatmap). Berat -> di-cache. scope='core' = ±45 likuid (cepat, default,
-    dipakai Beranda/Heatmap/Sektor). scope='medium' = ~200 saham likuid.
-    scope='all' = SELURUH emiten IDX dari saham.xlsx (793, lambat ~1-2 menit)."""
-    if scope == "all":
-        scope = "all"
-    elif scope == "medium":
-        scope = "medium"
-    else:
-        scope = "core"
-    cache_key = f"universe:{scope}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+async def _build_universe(scope: str, cache_key: str):
+    """Fetch + hitung metrik universe (bagian BERAT) -- dipisah dari endpoint
+    supaya bisa dipanggil BAIK oleh request user (cold miss) MAUPUN oleh
+    cache warmer (_cache_warmer_loop). Menyimpan hasil sbg cache durable
+    (TTL normal + salinan stale) supaya serve-stale bisa jalan."""
     from core.async_yf import async_download_many
     from core.stock_data import load_tickers
     shares = _load_shares()
@@ -2801,10 +2852,7 @@ async def universe(scope: str = "core"):
         tickers = [t + ".JK" for t in LIQUID_250]
     else:
         tickers = [t + ".JK" for t in SCREENER_UNIVERSE]
-    try:
-        data = await async_download_many(tickers, period="6mo", interval="1d")
-    except Exception:
-        raise HTTPException(502, "Gagal memuat data universe. Coba lagi sebentar.")
+    data = await async_download_many(tickers, period="6mo", interval="1d")
 
     cleaned = {}
     for t in tickers:
@@ -2815,27 +2863,86 @@ async def universe(scope: str = "core"):
             cleaned[t] = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
         except Exception:
             continue
-    # Tambal celah bar harian terbaru (lihat _backfill_recent_gap) -- endpoint
-    # ini jalur fetch KETIGA yang terpisah dari _clean()/_confidence_raw_
-    # signals() dan sama-sama kena bug yang sama (price/change_1d di sini
-    # dihitung langsung dari Close baris terakhir, jadi kalau baris itu
-    # hilang/basi, harga & % perubahan yang ditampilkan ikut basi juga --
-    # inilah kenapa marquee/Top Movers/Pasar keliatan "macet" walau
-    # cache sisi klien sudah diperbaiki).
     cleaned = await _backfill_recent_gap_batch(cleaned)
 
     # Loop CPU-bound (indikator per saham) dijalankan di worker thread --
-    # SAMA alasan & pola dgn _compute_confidence_items (lihat catatan
-    # panjang di situ): loop sinkron tanpa `await` yang jalan langsung di
-    # event loop membekukan SELURUH server, bukan cuma endpoint ini.
+    # SAMA alasan & pola dgn _compute_confidence_items (lihat catatan panjang
+    # di situ): loop sinkron tanpa `await` di event loop membekukan SELURUH
+    # server, bukan cuma endpoint ini.
     items = await asyncio.to_thread(_compute_universe_items, tickers, cleaned, shares)
 
     payload = {"items": items, "count": len(items), "scope": scope,
                "scanned": len(tickers),
                "as_of": (items and __import__("datetime").date.today().isoformat()) or None}
     payload = _py(payload)
-    _cache_set(cache_key, payload)
+    _cache_set_durable(cache_key, payload)
     return payload
+
+
+# Interval cache warmer (detik). HARUS < TTL cache universe (_CACHE_TTL=300)
+# supaya cache SELALU di-refresh sebelum kedaluwarsa -> user selalu kena
+# cache hangat & TIDAK PERNAH memicu fetch Yahoo dingin. 150s = refresh ~2x
+# per TTL, aman.
+CACHE_WARM_INTERVAL_SECONDS = int(os.getenv("CACHE_WARM_INTERVAL_SECONDS", "150"))
+
+
+async def _warm_shared_caches():
+    """Refresh dataset BERAT yang dipakai bersama banyak fitur (universe
+    core & medium -> marquee, Beranda, screener, heatmap, pasar, sektor).
+    Ini SATU-SATUNYA tempat Yahoo dihajar utk dataset ini -- terlepas dari
+    JUMLAH USER (scaling #1). Lewat _single_flight: kalau kebetulan ada user
+    yang barusan memicu compute utk key yang sama, warmer ikut menunggu
+    hasil yang SAMA (tidak dobel fetch). SEKUENSIAL (bukan paralel) supaya
+    tidak menembak Yahoo dgn beberapa batch besar bersamaan. Tidak
+    menyertakan confidence:raw -- itu SUDAH dihangatkan _run_signal_auto_cycle.
+    scope='all' (793 saham) TIDAK dihangatkan otomatis -- terlalu berat &
+    jarang dipakai; itu tetap on-demand (dgn single-flight + serve-stale)."""
+    for scope in ("core", "medium"):
+        key = f"universe:{scope}"
+        try:
+            await _single_flight(key, lambda s=scope, k=key: _build_universe(s, k))
+        except Exception as e:
+            print(f"⚠️ cache-warmer universe:{scope}: {type(e).__name__}: {e}")
+
+
+async def _cache_warmer_loop():
+    """Loop background: hangatkan cache bersama sekali di awal (biar segar
+    secepatnya setelah start), lalu berkala. Ringan relatif thd manfaatnya --
+    tanpa ini, user PERTAMA tiap kali cache kedaluwarsa kena cold-fetch 60
+    detik (persis keluhan 'berat' + 'gagal muat data')."""
+    while True:
+        try:
+            await _warm_shared_caches()
+        except Exception as e:
+            print(f"⚠️ cache-warmer-loop: {type(e).__name__}: {e}")
+        await asyncio.sleep(CACHE_WARM_INTERVAL_SECONDS)
+
+
+@app.get("/api/universe")
+async def universe(scope: str = "core"):
+    """Pindai universe, hitung metrik per saham (untuk screener multi-filter
+    & heatmap). Berat -> di-cache. scope='core' = ±45 likuid (cepat, default,
+    dipakai Beranda/Heatmap/Sektor). scope='medium' = ~200 saham likuid.
+    scope='all' = SELURUH emiten IDX dari saham.xlsx (793, lambat ~1-2 menit).
+
+    JALUR BACA (scaling #1): cache hangat (dijaga _cache_warmer_loop) ->
+    kalau cold, SINGLE-FLIGHT compute (banyak user cold bersamaan = 1 fetch
+    Yahoo, bukan N) -> kalau fetch GAGAL, SERVE-STALE data terakhir yang sah
+    (bukan lempar 'gagal muat data'). User idealnya TIDAK PERNAH memicu fetch
+    Yahoo langsung -- warmer sudah menyiapkan cache-nya."""
+    if scope not in ("all", "medium"):
+        scope = "core"
+    cache_key = f"universe:{scope}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        return await _single_flight(cache_key, lambda: _build_universe(scope, cache_key))
+    except Exception:
+        stale = _cache_get_stale(cache_key)
+        if stale is not None:
+            return stale  # last-known-good drpd error ke user
+        raise HTTPException(502, "Gagal memuat data universe. Coba lagi sebentar.")
 
 
 @app.get("/api/screener")
