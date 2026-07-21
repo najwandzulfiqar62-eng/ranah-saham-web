@@ -4300,8 +4300,20 @@ async function loadSignalAudit(){
   let auditViewMode = rsGet('rs_audit_view_mode', 'card');
   let auditFilter = 'ALL';
   let auditLimit = 12;
-  
+  // Lacak instance mini-chart + IntersectionObserver supaya bisa DI-DESTROY
+  // sebelum re-render (BUG NYATA, laporan user "audit sinyal ngelag"): tiap
+  // ganti filter/view/load-more, renderAuditList menimpa innerHTML TANPA
+  // memanggil chart.remove() -- instance LightweightCharts lama (tiap satu
+  // punya render-loop internal + listener) BOCOR & menumpuk, makin lama
+  // makin berat. Sekarang dibersihkan tiap re-render.
+  let _auditCharts = [];
+  let _auditIO = null;
+
   const renderAuditList = () => {
+    // Bersihkan chart & observer render SEBELUMNYA dulu (anti-leak).
+    _auditCharts.forEach(c => { try { c.remove(); } catch (e) {} });
+    _auditCharts = [];
+    if (_auditIO) { try { _auditIO.disconnect(); } catch (e) {} _auditIO = null; }
     let filtered = signals;
     if(auditFilter !== 'ALL'){
       if(auditFilter === 'EXPIRED') filtered = signals.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY');
@@ -4445,7 +4457,7 @@ async function loadSignalAudit(){
     staggerRows($('#auditTbody'), auditViewMode === 'card' ? 12 : 20);
 
     if(auditViewMode === 'card') {
-      const io = new IntersectionObserver((entries, obs) => {
+      _auditIO = new IntersectionObserver((entries, obs) => {
         entries.forEach(ent => {
           if(ent.isIntersecting) {
             obs.unobserve(ent.target);
@@ -4468,6 +4480,7 @@ async function loadSignalAudit(){
                 rightPriceScale: { visible: false }, timeScale: { visible: false, rightOffset: 3 },
                 crosshair: { mode: 0 }
               });
+              _auditCharts.push(chart);  // lacak utk destroy saat re-render (anti-leak)
               const series = chart.addCandlestickSeries({ upColor: '#2FB57E', downColor: '#D65A4A', borderVisible: false, wickUpColor: '#2FB57E', wickDownColor: '#D65A4A' });
               series.setData(data.candles);
               if(!isNaN(entry)) series.createPriceLine({ price: entry, color: '#3a82f7', lineWidth: 1, lineStyle: 2, title: 'Entry' });
@@ -4482,7 +4495,7 @@ async function loadSignalAudit(){
           }
         });
       }, { rootMargin: '200px' });
-      $('#auditDynamicPanel').querySelectorAll('.zeta-signal-card').forEach(c => io.observe(c));
+      $('#auditDynamicPanel').querySelectorAll('.zeta-signal-card').forEach(c => _auditIO.observe(c));
       // IntersectionObserver TIDAK fire callback awal utk kartu yang baru
       // terlihat (pane hidden->show, atau ganti filter/view) sampai ada
       // recompute intersection -- terbukti di verifikasi: tanpa scroll,
