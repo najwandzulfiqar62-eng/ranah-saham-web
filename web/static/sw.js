@@ -1,7 +1,7 @@
 /* RANAH SAHAM service worker.
    Strategi: cache "shell" aplikasi agar bisa dibuka cepat / offline, TAPI
    JANGAN pernah cache data live (/api/*) karena harga & analisis sensitif waktu. */
-const CACHE = 'ranahsaham-v15';
+const CACHE = 'ranahsaham-v16';
 const SHELL = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
@@ -49,14 +49,30 @@ self.addEventListener('fetch', (e) => {
   const u = new URL(e.request.url);
   if (u.origin !== location.origin) return;          // pihak ketiga (CDN chart) -> jangan diintervensi
   if (u.pathname.startsWith('/api/')) return;        // data live -> selalu jaringan, tidak pernah di-cache
-  // shell & aset statis: network-first, fallback cache (agar update tetap terbawa saat online)
+  // Shell & aset statis: STALE-WHILE-REVALIDATE (permintaan user "biar enak
+  // dipakai"). Sebelumnya network-first -> tiap buka aplikasi tetap MENUNGGU
+  // unduh HTML 145KB dulu. Sekarang: sajikan dari cache SEKETIKA (buka kedua
+  // & seterusnya INSTAN), lalu revalidasi ke jaringan DI BALIK LAYAR utk
+  // update berikutnya. Tradeoff sadar: user melihat versi SEBELUMNYA sampai
+  // reload berikutnya -- update tetap sampai (revalidasi mengisi cache utk
+  // load berikutnya; bump CACHE saat perubahan penting menghapus cache lama).
   e.respondWith(
-    fetch(e.request)
-      .then((r) => {
-        const cp = r.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, cp)).catch(() => {});
+    caches.match(e.request).then((cached) => {
+      const fromNetwork = fetch(e.request).then((r) => {
+        // hanya cache respons sukses penuh (200) -- jangan simpan error/partial
+        if (r && r.status === 200) {
+          const cp = r.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, cp)).catch(() => {});
+        }
         return r;
-      })
-      .catch(() => caches.match(e.request).then((m) => m || caches.match('/')))
+      }).catch(() => null);
+      if (cached) {
+        e.waitUntil(fromNetwork);                    // revalidasi tetap jalan walau respons sudah dikirim
+        return cached;                               // <-- instan
+      }
+      // belum ada di cache (kunjungan pertama / aset baru): tunggu jaringan,
+      // fallback ke shell '/' kalau offline.
+      return fromNetwork.then((r) => r || caches.match('/'));
+    })
   );
 });
