@@ -28,6 +28,39 @@ import pandas as pd
 from core.config import YF_BATCH_SIZE, YF_BATCH_DELAY_SECONDS
 
 
+def _is_crumb_error(exc: Exception) -> bool:
+    """Deteksi error otentikasi Yahoo yang SEMBUH dengan negosiasi ulang
+    cookie+crumb (bukan sekadar tunggu-lalu-ulang). Yahoo mewajibkan 'crumb'
+    anti-CSRF; kalau crumb yang di-cache yfinance basi/rusak, request balik
+    HTTP 401 'Invalid Crumb'. Rate-limit (429/'too many requests') SENGAJA
+    TIDAK termasuk -- itu butuh mundur, bukan re-negosiasi (malah memperparah)."""
+    msg = str(exc).lower()
+    return ("crumb" in msg or "invalid cookie" in msg
+            or "401" in msg or "unauthorized" in msg)
+
+
+def _reset_yf_crumb() -> bool:
+    """Paksa yfinance mengambil ULANG cookie+crumb Yahoo di request berikutnya.
+    'Invalid Crumb' (401) tak sembuh dengan retry biasa karena crumb basi yang
+    SAMA dipakai ulang dari cache in-memory singleton YfData -- membuangnya
+    memaksa _get_cookie_and_crumb() menegosiasi ulang. Dilindungi _cookie_lock
+    (yfinance 1.x) supaya aman terhadap request lain yang jalan paralel."""
+    try:
+        from yfinance.data import YfData
+        d = YfData()  # singleton -- reset berlaku utk semua request selanjutnya
+        lock = getattr(d, "_cookie_lock", None)
+        if lock is not None:
+            with lock:
+                d._crumb = None
+                d._cookie = None
+        else:
+            d._crumb = None
+            d._cookie = None
+        return True
+    except Exception:
+        return False
+
+
 async def async_download(*args, max_retries: int = 2, **kwargs) -> pd.DataFrame:
     """Versi non-blocking dari yf.download(). Dipakai untuk SATU ticker
     atau SATU panggilan batch, dipanggil langsung dari handler async.
@@ -38,7 +71,12 @@ async def async_download(*args, max_retries: int = 2, **kwargs) -> pd.DataFrame:
     ditemukan nyata di async_download_many). Sengaja lebih ringan dari
     retry batch di bawah (2x tetap vs 3x escalating) karena ini dipanggil
     langsung dalam siklus request/response -- pengguna menunggu di depan
-    layar, jadi tidak boleh menambah latency terlalu besar saat gagal."""
+    layar, jadi tidak boleh menambah latency terlalu besar saat gagal.
+
+    Khusus error 'Invalid Crumb'/401 (lihat _is_crumb_error): buang crumb
+    yfinance yang basi SEBELUM percobaan berikutnya, kalau tidak retry-nya
+    cuma memakai ulang crumb rusak yang sama dan gagal lagi -- ini akar dari
+    'kadang gagal memuat data' yang berulang."""
     last_exc = None
     df = None
     for attempt in range(max_retries):
@@ -50,6 +88,8 @@ async def async_download(*args, max_retries: int = 2, **kwargs) -> pd.DataFrame:
         except Exception as e:
             last_exc = e
             df = None
+            if _is_crumb_error(e):
+                _reset_yf_crumb()
         if attempt < max_retries - 1:
             await asyncio.sleep(0.4)
     if last_exc is not None:

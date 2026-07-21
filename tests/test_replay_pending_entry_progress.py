@@ -7,7 +7,7 @@
 # sinyal tanggal 9" (BRMS masih 'Menunggu Entry' padahal replay histori
 # harga sungguhan menunjukkan entry-nya sudah kena tanggal 9 dan tp1
 # tercapai tanggal 10).
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -87,12 +87,19 @@ def test_replay_row_resolves_tp_hit_when_final_level_reached():
 
 def test_replay_row_no_change_when_not_yet_filled_within_wait_window():
     """Kontrol: belum kena entry sama sekali TAPI umur < MAX_ENTRY_WAIT_DAYS
-    -- tetap PENDING_ENTRY (no_change_needed), jangan dipaksa expire."""
-    dates = pd.bdate_range(start="2026-07-10", periods=1)
-    df = _fake_df(dates, lows=[700.0], highs=[720.0], closes=[710.0])  # Low tidak pernah <= entry(490)
-    row = _row(recorded_at="2026-07-10 02:43:33")
+    -- tetap PENDING_ENTRY (no_change_needed), jangan dipaksa expire.
 
-    result = _replay_row(row, df, today=date(2026, 7, 10))
+    CATATAN: umur dihitung _replay_row dari datetime.now() SUNGGUHAN (lihat
+    komentar di fungsinya -- BUKAN dari param `today`), jadi recorded_at HARUS
+    relatif ke sekarang. Kalau dipatok tanggal tetap, test ini basi & salah
+    'expire' begitu > MAX_ENTRY_WAIT_DAYS hari kalender berlalu sejak ditulis."""
+    now = datetime.now()
+    recorded = now - timedelta(days=1)  # baru 1 hari -> jelas < MAX_ENTRY_WAIT_DAYS(5)
+    recorded_date = recorded.date()
+    df = _fake_df([pd.Timestamp(recorded_date)], lows=[700.0], highs=[720.0], closes=[710.0])  # Low tidak pernah <= entry(490)
+    row = _row(recorded_at=recorded.strftime("%Y-%m-%d %H:%M:%S"))
+
+    result = _replay_row(row, df, today=recorded_date)
 
     assert result["action"] == "no_change_needed"
 
@@ -112,20 +119,25 @@ def test_replay_row_expires_no_entry_after_max_wait_days():
 def test_replay_row_never_uses_data_before_recorded_date():
     """Regresi anti-lookahead sisi lain: data SEBELUM recorded_date (kalau
     kebetulan ikut ke-fetch krn period 1y) TIDAK BOLEH dipakai utk klaim
-    fill lebih awal dari recorded_date sungguhan."""
-    dates = pd.bdate_range(start="2026-06-20", end="2026-07-09")
-    recorded_date = date(2026, 7, 9)
-    n_before = sum(1 for d in dates if d.date() < recorded_date)
-    n_on_or_after = len(dates) - n_before
+    fill lebih awal dari recorded_date sungguhan.
+
+    recorded_at relatif ke datetime.now() (lihat catatan di test kontrol
+    lain di atas) supaya tetap 'belum expire' kapan pun test dijalankan."""
+    now = datetime.now()
+    recorded = now - timedelta(days=1)  # < MAX_ENTRY_WAIT_DAYS(5) -> belum expire
+    recorded_date = recorded.date()
+    # 5 hari SEBELUM recorded_date + recorded_date sendiri sebagai bar TERAKHIR.
+    dates = [pd.Timestamp(recorded_date) - pd.Timedelta(days=k) for k in range(5, -1, -1)]
+    n_before, n_on_or_after = 5, 1
     # Hari-hari SEBELUM recorded_date turun jauh di bawah entry -- HARUS
     # diabaikan; cuma hari recorded_date (494, TIDAK menembus entry=490) yang relevan.
     lows = [400.0] * n_before + [494.0] * n_on_or_after
     highs = [420.0] * n_before + [500.0] * n_on_or_after
     closes = [410.0] * n_before + [498.0] * n_on_or_after
     df = _fake_df(dates, lows, highs, closes)
-    row = _row(recorded_at="2026-07-09 11:05:43")
+    row = _row(recorded_at=recorded.strftime("%Y-%m-%d %H:%M:%S"))
 
-    result = _replay_row(row, df, today=date(2026, 7, 9))
+    result = _replay_row(row, df, today=recorded_date)
 
     assert result["action"] == "no_change_needed", "hari-hari SEBELUM recorded_date tidak boleh dianggap sbg fill"
 
