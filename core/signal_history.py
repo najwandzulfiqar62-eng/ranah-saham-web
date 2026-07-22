@@ -46,6 +46,17 @@ from datetime import datetime
 
 from core.database import get_db
 
+
+def _is_finite_pos(x) -> bool:
+    """True hanya kalau x angka > 0 dan BUKAN NaN. Dipakai menyaring level
+    sinyal: `bool(float('nan'))` itu True di Python, jadi `if it.get(...)`
+    saja LOLOS oleh NaN (bug nyata: detect_nr7_52w sempat mengembalikan
+    SL/TP NaN untuk bar terakhir yang kosong). Cek `x == x` menolak NaN."""
+    try:
+        return x == x and float(x) > 0
+    except (TypeError, ValueError):
+        return False
+
 # Sinyal yang tidak tercapai TP maupun SL dalam MAX_HOLD_DAYS dianggap
 # "kadaluarsa" (EXPIRED) -- horison realistis untuk sinyal teknikal
 # swing/menengah (bukan scalping harian, bukan juga investasi tahunan).
@@ -1181,9 +1192,9 @@ async def record_nr7_52w_signals(items: list[dict], price_lookup=None) -> list[d
     candidates = [
         it for it in items
         if it.get("is_nr7_52w")
-        and it.get("nr7_sl_pct")
-        and it.get("nr7_tp1_pct")
-        and it.get("harga")
+        and _is_finite_pos(it.get("nr7_sl_pct"))
+        and _is_finite_pos(it.get("nr7_tp1_pct"))
+        and _is_finite_pos(it.get("harga"))
     ][:NR7_52W_MAX_PER_DAY]
     if not candidates:
         return []

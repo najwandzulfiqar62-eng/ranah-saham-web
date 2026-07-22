@@ -75,6 +75,47 @@ def test_detect_nr7_52w_rejects_insufficient_history():
     assert detect_nr7_52w(_uptrend_df().tail(100)) is None
 
 
+def test_detect_nr7_52w_never_returns_nan_levels():
+    """Bug nyata (2026-07-23): yfinance kerap mengembalikan bar TERAKHIR
+    berisi NaN (hari berjalan/belum lengkap). Tanpa membuang NaN, setiap
+    perbandingan (`today_range <= 0`, dst) lolos diam-diam karena `nan <op> x`
+    selalu False -> fungsi keliru mengembalikan dict SL/TP NaN utk SEMUA
+    saham (178/178 'cocok' di produksi). Invariant: hasilnya None ATAU dict
+    yang SEMUA nilainya angka hingga (finite), TIDAK PERNAH NaN."""
+    df = _uptrend_df()
+    for col in ["Open", "High", "Low", "Close"]:
+        df.iloc[-1, df.columns.get_loc(col)] = float("nan")
+    r = detect_nr7_52w(df)
+    if r is not None:
+        for k, v in r.items():
+            if isinstance(v, float):
+                assert v == v, f"{k} bernilai NaN (bug NaN belum ketangkap)"
+
+
+def test_detect_nr7_52w_valid_even_with_nan_last_bar_when_prev_is_nr7():
+    """Kalau bar terakhir NaN dibuang, bar SEBELUMNYA (yang valid NR7) jadi
+    acuan -- deteksi tetap jalan, tidak macet oleh baris kosong."""
+    df = _uptrend_df(last_range=3.5)
+    # tambах 1 baris NaN di ujung (simulasi bar hari berjalan yg belum lengkap)
+    nan_row = pd.DataFrame(
+        {"Open": [float("nan")], "High": [float("nan")], "Low": [float("nan")],
+         "Close": [float("nan")], "Volume": [0.0]},
+        index=[df.index[-1] + pd.Timedelta(days=1)],
+    )
+    df2 = pd.concat([df, nan_row])
+    r = detect_nr7_52w(df2)
+    assert r is not None and r["is_nr7_52w"] is True
+
+
+def test_record_nr7_rejects_nan_levels(clean_signal_db):
+    """Pertahanan berlapis: walau caller keliru mengirim level NaN
+    (bool(nan)==True di Python bisa lolos filter naif), perekaman menolaknya."""
+    bad = {"kode": "NANX", "harga": 200.0, "is_nr7_52w": True,
+           "nr7_sl_pct": float("nan"), "nr7_tp1_pct": float("nan")}
+    saved = asyncio.run(record_nr7_52w_signals([bad]))
+    assert saved == []
+
+
 # ---------------------------------------------------------------------------
 # record_nr7_52w_signals
 # ---------------------------------------------------------------------------

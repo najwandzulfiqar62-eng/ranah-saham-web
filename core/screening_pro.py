@@ -257,6 +257,15 @@ def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
     dgn df sintetis."""
     if df is None or len(df) < 252:
         return None  # butuh >= 52 minggu data utk 52W high yang sah
+    # Buang baris OHLC NaN dulu -- yfinance kerap mengembalikan bar terakhir
+    # (hari berjalan/belum lengkap) berisi NaN. Kalau tidak dibuang, SETIAP
+    # perbandingan di bawah (mis. `today_range <= 0`) diam-diam lolos karena
+    # `nan <op> x` selalu False, sehingga fungsi ini keliru mengembalikan
+    # dict berisi NaN untuk SEMUA saham (bug nyata: 178/178 "cocok" dgn
+    # SL=NaN). Sama kelas bug-nya dgn NaN di core/corp_actions.py.
+    df = df.dropna(subset=["High", "Low", "Close"])
+    if len(df) < 252:
+        return None
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
     close = df["Close"].astype(float)
