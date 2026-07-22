@@ -1888,7 +1888,14 @@ async def smc_chart(kode: str, kind: str):
 @app.get("/api/screenerpro")
 async def screenerpro():
     """Screener gaya Minervini (8 kriteria trend template + RS vs IHSG +
-    momentum). Skor ≥65 saja. Atas universe likuid, di-cache."""
+    momentum). Skor ≥65 saja. Atas universe likuid, di-cache.
+
+    Universe DIPERLUAS (permintaan user: "banyakin screening minervini lagi")
+    dari SCREENER_UNIVERSE (~45, LQ45-ish) ke LIQUID_250 (178 saham likuid --
+    universe yang SAMA dipakai Top Pick/confidence, batching+retih
+    async_download_many sudah teruji utk skala ~200 ticker). Makin banyak
+    kandidat yang dipindai = makin besar peluang menemukan saham tren kuat
+    yang lolos trend template, bukan cuma dari 45 saham teratas."""
     cached = _cache_get("screenerpro")
     if cached is not None:
         return cached
@@ -1896,10 +1903,10 @@ async def screenerpro():
     try:
         ihsg_raw = await _clean("^JKSE", period="1y")
         market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
-        res = await run_screenerpro([t + ".JK" for t in SCREENER_UNIVERSE], market_close=market_close)
+        res = await run_screenerpro([t + ".JK" for t in LIQUID_250], market_close=market_close)
     except Exception:
         raise HTTPException(502, "Gagal menjalankan screener pro.")
-    payload = _py({"items": res or [], "universe": len(SCREENER_UNIVERSE)})
+    payload = _py({"items": res or [], "universe": len(LIQUID_250)})
     _cache_set("screenerpro", payload)
     return payload
 
@@ -2193,6 +2200,10 @@ async def _run_signal_auto_cycle():
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal catat Smart Money: {type(e).__name__}: {e}")
     try:
+        await _record_nr7_52w_cycle(confidence_items)
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal catat NR7+52W: {type(e).__name__}: {e}")
+    try:
         await _run_pending_entry_audit()
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal audit pending-entry: {type(e).__name__}: {e}")
@@ -2205,6 +2216,14 @@ async def _run_signal_auto_cycle():
         await record_daily_snapshots(_signal_entry_price_lookup)
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal catat snapshot harian: {type(e).__name__}: {e}")
+    # Hangatkan cache peringatan aksi korporasi utk sinyal aktif -- supaya
+    # /api/signals hampir selalu baca cache hangat (peringatan langsung tampil
+    # tanpa nunggu batch download di request path). Lihat _warm_corp_actions.
+    try:
+        from core.signal_history import get_active_kodes
+        await _warm_corp_actions(get_active_kodes())
+    except Exception as e:
+        print(f"⚠️ auto-cycle: gagal warm aksi korporasi: {type(e).__name__}: {e}")
 
 
 async def _signal_auto_loop():
@@ -2237,7 +2256,7 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
     # HANYA mengikat Y ke local namespace fungsi ITU, TIDAK otomatis
     # tersedia utk fungsi lain yang dipanggilnya (termasuk fungsi
     # module-level terpisah spt ini) -- dibutuhkan langsung di loop bawah.
-    from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns
+    from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns, detect_nr7_52w
     items = []
     for ticker, df in data.items():
         kode = ticker.replace(".JK", "")
@@ -2343,7 +2362,7 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
             pattern_name = first_pattern["nama"] if first_pattern else None
             pattern_bias = first_pattern["bias"] if first_pattern else None
 
-            items.append({
+            item = {
                 "kode": kode,
                 "harga": price,
                 "entry_price": entry_price_signal,
@@ -2367,7 +2386,17 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
                 "pattern": pattern_name,
                 "pattern_bias": pattern_bias,
                 "entry_mode": (plan or {}).get("entry_mode"),
-            })
+            }
+            # Deteksi setup NR7 + 52W High (teori breakout momentum independen,
+            # DITANDAI HIGH RISK) -- df sudah di tangan di sini, jadi lebih
+            # murah dihitung sekalian drpd fetch ulang. Field is_nr7_52w/
+            # nr7_sl_pct/nr7_tp*_pct dikonsumsi _record_nr7_52w_cycle utk
+            # record_nr7_52w_signals; kalau bukan setup NR7, dict kosong (item
+            # tetap normal, cuma tidak akan lolos filter recorder NR7).
+            nr7 = detect_nr7_52w(df)
+            if nr7:
+                item.update(nr7)
+            items.append(item)
         except Exception:
             continue
     return items
@@ -2608,6 +2637,55 @@ async def confidence():
     })
 
 
+# ---------- Peringatan aksi korporasi (split/dividen) di Audit Sinyal ----------
+# Permintaan user 2026-07-22: tandai emiten yang ada aksi korporasi supaya
+# sinyal tidak salah dibaca sbg "trap" (kasus RAJA split & ERAA dividend trap
+# -- lihat core/corp_actions.py). Data di-BATCH (async_download_many actions=
+# True) & di-cache per-kode 12 jam (aksi korporasi jarang berubah). Request
+# /api/signals HANYA baca cache utk menempel peringatan (instan); warm-nya
+# dipisah supaya request path tetap ringan.
+CORP_ACTION_TTL = int(os.getenv("CORP_ACTION_TTL", str(12 * 3600)))
+
+
+async def _warm_corp_actions(kodes: list[str]) -> None:
+    """Isi cache aksi korporasi utk kode yang BELUM ada (batch download 1x,
+    cache per-kode). Dipanggil auto-cycle (proaktif) & /api/signals. FAIL-OPEN:
+    kegagalan fetch tidak menggagalkan apa pun -- peringatan cuma absen 1 siklus.
+    Kode yang tak balik data pun di-cache LIST KOSONG supaya tidak di-refetch
+    terus tiap request (aksi korporasi jarang, tak perlu coba ulang agresif)."""
+    kodes = list(dict.fromkeys(k for k in kodes if k))  # unik, buang kosong
+    missing = [k for k in kodes if _cache_get(f"corp_action:{k}") is None]
+    if not missing:
+        return
+    from core.corp_actions import extract_recent_actions
+    try:
+        data = await async_download_many(
+            [k + ".JK" for k in missing], period="2mo", interval="1d", actions=True
+        )
+    except Exception:
+        return  # fail-open
+    for k in missing:
+        df = data.get(k + ".JK")
+        try:
+            acts = extract_recent_actions(df) if df is not None else []
+        except Exception:
+            acts = []
+        _cache_set(f"corp_action:{k}", acts, ttl=CORP_ACTION_TTL)
+
+
+def _attach_corp_action_warnings(signals: list[dict]) -> None:
+    """Tempel objek peringatan `corp_action` (build_warning) ke tiap sinyal yang
+    kodenya punya aksi korporasi di cache. CACHE-ONLY (instan, tanpa jaringan)
+    -- aman dipanggil di request path."""
+    from core.corp_actions import build_warning
+    for s in signals:
+        acts = _cache_get(f"corp_action:{s['kode']}")
+        if acts:
+            w = build_warning(acts)
+            if w:
+                s["corp_action"] = w
+
+
 @app.get("/api/signals")
 async def signals():
     """Audit Sinyal: daftar sinyal Top Pick yang pernah dicatat otomatis
@@ -2695,6 +2773,21 @@ async def signals():
             entry = sig["entry_price"]
             sig["current_price"] = round(price, 2)
             sig["distance_to_entry_pct"] = round((price / entry - 1) * 100, 2)
+
+    # Peringatan aksi korporasi (split/dividen) -- hangatkan cache utk kode
+    # AKTIF (OPEN/PENDING, yang paling butuh peringatan real-time) lalu tempel
+    # peringatan ke SEMUA sinyal yang punya aksi (baca cache saja). Warm
+    # di-await (cached 12 jam, jadi cuma lambat sekali per 12 jam saat dingin;
+    # auto-cycle juga menghangatkannya) supaya peringatan langsung tampil,
+    # bukan baru muncul di reload kedua. Fail-open: kalau warm gagal, sinyal
+    # cuma tak dapat peringatan siklus ini.
+    active_kodes = [s["kode"] for s in report.get("signals", [])
+                    if s.get("status") in ("OPEN", "PENDING_ENTRY")]
+    try:
+        await _warm_corp_actions(active_kodes)
+    except Exception as e:
+        print(f"⚠️ Gagal warm aksi korporasi: {type(e).__name__}: {e}")
+    _attach_corp_action_warnings(report.get("signals", []))
 
     return _py(report)
 
@@ -4516,6 +4609,26 @@ async def _record_smart_money_cycle(confidence_items: list[dict]):
     await record_smart_money_signals(enriched, price_lookup=_signal_entry_price_lookup)
 
 
+async def _record_nr7_52w_cycle(confidence_items: list[dict]):
+    """Catat sinyal breakout NR7 + 52W High (source teori independen ke-4,
+    permintaan user 2026-07-22, DITANDAI HIGH RISK di UI -- lihat
+    detect_nr7_52w di core/screening_pro.py & record_nr7_52w_signals).
+
+    Beda dari _record_smart_money_cycle: TIDAK perlu scan terpisah. Deteksi
+    NR7+52W sudah menumpang loop confidence() (_compute_confidence_items
+    memanggil detect_nr7_52w krn df tiap ticker sudah di tangan di sana),
+    jadi confidence_items SUDAH membawa field is_nr7_52w/nr7_sl_pct/nr7_tp*_
+    pct. Di sini cukup filter item yang setup-nya valid lalu teruskan ke
+    recorder (yang meng-gate jam bursa & dedup sendiri)."""
+    if not confidence_items:
+        return
+    from core.signal_history import record_nr7_52w_signals
+    nr7_items = [it for it in confidence_items if it.get("is_nr7_52w")]
+    if not nr7_items:
+        return
+    await record_nr7_52w_signals(nr7_items, price_lookup=_signal_entry_price_lookup)
+
+
 @app.get("/api/foreign-flow")
 async def api_foreign_flow(scope: str = "core"):
     """Scan volume anomali / smart money.
@@ -4698,66 +4811,65 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
     cache di sini, KETIGA konsumen (x15, insider, pemegang-saham) berbagi
     SATU hasil fetch per hari, bukan tiga (atau lebih) fetch terpisah."""
     from datetime import timedelta as _td, datetime as _dt
-    import cloudscraper as _cs
+    # idx.co.id di belakang Cloudflare MEMBLOKIR IP datacenter/VPS (challenge
+    # "Just a moment..."; curl/cloudscraper/httpx -> 403). Diselesaikan lewat
+    # core/idx_cf: nodriver (headed/Xvfb) memanen cookie cf_clearance sekali,
+    # lalu curl_cffi (impersonate JA3 Chrome) memakainya ulang -- murah. Dari
+    # IP rumah tetap jalan mulus (tidak ada challenge). Lihat core/idx_cf.py.
+    from core.idx_cf import idx_get_json, idx_get_bytes, IdxCfError
 
     cache_key = f"x15raw:{days_back}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    def _sync():
-        sc = _cs.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
-        # Tanggal acuan = WIB (lihat _WIB di atas), bukan jam lokal server.
-        today = (_dt.now(_WIB) - _td(days=days_back)).strftime("%Y%m%d")
-        r = sc.get(
-            "https://www.idx.co.id/primary/ListedCompany/GetAnnouncement",
-            params={"emitenType": "*", "indexFrom": 0, "pageSize": 100,
-                    "dateFrom": today, "dateTo": today, "lang": "id", "keyword": "kepemilikan"},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            # Termasuk 429 (rate-limited idx.co.id sendiri) -- raise, JANGAN
-            # return kosong (kosong = "tidak ada filing", ini beda kasus) dan
-            # JANGAN cache, biar dicoba lagi nanti.
-            raise X15FetchError(f"idx.co.id membalas HTTP {r.status_code}")
-        try:
-            replies = r.json().get("Replies", [])
-        except ValueError:
-            # 200 tapi bukan JSON = halaman challenge/blokir Cloudflare
-            # (umum menimpa IP datacenter/VPS) -- sama: bukan "tidak ada
-            # filing", jangan menyamar jadi list kosong.
-            raise X15FetchError("respons idx.co.id bukan JSON (kemungkinan challenge/blokir Cloudflare thd IP server)")
-        results = []
-        for rep in replies:
-            p = rep["pengumuman"]
-            kode = p.get("Kode_Emiten", "").strip()
-            tgl = p.get("TglPengumuman", "")[:10]
-            atts = rep.get("attachments", [])
-            if not atts or not kode:
-                continue
-            pdf_url = atts[0].get("FullSavePath", "")
-            if not pdf_url:
-                continue
-            try:
-                pr = sc.get(pdf_url, timeout=12)
-                if pr.status_code != 200:
-                    continue
-                parsed = _parse_ksei_pdf(pr.content)
-                # Skip jika tidak bisa parse nama (PDF format tidak dikenal)
-                if not parsed["nama"] and parsed["pct_setelah"] == 0.0 and parsed["pct_sebelum"] == 0.0:
-                    continue
-                results.append({
-                    "kode": kode,
-                    "tanggal": tgl,
-                    "pdf_url": pdf_url,
-                    **parsed,
-                })
-            except Exception:
-                continue
-        return results
+    # Tanggal acuan = WIB (lihat _WIB di atas), bukan jam lokal server.
+    today = (_dt.now(_WIB) - _td(days=days_back)).strftime("%Y%m%d")
+    url = ("https://www.idx.co.id/primary/ListedCompany/GetAnnouncement"
+           f"?emitenType=*&indexFrom=0&pageSize=100&dateFrom={today}&dateTo={today}"
+           "&lang=id&keyword=kepemilikan")
+    try:
+        status, data = await idx_get_json(url, timeout=25)
+    except IdxCfError as e:
+        # Gagal menembus Cloudflare -- BUKAN "tidak ada filing". Raise (jangan
+        # cache, jangan menyamar jadi list kosong) biar dicoba lagi nanti.
+        raise X15FetchError(str(e))
+    if status != 200:
+        raise X15FetchError(f"idx.co.id membalas HTTP {status}")
+    if not isinstance(data, dict):
+        # 200 tapi bukan JSON = halaman challenge/blokir Cloudflare -- sama:
+        # bukan "tidak ada filing".
+        raise X15FetchError("respons idx.co.id bukan JSON (kemungkinan challenge/blokir Cloudflare thd IP server)")
+    replies = data.get("Replies", [])
 
-    loop = asyncio.get_event_loop()
-    results = await loop.run_in_executor(None, _sync)
+    results = []
+    for rep in replies:
+        p = rep["pengumuman"]
+        kode = p.get("Kode_Emiten", "").strip()
+        tgl = p.get("TglPengumuman", "")[:10]
+        atts = rep.get("attachments", [])
+        if not atts or not kode:
+            continue
+        pdf_url = atts[0].get("FullSavePath", "")
+        if not pdf_url:
+            continue
+        try:
+            pstatus, content = await idx_get_bytes(pdf_url, timeout=20)
+            if pstatus != 200:
+                continue
+            parsed = _parse_ksei_pdf(content)
+            # Skip jika tidak bisa parse nama (PDF format tidak dikenal)
+            if not parsed["nama"] and parsed["pct_setelah"] == 0.0 and parsed["pct_sebelum"] == 0.0:
+                continue
+            results.append({
+                "kode": kode,
+                "tanggal": tgl,
+                "pdf_url": pdf_url,
+                **parsed,
+            })
+        except Exception:
+            continue
+
     _cache_set(cache_key, results, ttl=_CACHE_TTL if days_back == 0 else _CACHE_TTL_HISTORICAL)
     return results
 

@@ -54,7 +54,7 @@ from core.async_yf import async_download_many, async_download
 from core.stock_data import fix_yf_columns
 from core.indicators import (
     calculate_rsi, calculate_macd, calculate_bollinger_bands,
-    calculate_stochrsi,
+    calculate_stochrsi, calculate_atr,
 )
 from core.backtest import backtest_condition
 
@@ -215,6 +215,93 @@ def _score_minervini(df: pd.DataFrame, name: str,
         "pct_from_52w_low": round((price / low_52w - 1) * 100, 1),
         "kriteria_lolos": kriteria_lolos,
         "kriteria_gagal": kriteria_gagal,
+    }
+
+
+# ===========================================================================
+# NR7 + 52W HIGH -- teori entry breakout momentum (permintaan user: uji
+# head-to-head vs Top Pick di Audit Sinyal, DITANDAI HIGH RISK).
+#
+# Landasan teori:
+# - NR7 (Narrow Range 7, Tony Crabel 1990): hari dgn range (High-Low)
+#   TERSEMPIT dari 7 hari terakhir menandai KONTRAKSI volatilitas -- sering
+#   mendahului ekspansi/breakout. Nilai utamanya: STOP jadi sangat ketat
+#   (di bawah Low bar sempit itu), memberi rasio imbal-risiko bagus.
+# - 52-Week High breakout (George & Hwang 2004, "The 52-Week High and
+#   Momentum Investing", Journal of Finance): harga di/dekat tertinggi 52
+#   minggu cenderung LANJUT naik -- investor under-react thd anchor psikologis
+#   "harga tertinggi setahun". Salah satu anomali momentum paling banyak
+#   direplikasi.
+# Gabungan = "koil ketat tepat di area tertinggi 52 minggu" -> setup
+# breakout momentum. SELALU BUY (long). Ditandai HIGH RISK: breakout bisa
+# gagal (false breakout) & stop ketat mudah tersentuh -- itu sifat teorinya.
+#
+# Pemetaan entry/TP/SL (dikonfirmasi user):
+# - ENTRY = harga PASAR saat sinyal (bukan buy-stop di level breakout) --
+#   sesuai prinsip user "breakout kadang palsu, jangan entry di level
+#   breakout" + momentum theory (Minervini: masuk saat konfirmasi kekuatan).
+#   Perekaman entry itu sendiri ada di record_nr7_52w_signals (langsung OPEN).
+# - SL = di bawah Low bar NR7 (inti teori NR7: stop ketat), + buffer kecil
+#   ATR supaya tidak persis di low (rawan noise-out 1 tick).
+# - TP = kelipatan risiko R (risk-reward textbook): TP1=2R, TP2=3R, TP3=4R.
+# ===========================================================================
+NR7_MIN_SL_PCT = 1.0     # lantai stop% -- range NR7 super sempit bisa <1%, terlalu rawan noise
+NR7_MAX_SL_PCT = 7.0     # plafon: kalau "tersempit dari 7 hari" pun >7%, bukan setup NR7 ketat -> skip
+NR7_52W_NEAR_PCT = 0.98  # close >= 98% dari 52W high = "di area tertinggi 52 minggu"
+
+
+def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
+    """Deteksi setup NR7 + 52W High pada bar TERAKHIR df (harian). Return
+    dict level SL/TP berbasis teori kalau setup valid (entry ditentukan saat
+    perekaman = harga pasar), else None. MURNI (tanpa I/O) -- mudah ditest
+    dgn df sintetis."""
+    if df is None or len(df) < 252:
+        return None  # butuh >= 52 minggu data utk 52W high yang sah
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+    close = df["Close"].astype(float)
+
+    # --- NR7: range hari ini TERSEMPIT dari 7 hari terakhir ---
+    rng = (high - low).tail(7)
+    today_range = float(rng.iloc[-1])
+    if today_range <= 0 or today_range > float(rng.min()) + 1e-9:
+        return None  # hari ini bukan range tersempit -> bukan NR7
+
+    # --- 52W High: close di/dekat tertinggi 52 minggu ---
+    high_52w = float(high.tail(252).max())
+    last_close = float(close.iloc[-1])
+    if high_52w <= 0 or last_close < high_52w * NR7_52W_NEAR_PCT:
+        return None  # belum di area tertinggi 52 minggu
+
+    # --- SL: di bawah Low bar NR7 + buffer kecil ATR ---
+    nr7_low = float(low.iloc[-1])
+    buffer = 0.0
+    try:
+        atr = calculate_atr(df)
+        if atr is not None and atr == atr:  # bukan NaN
+            buffer = 0.15 * float(atr)
+    except Exception:
+        buffer = 0.0
+    sl_price = nr7_low - buffer
+    if sl_price <= 0 or sl_price >= last_close:
+        return None  # stop tidak wajar (>= harga) -> skip
+
+    sl_pct = (last_close - sl_price) / last_close * 100
+    if sl_pct < NR7_MIN_SL_PCT:
+        sl_pct = NR7_MIN_SL_PCT       # lantai anti-noise
+    if sl_pct > NR7_MAX_SL_PCT:
+        return None                   # range terlalu lebar utk premis "stop ketat" NR7
+
+    # --- TP: R-multiples (risk-reward) ---
+    return {
+        "is_nr7_52w": True,
+        "nr7_sl_pct": round(sl_pct, 2),
+        "nr7_tp1_pct": round(sl_pct * 2, 2),
+        "nr7_tp2_pct": round(sl_pct * 3, 2),
+        "nr7_tp3_pct": round(sl_pct * 4, 2),
+        "nr7_low": round(nr7_low, 2),
+        "high_52w": round(high_52w, 2),
+        "pct_from_52w_high": round((last_close / high_52w - 1) * 100, 2),
     }
 
 

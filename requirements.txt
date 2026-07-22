@@ -17,9 +17,15 @@ reportlab>=4.0
 httpx>=0.27
 defusedxml>=0.7.1
 
-# Scraping pengumuman IDX (X-15/kepemilikan saham) -- bypass proteksi
-# Cloudflare di idx.co.id.
+# Scraping pengumuman IDX (X-15/kepemilikan saham) -- menembus Cloudflare
+# managed-challenge di idx.co.id yang MEMBLOKIR IP datacenter/VPS. Dari IP
+# rumah cloudscraper masih cukup; dari VPS perlu nodriver (memanen cookie
+# cf_clearance via Chrome headed/Xvfb) + curl_cffi (pakai ulang cookie dgn
+# meniru JA3 Chrome). Lihat core/idx_cf.py & scripts/idx_solve.py.
+# nodriver butuh Google Chrome stable + Xvfb terpasang di server.
 cloudscraper>=1.2.71
+curl_cffi>=0.7.0
+nodriver>=0.50
 
 # Pemrosesan gambar (watermark chart)
 pillow>=10.0

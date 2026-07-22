@@ -626,11 +626,29 @@ def _ensure_table():
         # ikut dihitung sbg "aktif" (sama semangat dgn OPEN) -- kalau tidak,
         # kode yang sama bisa dapat BANYAK rekomendasi PENDING_ENTRY yang
         # menumpuk tiap hari selama entry-nya belum/tidak pernah tersentuh.
+        #
+        # REVISI (2026-07-22, permintaan user langsung: "saya mau NR7+52W High
+        # ada di audit sinyal ... buat bandingin sama Top Pick"): index unik
+        # per-kode LINTAS-SOURCE (idx_signal_unique_active_kode) DIPECAH jadi
+        # dua index partial PER SOURCE-GROUP supaya source teori baru NR7_52W
+        # BOLEH punya sinyal aktif utk saham yang SAMA dgn TOP_PICK/SMART_MONEY
+        # -- perbandingan head-to-head antar-teori butuh overlap ini. Mutual-
+        # exclusion TOP_PICK<->SMART_MONEY (keputusan migrasi keenam) TETAP
+        # berlaku utk pasangan itu (grup 'main'); daftar 'Semua Sinyal' di UI
+        # yang men-dedup TAMPILANnya per kode, BUKAN datanya (user: "daftar
+        # utama tetap rapi"). Index lama di-DROP eksplisit supaya DB produksi
+        # yang sudah punya index per-kode lintas-source ikut termigrasi.
         conn.execute('DROP INDEX IF EXISTS idx_signal_unique_open_kode')
+        conn.execute('DROP INDEX IF EXISTS idx_signal_unique_active_kode')
         conn.execute('''
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique_active_kode
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_active_main
             ON signal_history(kode)
-            WHERE status IN ('OPEN', 'PENDING_ENTRY')
+            WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source IN ('TOP_PICK', 'SMART_MONEY')
+        ''')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_active_nr7
+            ON signal_history(kode)
+            WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'NR7_52W'
         ''')
         # Migrasi ketujuh belas: permintaan user langsung ("nentuin entry
         # audit sinyalnya lebih akurat lagi ... momentum saham yg masuk
@@ -644,6 +662,18 @@ def _ensure_table():
         if "entry_mode" not in cols3:
             conn.execute("ALTER TABLE signal_history ADD COLUMN entry_mode TEXT")
     _ensured = True
+
+
+def get_active_kodes() -> list[str]:
+    """Kode UNIK sinyal yang masih aktif (OPEN/PENDING_ENTRY) -- dipakai
+    web/app.py utk menghangatkan cache peringatan aksi korporasi (split/
+    dividen) tanpa perlu memuat seluruh get_signal_report()."""
+    _ensure_table()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT kode FROM signal_history WHERE status IN ('OPEN', 'PENDING_ENTRY')"
+        ).fetchall()
+    return [r["kode"] for r in rows]
 
 
 def _has_open_signal(kode: str) -> bool:
@@ -698,10 +728,34 @@ def _has_open_signal(kode: str) -> bool:
     resolved_at)`, bukan `date(recorded_at)` -- resolved_at TEPAT
     mencatat kapan baris itu BENAR-BENAR selesai (NULL selama masih OPEN,
     jadi tidak pernah salah cocok utk baris yang belum resolve)."""
+    # DIBATASI ke grup 'main' (TOP_PICK/SMART_MONEY) sejak NR7_52W ada
+    # (2026-07-22): source NR7_52W SENGAJA tidak ikut dihitung di sini supaya
+    # (a) sinyal NR7 utk suatu kode TIDAK memblokir TOP_PICK/SMART_MONEY
+    # merekam kode yang sama, dan (b) sebaliknya. Dedup NR7 sendiri ada di
+    # _has_open_nr7. Utk data lama (pra-NR7) filter ini identik dgn perilaku
+    # sebelumnya krn cuma ada TOP_PICK/SMART_MONEY -- bukan perubahan perilaku.
     with get_db() as conn:
         row = conn.execute('''
             SELECT 1 FROM signal_history
-            WHERE kode = ? AND (status IN ('OPEN', 'PENDING_ENTRY') OR date(resolved_at) = date('now', 'localtime'))
+            WHERE kode = ? AND source IN ('TOP_PICK', 'SMART_MONEY')
+              AND (status IN ('OPEN', 'PENDING_ENTRY') OR date(resolved_at) = date('now', 'localtime'))
+            LIMIT 1
+        ''', (kode,)).fetchone()
+    return row is not None
+
+
+def _has_open_nr7(kode: str) -> bool:
+    """Dedup KHUSUS source NR7_52W (TERPISAH dari _has_open_signal grup main):
+    True kalau kode ini sudah punya sinyal NR7_52W aktif (OPEN/PENDING_ENTRY)
+    ATAU yang baru resolve HARI INI. Terpisah supaya NR7 boleh koeksis dgn
+    TOP_PICK/SMART_MONEY utk saham yang sama (perbandingan teori head-to-head
+    yang diminta user) tapi tetap tidak menumpuk banyak NR7 utk kode yang
+    sama. Klausul 'resolve hari ini' meniru _has_open_signal klausul (b)."""
+    with get_db() as conn:
+        row = conn.execute('''
+            SELECT 1 FROM signal_history
+            WHERE kode = ? AND source = 'NR7_52W'
+              AND (status IN ('OPEN', 'PENDING_ENTRY') OR date(resolved_at) = date('now', 'localtime'))
             LIMIT 1
         ''', (kode,)).fetchone()
     return row is not None
@@ -1092,6 +1146,97 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
             "confidence_score": it.get("confidence_score"), "pattern": pattern,
             "source": "SMART_MONEY", "direction": direction,
             "entry_mode": entry_mode,
+        })
+    return saved
+
+
+# Cap harian NR7_52W -- sama semangat SMART_MONEY_MAX_PER_DAY (jangan bising).
+NR7_52W_MAX_PER_DAY = 10
+
+
+async def record_nr7_52w_signals(items: list[dict], price_lookup=None) -> list[dict]:
+    """Catat sinyal breakout NR7 + 52W High (source teori independen ke-4,
+    permintaan user 2026-07-22: uji head-to-head vs Top Pick, DITANDAI HIGH
+    RISK di UI). BUY-only. Entry = harga PASAR saat sinyal -> LANGSUNG OPEN
+    (seperti mode AGRESIF: masuk saat konfirmasi kekuatan, bukan buy-stop di
+    level breakout -- keputusan user, sesuai prinsip 'breakout kadang palsu').
+    SL/TP diambil dari item yang SUDAH di-enrich detect_nr7_52w (core/
+    screening_pro.py: nr7_sl_pct/nr7_tp1_pct/nr7_tp2_pct/nr7_tp3_pct = SL di
+    bawah Low bar NR7, TP = R-multiples 2R/3R/4R) -- BUKAN dihitung ulang di
+    sini, jadi level yang diaudit identik dgn yang ditentukan teori.
+
+    Dedup lewat _has_open_nr7 (per-KODE, HANYA source NR7_52W): SENGAJA boleh
+    koeksis dgn TOP_PICK/SMART_MONEY utk saham yang sama (index unik ter-scope
+    per source-group, lihat _ensure_table) supaya perbandingan antar-teori
+    adil; daftar 'Semua Sinyal' di UI yang men-dedup TAMPILANnya.
+
+    Gate jam bursa & pola return: sama persis dgn record_smart_money_signals().
+    Item WAJIB sudah di-enrich detect_nr7_52w oleh caller (web/app.py) --
+    fungsi ini sendiri tidak melakukan I/O jaringan (mudah ditest)."""
+    _ensure_table()
+    if _is_bursa_weekend():
+        return []
+    if not _is_bursa_trading_hours():
+        return []
+    candidates = [
+        it for it in items
+        if it.get("is_nr7_52w")
+        and it.get("nr7_sl_pct")
+        and it.get("nr7_tp1_pct")
+        and it.get("harga")
+    ][:NR7_52W_MAX_PER_DAY]
+    if not candidates:
+        return []
+
+    saved = []
+    for it in candidates:
+        if _has_open_nr7(it["kode"]):
+            continue
+        # Entry = harga MARKET (real-time) saat sinyal, fallback ke closing
+        # harian kalau lookup gagal -- pola sama dgn record_smart_money_signals.
+        entry_price = it["harga"]
+        if price_lookup is not None:
+            try:
+                live_price = await price_lookup(it["kode"])
+                if live_price:
+                    entry_price = live_price
+            except Exception:
+                pass  # fail-open: pakai closing harian, jangan gagalkan pencatatan
+        sl_pct = it["nr7_sl_pct"]
+        tp_pct = it["nr7_tp1_pct"]
+        tp2_pct = it.get("nr7_tp2_pct") or (sl_pct * 3)
+        tp3_pct = it.get("nr7_tp3_pct") or (sl_pct * 4)
+        pattern = "NR7 + 52W High"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Re-cek TEPAT sebelum INSERT, TANPA await di antaranya (pola race
+        # yang sama dgn record_top_picks/record_smart_money_signals).
+        if _has_open_nr7(it["kode"]):
+            continue
+        with get_db() as conn:
+            cur = conn.execute('''
+                INSERT OR IGNORE INTO signal_history
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
+                     confidence_score, ai_score, recommendation, pattern, source,
+                     recorded_at, direction, entry_mode, status, entry_filled_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NR7_52W',
+                        datetime('now', 'localtime'), 'BUY', 'AGRESIF', 'OPEN', ?)
+            ''', (
+                it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
+                it.get("confidence_score"), it.get("ai_score"), it.get("ai_rating"),
+                pattern, now_str,
+            ))
+            # OR IGNORE + index unik NR7 = pengaman ATOMIC terakhir thd race.
+            if cur.rowcount == 0:
+                continue
+            new_id = cur.lastrowid
+        tp_price = round(entry_price * (1 + tp_pct / 100), 2)
+        sl_price = round(entry_price * (1 - sl_pct / 100), 2)
+        saved.append({
+            "id": new_id, "kode": it["kode"], "entry_price": entry_price,
+            "tp_pct": tp_pct, "tp2_pct": tp2_pct, "tp3_pct": tp3_pct, "sl_pct": sl_pct,
+            "tp_price": tp_price, "sl_price": sl_price,
+            "confidence_score": it.get("confidence_score"), "pattern": pattern,
+            "source": "NR7_52W", "direction": "BUY", "entry_mode": "AGRESIF",
         })
     return saved
 

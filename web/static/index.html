@@ -3773,7 +3773,7 @@ async function loadFilter(mode){
 
 async function loadScreenerPro(){
   const body=$('#uniBody');
-  body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai (Minervini)… 15–30 detik</p>';
+  body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai ±178 saham likuid (Minervini)… 20–40 detik</p>';
   let d; try{d=await api('/api/screenerpro')}catch(e){body.innerHTML=errBox(e.message);return}
   const items=d.items||[];
   if(!items.length){body.innerHTML=`<section class="panel">${emptyState('Belum ada saham yang lolos ambang skor Minervini (≥65) saat ini. Pasar mungkin sedang lemah.')}</section>`;return}
@@ -3787,7 +3787,7 @@ async function loadScreenerPro(){
     <td>${fmt(r.rsi,1)}</td>
     <td class="${r.pct_from_52w_high>=-10?'up':'down'}">${fmt(r.pct_from_52w_high,1)}%</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Hanya skor ≥65. Tap baris untuk analisis.</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Memindai ±178 saham likuid, hanya skor ≥65. Tap baris untuk analisis.</p>
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th>RSI</th><th>vs 52W High</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   staggerRows(body.querySelector('.ctable'), 12);
@@ -3858,7 +3858,15 @@ $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});
 /* ---------- AUDIT SINYAL ---------- */
 function _auditStatusColor(s){return s==='TP_HIT'?'var(--bull)':s==='SL_HIT'?'var(--bear)':(s==='EXPIRED'||s==='EXPIRED_NO_ENTRY')?'var(--muted)':s==='PENDING_ENTRY'?'var(--accent)':'var(--gold)'}
 function _auditStatusLabel(s){return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan',PENDING_ENTRY:'Menunggu Entry',EXPIRED_NO_ENTRY:'Entry Tidak Tercapai'}[s]||s}
-function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money'}[s]||s||'Top Pick'}
+function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money',NR7_52W:'NR7 + 52W High'}[s]||s||'Top Pick'}
+// Badge HIGH RISK khusus sinyal NR7+52W High (teori breakout momentum: stop
+// ketat + breakout bisa palsu -- ditandai jelas atas permintaan user).
+function _riskBadge(s){return s&&s.source==='NR7_52W'?`<span title="Breakout momentum: stop ketat & breakout bisa gagal (false breakout)" style="font-size:9px;font-weight:700;color:#E8A13A;border:1px solid #E8A13A66;border-radius:4px;padding:1px 5px;margin-left:5px;letter-spacing:.3px;white-space:nowrap">HIGH RISK</span>`:''}
+// Peringatan aksi korporasi (split/dividen) -- kasih tanda supaya sinyal tidak
+// salah dibaca sbg trap (kasus RAJA split, ERAA dividend trap). Badge ringkas +
+// catatan terlihat (mobile tak punya hover, jadi note WAJIB kelihatan).
+function _corpBadge(s){const c=s&&s.corp_action;if(!c)return'';const split=c.has_split;const color=split?'#D65A4A':'#E8A13A';const label=split?'⚠ SPLIT':'⚠ DIVIDEN';return `<span title="${escHtml(c.summary||'')} — ${escHtml(c.note||'')}" style="font-size:9px;font-weight:700;color:${color};border:1px solid ${color}66;border-radius:4px;padding:1px 5px;margin-left:5px;white-space:nowrap">${label}</span>`}
+function _corpNote(s){const c=s&&s.corp_action;if(!c)return'';const color=c.has_split?'#D65A4A':'#E8A13A';return `<div style="font-size:10px;color:${color};font-style:italic;margin-top:3px;line-height:1.35">⚠ Aksi korporasi: ${escHtml(c.summary)}. ${escHtml(c.note)}</div>`}
 function _entryModeBadge(mode){if(!mode)return '';return mode==='AGRESIF'?'<span class="entry-mode agresif">🚀 Agresif</span>':'<span class="entry-mode aman">🛡️ Area Aman</span>';}
 // YYYY-MM-DD lokal (BUKAN toISOString, itu UTC -- bisa mundur 1 hari dari
 // tanggal WIB sungguhan kalau dipakai sesudah tengah malam UTC/jam 7 pagi WIB).
@@ -4314,14 +4322,31 @@ async function loadSignalAudit(){
     _auditCharts.forEach(c => { try { c.remove(); } catch (e) {} });
     _auditCharts = [];
     if (_auditIO) { try { _auditIO.disconnect(); } catch (e) {} _auditIO = null; }
-    let filtered = signals;
+    // De-dup daftar "Semua Sinyal": satu KODE cuma tampil sekali utk sinyal
+    // AKTIF (OPEN/PENDING_ENTRY) walau >1 teori memegangnya (mis. Top Pick +
+    // NR7_52W utk saham yang sama) -- permintaan user "daftar utama tetap
+    // rapi". Sinyal yang SUDAH selesai (TP_HIT/SL_HIT/EXPIRED*) TIDAK
+    // di-dedup: tiap baris itu trade nyata yang berbeda per teori (track
+    // record -- prinsip "jangan hapus buat ngetrack"). Rincian per-teori
+    // (termasuk NR7 yang tertutup di sini) tetap utuh di tab "Per Teori".
+    const _SRC_PRI = {TOP_PICK:0, SMART_MONEY:1, NR7_52W:2};
+    const _isActiveSig = s => s.status === 'OPEN' || s.status === 'PENDING_ENTRY';
+    const _seenActive = {};
+    const base = [];
+    for(const s of signals){
+      if(!_isActiveSig(s)){ base.push(s); continue; }
+      const at = _seenActive[s.kode];
+      if(at === undefined){ _seenActive[s.kode] = base.length; base.push(s); }
+      else if((_SRC_PRI[s.source]??9) < (_SRC_PRI[base[at].source]??9)){ base[at] = s; }
+    }
+    let filtered = base;
     if(auditFilter !== 'ALL'){
-      if(auditFilter === 'EXPIRED') filtered = signals.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY');
+      if(auditFilter === 'EXPIRED') filtered = base.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY');
       // CONFIRMED = tp_level_hit>=1 di status apa pun (menggantikan panel
       // "Signal Confirmed" yang dulu berdiri sendiri -- sekarang cuma satu
       // klik filter di daftar yang sama, tidak menduplikasi kartu).
-      else if(auditFilter === 'CONFIRMED') filtered = signals.filter(s => (s.tp_level_hit||0) >= 1);
-      else filtered = signals.filter(s => s.status === auditFilter);
+      else if(auditFilter === 'CONFIRMED') filtered = base.filter(s => (s.tp_level_hit||0) >= 1);
+      else filtered = base.filter(s => s.status === auditFilter);
     }
     
     const isMore = auditLimit < filtered.length;
@@ -4368,7 +4393,7 @@ async function loadSignalAudit(){
 
       if(auditViewMode === 'table') {
         return `<tr style="cursor:pointer" data-k="${s.kode}">
-          <td>${tickerTag(s.kode)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div></td>
+          <td>${tickerTag(s.kode)}${_riskBadge(s)}${_corpBadge(s)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div></td>
           <td class="hide-xs">${_sourceLabel(s.source)} ${dirBadge}</td>
           <td>Rp${fmt(s.entry_price)}</td>
           <td style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
@@ -4382,12 +4407,13 @@ async function loadSignalAudit(){
         <div class="zeta-mini-chart"><div class="loader">Memuat chart...</div></div>
         <div class="zeta-sig-body">
           <div class="zeta-sig-header">
-            <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span class="zeta-sig-tk">${tickerTag(s.kode)}</span>
-              ${dirBadge}
+              ${dirBadge}${_riskBadge(s)}${_corpBadge(s)}
             </div>
             <span class="zeta-sig-src">${_sourceLabel(s.source)}</span>
           </div>
+          ${_corpNote(s)}
           <div class="zeta-sig-row" style="margin-top:4px">
             <span class="zeta-sig-lbl">Entry</span>
             <span class="zeta-sig-val">Rp${fmt(s.entry_price)}</span>
@@ -7749,7 +7775,7 @@ async function _pollNotifications(silent){
     _updateNotifBadge();
   }catch(e){/* diam -- notifikasi bukan fitur kritis, jangan ganggu UX */}
 }
-function _srcLabel(s){return({TOP_PICK:'Top Pick',SMART_MONEY:'Smart Money',MACD_CROSS:'MACD Cross'})[s]||s||'Sinyal'}
+function _srcLabel(s){return({TOP_PICK:'Top Pick',SMART_MONEY:'Smart Money',MACD_CROSS:'MACD Cross',NR7_52W:'NR7 + 52W High'})[s]||s||'Sinyal'}
 function _renderNotifPanel(){
   const q=_notifGetQueue();
   const perm=('Notification'in window)&&Notification.permission!=='granted'&&rsGet('rs_notif_browser')!=='1'
