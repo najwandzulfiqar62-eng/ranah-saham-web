@@ -2042,13 +2042,18 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="view" id="v-portofolio">
     <section class="panel">
       <p class="eyebrow">Racik Portofolio</p>
-      <p class="insight muted" style="font-size:13px;margin-bottom:12px">Punya modal sekian, mau beli saham apa saja — berapa lot masing-masing? Isi modal &amp; kode saham pilihanmu, sistem menghitung jumlah lot supaya risiko tiap posisi terkendali.</p>
+      <p class="insight muted" style="font-size:13px;margin-bottom:12px">Punya modal sekian, mau beli saham apa saja — berapa lot masing-masing? Pilih sahamnya dari sinyal yang sedang diaudit (atau ketik sendiri), sistem menghitung jumlah lot supaya risiko tiap posisi terkendali.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <button class="chip pf-src active" data-src="audit" type="button">Dari Audit Sinyal</button>
+        <button class="chip pf-src" data-src="manual" type="button">Ketik sendiri</button>
+      </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
         <label class="fld" style="min-width:170px">Modal (Rp)<input id="pfModal" type="number" value="10000000"></label>
-        <label class="fld" style="min-width:240px;flex:1">Saham pilihanmu (pisahkan koma)<input id="pfKodes" placeholder="BBCA, TLKM, ASII" style="text-transform:uppercase"></label>
+        <label class="fld" id="pfKodesWrap" style="min-width:240px;flex:1;display:none">Saham pilihanmu (pisahkan koma)<input id="pfKodes" placeholder="BBCA, TLKM, ASII" style="text-transform:uppercase"></label>
         <label class="fld" title="Kerugian maksimal per posisi kalau stop loss kena">Risiko/posisi %<input id="pfRisk" type="number" value="1" step="0.5" min="0.1" max="100"></label>
         <button class="btn" id="pfBtn">Racik</button>
       </div>
+      <div id="pfPicker" style="margin-top:16px"></div>
       <div id="pfOut"></div>
     </section>
   </div>
@@ -2700,6 +2705,7 @@ function _applyRoute(v){
     if(v==='sektor'&&!loaded.sektor){loaded.sektor=1;loadSektor('rank')}
     if(v==='edukasi'&&!loaded.edukasi){loaded.edukasi=1;renderEdu()}
     if(v==='forum'&&!loaded.forum){loaded.forum=1;loadForum()}
+    if(v==='portofolio'&&!loaded.portofolio){loaded.portofolio=1;setPfSumber('audit')}
     // backtest: tidak auto-load, user klik run sendiri
   };
   if(prev&&prev!==view){
@@ -6772,12 +6778,54 @@ async function calcTC(){
 }
 /* ---- Racik Portofolio: modal -> berapa lot tiap saham (usulan 2026-07-23).
    Ukuran posisi BERBASIS RISIKO + batas konsentrasi; perhitungannya di server
-   (core/risk_management.build_portfolio), di sini murni penyajian. ---- */
+   (core/risk_management.build_portfolio), di sini murni penyajian.
+   Sahamnya DIPILIH SENDIRI user dari sinyal yang sedang diaudit (revisi
+   usulan: "ambil emitennya dari audit sinyal aja, nanti suruh milih
+   sendiri"), atau diketik manual lewat tab "Ketik sendiri". ---- */
+let _pfSumber='audit', _pfKandidat=null;
+function _pfTerpilih(){return [...document.querySelectorAll('#pfPicker input[type=checkbox]:checked')].map(c=>c.value)}
+async function loadPfKandidat(){
+  const box=$('#pfPicker');
+  box.innerHTML='<div class="skel loadbar"></div>';
+  let d; try{d=await api('/api/portofolio/kandidat')}catch(e){box.innerHTML=errBox(e.message);return}
+  _pfKandidat=d.items||[];
+  if(!_pfKandidat.length){box.innerHTML=`<p class="insight muted" style="font-size:13px">Belum ada sinyal aktif di Audit Sinyal untuk dipilih. Coba tab “Ketik sendiri”.</p>`;return}
+  box.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <p class="muted" style="font-size:12px;margin:0">Centang saham yang mau diracik (maks 10) — diurutkan dari skor keyakinan tertinggi.</p>
+      <button class="chip" type="button" id="pfClear">Kosongkan pilihan</button>
+    </div>
+    <div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px">
+      ${_pfKandidat.map(it=>`
+        <label style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer">
+          <input type="checkbox" value="${escHtml(it.kode)}">
+          <span style="flex:1;min-width:0">
+            <b>${escHtml(it.kode)}</b>
+            <span class="chip" style="font-size:10px;padding:1px 6px;margin-left:6px">${escHtml(_srcLabel(it.source))}</span>
+            ${it.status==='PENDING_ENTRY'?'<span class="chip" style="font-size:10px;padding:1px 6px;margin-left:4px;color:var(--gold)">belum entry</span>':''}
+            <br><span class="muted" style="font-size:11px">skor ${fmt(it.confidence_score,1)} · SL rencana Rp${fmt(it.sl_price)}</span>
+          </span>
+        </label>`).join('')}
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:6px" id="pfCount">0 dipilih</p>`;
+  const upd=()=>{const n=_pfTerpilih().length;$('#pfCount').textContent=`${n} dipilih${n>10?' — hanya 10 pertama dipakai':''}`};
+  box.querySelectorAll('input[type=checkbox]').forEach(c=>c.addEventListener('change',upd));
+  $('#pfClear').addEventListener('click',()=>{box.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false);upd()});
+}
+function setPfSumber(src){
+  _pfSumber=src;
+  document.querySelectorAll('.pf-src').forEach(b=>b.classList.toggle('active',b.dataset.src===src));
+  $('#pfKodesWrap').style.display=src==='manual'?'':'none';
+  $('#pfPicker').innerHTML='';
+  $('#pfOut').innerHTML='';
+  if(src==='audit')loadPfKandidat();
+}
 async function calcPortofolio(){
-  const modal=$('#pfModal').value, kodes=$('#pfKodes').value.trim().toUpperCase(), risk=$('#pfRisk').value, out=$('#pfOut');
-  if(!kodes){out.innerHTML=errBox('Isi dulu kode saham pilihanmu, mis. BBCA, TLKM.');return}
+  const modal=$('#pfModal').value, risk=$('#pfRisk').value, out=$('#pfOut');
+  const kodes=_pfSumber==='audit'?_pfTerpilih().slice(0,10).join(','):$('#pfKodes').value.trim().toUpperCase();
+  if(!kodes){out.innerHTML=errBox(_pfSumber==='audit'?'Centang dulu minimal satu saham dari daftar di atas.':'Isi dulu kode saham pilihanmu, mis. BBCA, TLKM.');return}
   out.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
-  let d; try{d=await api(`/api/portofolio?modal=${encodeURIComponent(modal)}&kodes=${encodeURIComponent(kodes)}&risk_pct=${encodeURIComponent(risk)}`)}catch(err){out.innerHTML=errBox(err.message);return}
+  let d; try{d=await api(`/api/portofolio?modal=${encodeURIComponent(modal)}&kodes=${encodeURIComponent(kodes)}&risk_pct=${encodeURIComponent(risk)}&sumber=${_pfSumber==='audit'?'audit':'analisis'}`)}catch(err){out.innerHTML=errBox(err.message);return}
   const rows=(d.posisi||[]).map(p=>{
     // Alasan lot dipangkas ditampilkan APA ADANYA -- user berhak tahu kenapa
     // porsinya tidak sebesar yang risikonya izinkan.
@@ -6787,7 +6835,7 @@ async function calcPortofolio(){
     return `<tr>
       <td><b>${escHtml(p.kode)}</b>${p.likuiditas&&/Tidak|Kurang/.test(p.likuiditas)?`<br><span class="muted" style="font-size:11px;color:var(--gold)">${escHtml(p.likuiditas)}</span>`:''}</td>
       <td style="text-align:right">Rp${fmt(p.harga)}</td>
-      <td style="text-align:right" class="down">Rp${fmt(p.stop_loss)}<br><span class="muted" style="font-size:11px">−${fmt(p.sl_pct,2)}%</span></td>
+      <td style="text-align:right" class="down">Rp${fmt(p.stop_loss)}<br><span class="muted" style="font-size:11px">−${fmt(p.sl_pct,2)}%</span>${p.asal_sl?`<br><span class="muted" style="font-size:10px;opacity:.75">${escHtml(p.asal_sl)}</span>`:''}</td>
       <td style="text-align:right"><b style="color:var(--gold)">${fmt(p.lot)}</b></td>
       <td style="text-align:right">Rp${fmt(p.nilai)}<br><span class="muted" style="font-size:11px">${fmt(p.porsi_pct,1)}%</span></td>
       <td style="text-align:right" class="down">Rp${fmt(p.risiko_rp)}<br><span class="muted" style="font-size:11px">${fmt(p.risiko_pct_modal,2)}% modal</span></td>
@@ -6809,6 +6857,7 @@ async function calcPortofolio(){
       <div class="cell"><div class="k">Sisa modal</div><div class="v">Rp${fmt(d.sisa_modal)}</div></div>
       <div class="cell"><div class="k">Risiko bila SEMUA kena SL</div><div class="v down">Rp${fmt(d.total_risiko_rp)} <span class="muted" style="font-size:12px">(${fmt(d.total_risiko_pct,2)}%)</span></div></div>
     </div>
+    ${d.terpakai_pct<50?`<p class="insight" style="color:var(--gold);font-size:12.5px;margin-top:12px">${icon('alert-triangle',{size:13})} Modal baru terpakai ${fmt(d.terpakai_pct,1)}%. Itu wajar: dengan stop loss yang lebar, jatah ${fmt(d.risk_pct,1)}% risiko per posisi cuma cukup untuk sedikit lot. Kalau mau modal lebih terpakai, naikkan risiko per posisi atau pilih lebih banyak saham — <b>bukan</b> dengan memaksa lot melebihi rencana risikomu.</p>`:''}
     ${skipped}
     ${infoNote(`<b>Cara hitungnya:</b> tiap posisi diukur agar kalau stop loss kena, ruginya maksimal ${fmt(d.risk_pct,1)}% modal — jadi saham dengan stop loss rapat dapat lot lebih banyak. Ditambah batas <b>${fmt(d.max_pos_pct,0)}% modal per saham</b> supaya satu saham tidak menyedot seluruh dana (stop rapat bisa menyesatkan: kalau harga <i>lompat</i> melewatinya, rugi nyatanya melebihi ${fmt(d.risk_pct,1)}%). Stop loss memakai support S1 dari halaman Analisis. ${escHtml(d.disclaimer||'')}`)}`
     :`${errBox('Tidak ada saham yang bisa masuk portofolio dengan modal & risiko itu.')}${skipped}`;
@@ -6864,6 +6913,7 @@ $('#rrBtn').addEventListener('click',calcRR);
 $('#psBtn').addEventListener('click',calcPS);
 $('#pfBtn').addEventListener('click',calcPortofolio);
 $('#pfKodes').addEventListener('keydown',e=>{if(e.key==='Enter')calcPortofolio()});
+document.querySelectorAll('.pf-src').forEach(b=>b.addEventListener('click',()=>setPfSumber(b.dataset.src)));
 $('#tcBtn').addEventListener('click',calcTC);
 $('#tcK').addEventListener('keydown',e=>{if(e.key==='Enter')calcTC()});
 $('#adBtn').addEventListener('click',calcAD);

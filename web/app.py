@@ -1503,10 +1503,69 @@ async def compare(kodes: str = ""):
 
 
 PORTOFOLIO_MAX_SAHAM = 10
+# Prioritas sumber saat SATU kode punya beberapa sinyal aktif sekaligus (NR7
+# sengaja boleh koeksis dgn Top Pick, lihat core/signal_history.py). Untuk
+# meracik portofolio sahamnya toh cuma dibeli SEKALI, jadi dipilih satu --
+# urutan SAMA dgn de-dup daftar "Semua Sinyal" di frontend supaya konsisten.
+_PORTO_SRC_PRIORITAS = {"TOP_PICK": 0, "SMART_MONEY": 1, "NR7_52W": 2}
+# Label sumber sinyal versi Python (padanan _srcLabel di frontend) -- dipakai
+# menerangkan ASAL level SL yang dipakai meracik, supaya user tahu angkanya
+# datang dari rencana sinyal yang mana.
+_PORTO_SRC_LABEL = {"TOP_PICK": "Top Pick", "SMART_MONEY": "Smart Money",
+                    "NR7_52W": "NR7 + 52W High"}
+
+
+async def _sinyal_aktif_per_kode() -> dict[str, dict]:
+    """{kode: sinyal} utk sinyal BELI yang masih aktif (OPEN/PENDING_ENTRY),
+    satu per kode. Dipakai Racik Portofolio mode 'audit' -- usulan 2026-07-23:
+    'ambil emitennya dari audit sinyal aja, nanti suruh milih sendiri'."""
+    from core.signal_history import get_signal_report
+
+    report = await asyncio.to_thread(get_signal_report)
+    aktif: dict[str, dict] = {}
+    for s in report.get("signals", []):
+        if s.get("status") not in ("OPEN", "PENDING_ENTRY"):
+            continue
+        if s.get("direction") != "BUY":
+            continue  # portofolio = posisi beli
+        if not s.get("sl_price"):
+            continue  # tanpa level SL tidak bisa dihitung ukurannya
+        kode = s["kode"]
+        lama = aktif.get(kode)
+        if lama is None or (_PORTO_SRC_PRIORITAS.get(s.get("source"), 9)
+                            < _PORTO_SRC_PRIORITAS.get(lama.get("source"), 9)):
+            aktif[kode] = s
+    return aktif
+
+
+@app.get("/api/portofolio/kandidat")
+async def portofolio_kandidat():
+    """Daftar saham yang BISA dipilih untuk Racik Portofolio, diambil dari
+    sinyal yang sedang diaudit (Audit Sinyal) -- bukan daftar rekomendasi
+    baru, melainkan sinyal yang memang sudah tercatat & dilacak hasilnya.
+    User memilih sendiri mana yang mau dipakai."""
+    aktif = await _sinyal_aktif_per_kode()
+    items = sorted(aktif.values(),
+                   key=lambda s: (s.get("confidence_score") or 0), reverse=True)
+    out = [{
+        "kode": s["kode"],
+        "source": s.get("source"),
+        "status": s.get("status"),
+        "pattern": s.get("pattern"),
+        "confidence_score": s.get("confidence_score"),
+        "entry_price": s.get("entry_price"),
+        "sl_price": s.get("sl_price"),
+        "tp_price": s.get("tp_price"),
+        # harga terkini yang sudah diperkaya /api/signals (kalau ada)
+        "harga_kini": s.get("floating_price") or s.get("current_price"),
+        "entry_mode": s.get("entry_mode"),
+    } for s in items]
+    return _py({"items": out, "total": len(out)})
 
 
 @app.get("/api/portofolio")
-async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0):
+async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
+                     sumber: str = "analisis"):
     """Racik Portofolio: dari MODAL + saham pilihan USER, hitung berapa LOT
     tiap saham (mis. ?modal=10000000&kodes=BBCA,TLKM&risk_pct=1).
 
@@ -1515,10 +1574,18 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0):
     (core/risk_management.py, murni & tertest), endpoint ini HANYA menyediakan
     harga real-time + level stop loss-nya.
 
-    Stop loss diambil dari support S1 hasil analisis teknikal yang SAMA dengan
-    yang dipakai halaman Analisis & Rencana Trading (_analyze_payload -> s1),
-    BUKAN angka baru -- supaya lot yang disarankan di sini konsisten dengan
-    level yang dilihat user di tempat lain.
+    DUA sumber level stop loss (parameter 'sumber'), keduanya memakai level
+    yang SUDAH ADA di tempat lain -- bukan angka baru, supaya lot yang
+    disarankan di sini bisa direkonsiliasi user dgn yang dilihatnya:
+      - 'analisis' (default): support S1 dari halaman Analisis
+        (_analyze_payload -> s1).
+      - 'audit': SL dari RENCANA sinyal yang sedang diaudit di Audit Sinyal
+        (usulan 2026-07-23 "ambil emitennya dari audit sinyal aja"), sehingga
+        portofolio nyambung dgn rekam jejak yang memang dilacak sistem.
+    Pada kedua mode, ENTRY tetap harga pasar SEKARANG (user membeli hari ini),
+    bukan entry_price historis saat sinyal dulu dicatat -- kalau harga kini
+    sudah berada di bawah level SL-nya, build_portfolio menolaknya dgn alasan
+    jelas (bukan diam-diam memakai risiko negatif).
 
     BUKAN nasihat investasi: sistem tidak menilai saham pilihan user bagus
     atau tidak, hanya menghitung ukuran posisi yang sesuai risiko. Konteks
@@ -1534,6 +1601,7 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0):
     if not lst:
         raise HTTPException(400, "Sertakan minimal 1 kode saham, mis. ?kodes=BBCA,TLKM")
 
+    sinyal_map = await _sinyal_aktif_per_kode() if sumber == "audit" else {}
     results = await asyncio.gather(*(_analyze_payload(k) for k in lst), return_exceptions=True)
 
     candidates, gagal = [], []
@@ -1545,11 +1613,23 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0):
         if isinstance(res, Exception):
             gagal.append({"kode": kode, "alasan": "Gagal mengambil data saham ini."})
             continue
+        sl = res.get("s1") or 0
+        asal_sl = "Support S1 (Analisis)"
+        sig = sinyal_map.get(res["kode"])
+        if sumber == "audit":
+            if not sig:
+                gagal.append({"kode": kode, "alasan": "Tidak punya sinyal aktif di Audit Sinyal."})
+                continue
+            sl = sig.get("sl_price") or 0
+            asal_sl = f"SL rencana sinyal {_PORTO_SRC_LABEL.get(sig.get('source'), sig.get('source') or '')}".strip()
         candidates.append({
             "kode": res["kode"],
             "entry": res.get("price") or 0,
-            "stop_loss": res.get("s1") or 0,
-            "target": res.get("r1"),
+            "stop_loss": sl,
+            "target": (sig or {}).get("tp_price") if sumber == "audit" else res.get("r1"),
+            "asal_sl": asal_sl,
+            "sinyal_source": (sig or {}).get("source") if sumber == "audit" else None,
+            "sinyal_status": (sig or {}).get("status") if sumber == "audit" else None,
             "grade": res.get("grade"),
             "likuiditas": res.get("likuiditas"),
             "recommendation": res.get("recommendation"),

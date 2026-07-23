@@ -197,6 +197,12 @@ def _rp(x: float) -> str:
     return f"Rp{x:,.0f}".replace(",", ".")
 
 
+def _pct(x: float) -> str:
+    """Persen gaya Indonesia (koma sbg pemisah desimal), utk pesan yang tampil
+    langsung di UI -- alasan sama dgn _rp()."""
+    return f"{x:g}".replace(".", ",")
+
+
 def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
                     max_pos_pct: float = MAX_POSISI_PCT) -> dict | None:
     """Racik portofolio: dari MODAL + daftar saham pilihan USER, hitung berapa
@@ -275,7 +281,7 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
         if lot_risiko < 1:
             dilewati.append({
                 "kode": kode,
-                "alasan": (f"Dengan risiko {risk_pct}% per posisi, jatah untuk saham ini "
+                "alasan": (f"Dengan risiko {_pct(risk_pct)}% per posisi, jatah untuk saham ini "
                            f"belum cukup 1 lot. Perbesar modal atau naikkan risiko per posisi."),
             })
             continue
