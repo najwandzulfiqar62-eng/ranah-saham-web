@@ -2673,6 +2673,26 @@ async def _warm_corp_actions(kodes: list[str]) -> None:
         _cache_set(f"corp_action:{k}", acts, ttl=CORP_ACTION_TTL)
 
 
+_corp_warm_inflight = False
+
+
+async def _warm_corp_actions_bg(kodes: list[str]) -> None:
+    """_warm_corp_actions di latar belakang, maksimal SATU sekaligus -- tanpa
+    penjaga ini beberapa request berbarengan memicu batch download yang sama
+    berkali-kali (menggandakan beban ke Yahoo, persis pola yang membuat
+    /api/signals sempat menggantung)."""
+    global _corp_warm_inflight
+    if _corp_warm_inflight:
+        return
+    _corp_warm_inflight = True
+    try:
+        await _warm_corp_actions(kodes)
+    except Exception as e:
+        print(f"⚠️ Gagal warm aksi korporasi: {type(e).__name__}: {e}")
+    finally:
+        _corp_warm_inflight = False
+
+
 def _attach_corp_action_warnings(signals: list[dict]) -> None:
     """Tempel objek peringatan `corp_action` (build_warning) ke tiap sinyal yang
     kodenya punya aksi korporasi di cache. CACHE-ONLY (instan, tanpa jaringan)
@@ -2684,6 +2704,35 @@ def _attach_corp_action_warnings(signals: list[dict]) -> None:
             w = build_warning(acts)
             if w:
                 s["corp_action"] = w
+
+
+# Audit DULU di-await langsung di request path. Itu membuat SETIAP pembukaan
+# halaman Audit Sinyal menunggu audit selesai -- terukur di produksi saat jam
+# bursa: _run_signal_audit ~13 dtk, dan karena TANPA single-flight, beberapa
+# pengunjung sekaligus memicu audit berbarengan sehingga request menggantung
+# >60 dtk dan frontend menyerah -> "Gagal memuat data".
+#
+# Audit yang SAMA PERSIS sudah dijalankan _signal_auto_loop tiap
+# SIGNAL_AUTO_INTERVAL_SECONDS (lihat _run_signal_auto_cycle), jadi di request
+# path cukup DIPICU di latar belakang: halaman tampil seketika dari DB, hasil
+# audit tampak pada muat berikutnya. Flag single-flight mencegah beberapa
+# request menumpuk audit berbarengan (penyebab utama menggantungnya tadi).
+_signal_audit_inflight = False
+
+
+async def _kick_signal_audits_bg() -> None:
+    """Jalankan audit di latar belakang, maksimal SATU sekaligus."""
+    global _signal_audit_inflight
+    if _signal_audit_inflight:
+        return
+    _signal_audit_inflight = True
+    try:
+        await _run_pending_entry_audit()
+        await _run_signal_audit()
+    except Exception as e:
+        print(f"⚠️ Gagal audit latar belakang: {type(e).__name__}: {e}")
+    finally:
+        _signal_audit_inflight = False
 
 
 @app.get("/api/signals")
@@ -2699,14 +2748,10 @@ async def signals():
     pemicu audit, cuma memastikan data terbaru saat halaman dibuka."""
     from core.signal_history import get_signal_report
 
-    try:
-        await _run_pending_entry_audit()
-    except Exception as e:
-        print(f"⚠️ Gagal audit pending-entry: {type(e).__name__}: {e}")
-    try:
-        await _run_signal_audit()
-    except Exception as e:
-        print(f"⚠️ Gagal audit signal history: {type(e).__name__}: {e}")
+    # JANGAN di-await (lihat catatan di _kick_signal_audits_bg): dipicu saja,
+    # supaya halaman tidak pernah menunggu jaringan.
+    if not _signal_audit_inflight:
+        asyncio.create_task(_kick_signal_audits_bg())
 
     report = await asyncio.to_thread(get_signal_report)
 
@@ -2783,10 +2828,14 @@ async def signals():
     # cuma tak dapat peringatan siklus ini.
     active_kodes = [s["kode"] for s in report.get("signals", [])
                     if s.get("status") in ("OPEN", "PENDING_ENTRY")]
-    try:
-        await _warm_corp_actions(active_kodes)
-    except Exception as e:
-        print(f"⚠️ Gagal warm aksi korporasi: {type(e).__name__}: {e}")
+    # Warm-nya TIDAK di-await (alasan sama dgn audit di atas): saat cache masih
+    # dingin -- mis. tepat setelah restart, atau TTL 12 jam baru habis -- batch
+    # download puluhan kode bisa memakan puluhan detik dan menggantungkan
+    # halaman lagi. Auto-cycle juga menghangatkannya, dan penempelan peringatan
+    # di bawah murni baca cache, jadi paling buruk peringatan baru tampil di
+    # muat berikutnya (bukan halaman gagal).
+    if active_kodes:
+        asyncio.create_task(_warm_corp_actions_bg(active_kodes))
     _attach_corp_action_warnings(report.get("signals", []))
 
     return _py(report)
