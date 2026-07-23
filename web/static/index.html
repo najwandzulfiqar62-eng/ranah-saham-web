@@ -2038,6 +2038,20 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <div id="adOut"></div>
     </section>
   </div>
+  <!-- RACIK PORTOFOLIO -->
+  <div class="view" id="v-portofolio">
+    <section class="panel">
+      <p class="eyebrow">Racik Portofolio</p>
+      <p class="insight muted" style="font-size:13px;margin-bottom:12px">Punya modal sekian, mau beli saham apa saja — berapa lot masing-masing? Isi modal &amp; kode saham pilihanmu, sistem menghitung jumlah lot supaya risiko tiap posisi terkendali.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <label class="fld" style="min-width:170px">Modal (Rp)<input id="pfModal" type="number" value="10000000"></label>
+        <label class="fld" style="min-width:240px;flex:1">Saham pilihanmu (pisahkan koma)<input id="pfKodes" placeholder="BBCA, TLKM, ASII" style="text-transform:uppercase"></label>
+        <label class="fld" title="Kerugian maksimal per posisi kalau stop loss kena">Risiko/posisi %<input id="pfRisk" type="number" value="1" step="0.5" min="0.1" max="100"></label>
+        <button class="btn" id="pfBtn">Racik</button>
+      </div>
+      <div id="pfOut"></div>
+    </section>
+  </div>
   <!-- MAKRO -->
   <div class="view" id="v-makro"><div id="makroBody"><div class="hint"><span class="big">Kurs &amp; Makro</span>Memuat saat tab dibuka…</div></div></div>
   <!-- ASING -->
@@ -2536,7 +2550,8 @@ const NAV_GROUPS=[
     {v:'ihsg',l:'IHSG',icon:'trending-up'},
     {v:'banding',l:'Bandingkan',icon:'layers'},
     {v:'backtest',l:'Backtest',icon:'repeat'},
-    {v:'risk',l:'Risk Kalkulator',icon:'sliders'}]},
+    {v:'risk',l:'Risk Kalkulator',icon:'sliders'},
+    {v:'portofolio',l:'Racik Portofolio',icon:'layers'}]},
   {label:'Sinyal',items:[
     {v:'screener',l:'Screener',icon:'search'},
     {v:'toppick',l:'Top Pick',icon:'trophy'},
@@ -6755,6 +6770,49 @@ async function calcTC(){
       <div class="cell"><div class="k">Cut Loss Agresif</div><div class="v down">Rp${fmt(cl.cutloss_aggressive)} (${fmt(cl.aggressive_distance_pct,2)}%)</div></div>
     </div></div>`;
 }
+/* ---- Racik Portofolio: modal -> berapa lot tiap saham (usulan 2026-07-23).
+   Ukuran posisi BERBASIS RISIKO + batas konsentrasi; perhitungannya di server
+   (core/risk_management.build_portfolio), di sini murni penyajian. ---- */
+async function calcPortofolio(){
+  const modal=$('#pfModal').value, kodes=$('#pfKodes').value.trim().toUpperCase(), risk=$('#pfRisk').value, out=$('#pfOut');
+  if(!kodes){out.innerHTML=errBox('Isi dulu kode saham pilihanmu, mis. BBCA, TLKM.');return}
+  out.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
+  let d; try{d=await api(`/api/portofolio?modal=${encodeURIComponent(modal)}&kodes=${encodeURIComponent(kodes)}&risk_pct=${encodeURIComponent(risk)}`)}catch(err){out.innerHTML=errBox(err.message);return}
+  const rows=(d.posisi||[]).map(p=>{
+    // Alasan lot dipangkas ditampilkan APA ADANYA -- user berhak tahu kenapa
+    // porsinya tidak sebesar yang risikonya izinkan.
+    const notes=[];
+    if(p.dibatasi_konsentrasi)notes.push(`dibatasi ${fmt(d.max_pos_pct,0)}% modal/saham`);
+    if(p.dipangkas_modal)notes.push('dipangkas sisa modal');
+    return `<tr>
+      <td><b>${escHtml(p.kode)}</b>${p.likuiditas&&/Tidak|Kurang/.test(p.likuiditas)?`<br><span class="muted" style="font-size:11px;color:var(--gold)">${escHtml(p.likuiditas)}</span>`:''}</td>
+      <td style="text-align:right">Rp${fmt(p.harga)}</td>
+      <td style="text-align:right" class="down">Rp${fmt(p.stop_loss)}<br><span class="muted" style="font-size:11px">−${fmt(p.sl_pct,2)}%</span></td>
+      <td style="text-align:right"><b style="color:var(--gold)">${fmt(p.lot)}</b></td>
+      <td style="text-align:right">Rp${fmt(p.nilai)}<br><span class="muted" style="font-size:11px">${fmt(p.porsi_pct,1)}%</span></td>
+      <td style="text-align:right" class="down">Rp${fmt(p.risiko_rp)}<br><span class="muted" style="font-size:11px">${fmt(p.risiko_pct_modal,2)}% modal</span></td>
+      <td style="font-size:11px" class="muted">${notes.join(' · ')||'—'}</td>
+    </tr>`}).join('');
+  const skipped=(d.dilewati||[]).length?`<div style="margin-top:14px">
+    <p class="muted" style="font-size:12px;margin-bottom:6px">Tidak masuk portofolio:</p>
+    ${d.dilewati.map(x=>`<p class="insight" style="font-size:12px;margin:4px 0;color:var(--gold)">${icon('alert-triangle',{size:12})} <b>${escHtml(x.kode)}</b> — ${escHtml(x.alasan)}</p>`).join('')}</div>`:'';
+  out.innerHTML=(d.posisi||[]).length?`
+    <div style="margin-top:16px;overflow-x:auto">
+      <table class="ctable" style="min-width:720px"><thead><tr>
+        <th>Saham</th><th style="text-align:right">Harga</th><th style="text-align:right">Stop Loss</th>
+        <th style="text-align:right">Lot</th><th style="text-align:right">Nilai</th>
+        <th style="text-align:right">Risiko</th><th>Catatan</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </div>
+    <div class="grid" style="margin-top:14px">
+      <div class="cell"><div class="k">Total dibelanjakan</div><div class="v">Rp${fmt(d.total_nilai)} <span class="muted" style="font-size:12px">(${fmt(d.terpakai_pct,1)}%)</span></div></div>
+      <div class="cell"><div class="k">Sisa modal</div><div class="v">Rp${fmt(d.sisa_modal)}</div></div>
+      <div class="cell"><div class="k">Risiko bila SEMUA kena SL</div><div class="v down">Rp${fmt(d.total_risiko_rp)} <span class="muted" style="font-size:12px">(${fmt(d.total_risiko_pct,2)}%)</span></div></div>
+    </div>
+    ${skipped}
+    ${infoNote(`<b>Cara hitungnya:</b> tiap posisi diukur agar kalau stop loss kena, ruginya maksimal ${fmt(d.risk_pct,1)}% modal — jadi saham dengan stop loss rapat dapat lot lebih banyak. Ditambah batas <b>${fmt(d.max_pos_pct,0)}% modal per saham</b> supaya satu saham tidak menyedot seluruh dana (stop rapat bisa menyesatkan: kalau harga <i>lompat</i> melewatinya, rugi nyatanya melebihi ${fmt(d.risk_pct,1)}%). Stop loss memakai support S1 dari halaman Analisis. ${escHtml(d.disclaimer||'')}`)}`
+    :`${errBox('Tidak ada saham yang bisa masuk portofolio dengan modal & risiko itu.')}${skipped}`;
+}
 function _vcolFor(v){return v==='Undervalued'?'var(--bull)':v==='Overvalued'?'var(--bear)':'var(--gold)'}
 async function calcAD(){
   const k=$('#adK').value.trim().toUpperCase(),avg=$('#adAvg').value,lots=$('#adLots').value,add=$('#adAddLots').value,target=$('#adTarget').value.trim(),out=$('#adOut');
@@ -6804,6 +6862,8 @@ async function calcAD(){
 }
 $('#rrBtn').addEventListener('click',calcRR);
 $('#psBtn').addEventListener('click',calcPS);
+$('#pfBtn').addEventListener('click',calcPortofolio);
+$('#pfKodes').addEventListener('keydown',e=>{if(e.key==='Enter')calcPortofolio()});
 $('#tcBtn').addEventListener('click',calcTC);
 $('#tcK').addEventListener('keydown',e=>{if(e.key==='Enter')calcTC()});
 $('#adBtn').addEventListener('click',calcAD);

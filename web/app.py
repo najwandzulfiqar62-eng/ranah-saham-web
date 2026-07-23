@@ -1502,6 +1502,74 @@ async def compare(kodes: str = ""):
     return {"items": out}
 
 
+PORTOFOLIO_MAX_SAHAM = 10
+
+
+@app.get("/api/portofolio")
+async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0):
+    """Racik Portofolio: dari MODAL + saham pilihan USER, hitung berapa LOT
+    tiap saham (mis. ?modal=10000000&kodes=BBCA,TLKM&risk_pct=1).
+
+    Ukuran posisi BERBASIS RISIKO: tiap posisi diukur supaya kalau stop loss
+    kena, ruginya = risk_pct dari modal -- perhitungannya di build_portfolio()
+    (core/risk_management.py, murni & tertest), endpoint ini HANYA menyediakan
+    harga real-time + level stop loss-nya.
+
+    Stop loss diambil dari support S1 hasil analisis teknikal yang SAMA dengan
+    yang dipakai halaman Analisis & Rencana Trading (_analyze_payload -> s1),
+    BUKAN angka baru -- supaya lot yang disarankan di sini konsisten dengan
+    level yang dilihat user di tempat lain.
+
+    BUKAN nasihat investasi: sistem tidak menilai saham pilihan user bagus
+    atau tidak, hanya menghitung ukuran posisi yang sesuai risiko. Konteks
+    penilaian (grade/likuiditas/rekomendasi) tetap disertakan apa adanya
+    supaya user bisa menimbang sendiri."""
+    from core.risk_management import build_portfolio
+
+    if modal <= 0:
+        raise HTTPException(400, "Isi modal dalam rupiah, mis. ?modal=10000000")
+    if not (0 < risk_pct <= 100):
+        raise HTTPException(400, "risk_pct harus di antara 0 dan 100 (mis. 1 = 1% modal per posisi).")
+    lst = [k.strip() for k in (kodes or "").split(",") if k.strip()][:PORTOFOLIO_MAX_SAHAM]
+    if not lst:
+        raise HTTPException(400, "Sertakan minimal 1 kode saham, mis. ?kodes=BBCA,TLKM")
+
+    results = await asyncio.gather(*(_analyze_payload(k) for k in lst), return_exceptions=True)
+
+    candidates, gagal = [], []
+    for k, res in zip(lst, results):
+        kode = _norm_kode(k)
+        if isinstance(res, HTTPException):
+            gagal.append({"kode": kode, "alasan": res.detail})
+            continue
+        if isinstance(res, Exception):
+            gagal.append({"kode": kode, "alasan": "Gagal mengambil data saham ini."})
+            continue
+        candidates.append({
+            "kode": res["kode"],
+            "entry": res.get("price") or 0,
+            "stop_loss": res.get("s1") or 0,
+            "target": res.get("r1"),
+            "grade": res.get("grade"),
+            "likuiditas": res.get("likuiditas"),
+            "recommendation": res.get("recommendation"),
+            "score": res.get("score"),
+        })
+
+    hasil = build_portfolio(modal, candidates, risk_pct=risk_pct)
+    if hasil is None:
+        raise HTTPException(422, "Tidak ada saham yang bisa dihitung dari masukan itu.")
+    # Saham yang gagal diambil datanya digabung ke 'dilewati' -- satu tempat
+    # bagi user melihat SEMUA yang tidak masuk portofolio beserta alasannya.
+    hasil["dilewati"] = gagal + hasil.get("dilewati", [])
+    hasil["disclaimer"] = (
+        "Perhitungan ukuran posisi, bukan rekomendasi beli. Saham dipilih sendiri oleh kamu; "
+        "sistem hanya menghitung jumlah lot agar risiko per posisi terkendali. Stop loss memakai "
+        "support teknikal (S1) yang sama dengan halaman Analisis, dan harga bisa berubah sewaktu-waktu."
+    )
+    return _py(hasil)
+
+
 @app.get("/api/chart/{kode}")
 async def chart(kode: str):
     kode = _norm_kode(kode)

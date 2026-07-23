@@ -1,0 +1,141 @@
+# Test utk build_portfolio (core/risk_management.py) -- fitur "Racik
+# Portofolio" (usulan 2026-07-23: "dikasih modal 10jt, web-nya kira-kira
+# milih emiten apa sama berapa lot").
+# Keputusan user: sizing BERBASIS RISIKO + saham dipilih sendiri oleh user.
+# Fokus test: DUA batasan yang harus dipegang bersamaan (risiko per posisi
+# DAN modal yang tersedia) serta kejujuran melaporkan saham yang dilewati.
+import math
+
+from core.risk_management import build_portfolio, LOT_SIZE
+
+
+def _c(kode, entry, sl):
+    return {"kode": kode, "entry": entry, "stop_loss": sl}
+
+
+def test_sizing_berbasis_risiko_sl_sempit_dapat_porsi_lebih_besar():
+    """Inti metode terpilih: risiko rupiah tiap posisi ~sama, sehingga saham
+    ber-SL sempit otomatis dapat lot lebih banyak. Sengaja dipilih angka yang
+    TIDAK menyentuh batas konsentrasi, supaya yang diuji di sini murni sifat
+    penyamaan risikonya (batas konsentrasi diuji terpisah di bawah)."""
+    r = build_portfolio(100_000_000, [
+        _c("AAAA", 1000, 980),   # SL 2%
+        _c("BBBB", 1000, 900),   # SL 10%
+    ], risk_pct=0.5)
+    a, b = r["posisi"][0], r["posisi"][1]
+    assert not a["dibatasi_konsentrasi"] and not b["dibatasi_konsentrasi"]
+    assert a["lot"] > b["lot"]                      # SL sempit -> lot lebih banyak
+    # risiko rupiah keduanya mendekati 0,5% modal (500.000), beda < 1 lot risiko
+    assert abs(a["risiko_rp"] - b["risiko_rp"]) <= LOT_SIZE * 100
+    assert a["risiko_pct_modal"] <= 0.5 and b["risiko_pct_modal"] <= 0.5
+
+
+def test_risiko_per_posisi_tidak_pernah_melebihi_risk_pct():
+    """Pembulatan ke BAWAH: risiko sesungguhnya wajib <= yang diminta."""
+    r = build_portfolio(10_000_000, [_c("AAAA", 1337, 1201)], risk_pct=1.0)
+    p = r["posisi"][0]
+    assert p["risiko_pct_modal"] <= 1.0
+
+
+def test_total_nilai_tidak_pernah_melebihi_modal():
+    """BATASAN KEDUA: sizing berbasis risiko sendiri TIDAK menghormati modal.
+    Beberapa saham ber-SL sangat sempit bisa meminta total belanja jauh di
+    atas uang yang ada -- harus dipangkas, bukan mengarang uang."""
+    # SL 1% + risk 2% -> tiap posisi "minta" ~2x modal kalau tidak dibatasi
+    cands = [_c("AAAA", 1000, 990), _c("BBBB", 1000, 990), _c("CCCC", 1000, 990)]
+    r = build_portfolio(10_000_000, cands, risk_pct=2.0)
+    assert r["total_nilai"] <= r["modal"]
+    assert r["sisa_modal"] >= 0
+    assert any(p["dipangkas_modal"] for p in r["posisi"])  # ditandai jujur
+
+
+def test_batas_konsentrasi_cegah_satu_saham_sedot_seluruh_modal():
+    """BATASAN KETIGA. Kasus NYATA yang memicu penambahan ini: BBCA ber-SL
+    hanya 0,62% -> sizing berbasis risiko murni memberi 15 lot = 97% modal.
+    Risiko '1%' itu cuma berlaku kalau SL benar-benar kena di harganya; kalau
+    harga LOMPAT melewati stop serapat itu, ruginya jauh lebih besar."""
+    r = build_portfolio(10_000_000, [_c("BBCA", 6450, 6410)], risk_pct=1.0, max_pos_pct=40)
+    p = r["posisi"][0]
+    assert p["nilai"] <= 10_000_000 * 0.40
+    assert p["dibatasi_konsentrasi"] is True
+
+
+def test_batas_konsentrasi_bisa_diatur():
+    ketat = build_portfolio(10_000_000, [_c("AAAA", 1000, 995)], risk_pct=1.0, max_pos_pct=20)
+    longgar = build_portfolio(10_000_000, [_c("AAAA", 1000, 995)], risk_pct=1.0, max_pos_pct=60)
+    assert ketat["posisi"][0]["lot"] < longgar["posisi"][0]["lot"]
+    assert ketat["posisi"][0]["nilai"] <= 10_000_000 * 0.20
+
+
+def test_konsentrasi_tidak_menghukum_posisi_yang_memang_kecil():
+    """Posisi yang sudah di bawah batas TIDAK boleh ditandai dibatasi."""
+    r = build_portfolio(100_000_000, [_c("AAAA", 1000, 900)], risk_pct=1.0)
+    p = r["posisi"][0]
+    assert p["dibatasi_konsentrasi"] is False
+    assert p["nilai"] < 100_000_000 * 0.40
+
+
+def test_saham_yang_tidak_kebagian_dilaporkan_dengan_alasan():
+    """Saham yang tak muat TIDAK boleh hilang diam-diam."""
+    r = build_portfolio(1_000_000, [
+        _c("MURAH", 100, 95),
+        _c("MAHAL", 90_000, 85_000),   # 1 lot = Rp9jt, modal cuma 1jt
+    ], risk_pct=1.0)
+    kode_dilewati = [d["kode"] for d in r["dilewati"]]
+    assert "MAHAL" in kode_dilewati
+    assert "tidak cukup" in next(d["alasan"] for d in r["dilewati"] if d["kode"] == "MAHAL").lower()
+
+
+def test_tolak_stop_loss_tidak_wajar():
+    """SL >= harga (support di atas harga) bukan stop loss beli yang sah."""
+    r = build_portfolio(10_000_000, [
+        _c("AAAA", 1000, 1000),   # sama dgn harga
+        _c("BBBB", 1000, 1200),   # di ATAS harga
+        _c("CCCC", 1000, 0),      # tidak ada level
+    ], risk_pct=1.0)
+    assert r["posisi"] == []
+    assert len(r["dilewati"]) == 3
+    assert all("stop loss" in d["alasan"].lower() for d in r["dilewati"])
+
+
+def test_lot_selalu_bulat_dan_lembar_kelipatan_lot():
+    r = build_portfolio(50_000_000, [_c("AAAA", 3175, 2950), _c("BBBB", 777, 700)], risk_pct=1.5)
+    for p in r["posisi"]:
+        assert isinstance(p["lot"], int) and p["lot"] >= 1
+        assert p["lembar"] == p["lot"] * LOT_SIZE
+        assert math.isclose(p["nilai"], p["lembar"] * p["harga"], rel_tol=1e-6)
+
+
+def test_ringkasan_total_konsisten():
+    r = build_portfolio(20_000_000, [_c("AAAA", 1000, 950), _c("BBBB", 2000, 1900)], risk_pct=1.0)
+    assert r["total_nilai"] == sum(p["nilai"] for p in r["posisi"])
+    assert r["sisa_modal"] == r["modal"] - r["total_nilai"]
+    assert r["total_risiko_rp"] == sum(p["risiko_rp"] for p in r["posisi"])
+    assert abs(sum(p["porsi_pct"] for p in r["posisi"]) - 100.0) < 0.5
+
+
+def test_modal_kecil_tetap_menghasilkan_sesuatu_atau_alasan_jelas():
+    """Modal 10jt (contoh persis dari usulan) harus menghasilkan portofolio,
+    bukan gagal diam-diam."""
+    r = build_portfolio(10_000_000, [
+        _c("BBCA", 6525, 6330), _c("TLKM", 2700, 2580), _c("ASII", 5150, 4900),
+    ], risk_pct=1.0)
+    assert len(r["posisi"]) >= 1
+    assert r["total_nilai"] <= 10_000_000
+    assert r["terpakai_pct"] <= 100.0
+
+
+def test_input_tidak_valid():
+    assert build_portfolio(0, [_c("A", 100, 90)]) is None
+    assert build_portfolio(1_000_000, []) is None
+    assert build_portfolio(1_000_000, [_c("A", 100, 90)], risk_pct=0) is None
+
+
+def test_field_tambahan_diteruskan():
+    """Field bebas dari caller (mis. nama/likuiditas/skor) ikut terbawa ke
+    hasil supaya endpoint tidak perlu menggabungkan ulang."""
+    r = build_portfolio(10_000_000, [
+        {"kode": "AAAA", "entry": 1000, "stop_loss": 950, "likuiditas": "Likuid", "grade": "A"},
+    ], risk_pct=1.0)
+    p = r["posisi"][0]
+    assert p["likuiditas"] == "Likuid" and p["grade"] == "A"
