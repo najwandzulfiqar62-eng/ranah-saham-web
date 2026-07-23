@@ -204,7 +204,9 @@ def _pct(x: float) -> str:
 
 
 def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
-                    max_pos_pct: float = MAX_POSISI_PCT) -> dict | None:
+                    max_pos_pct: float = MAX_POSISI_PCT,
+                    maks_posisi: int | None = None,
+                    maks_total_risk_pct: float | None = None) -> dict | None:
     """Racik portofolio: dari MODAL + daftar saham pilihan USER, hitung berapa
     LOT tiap saham memakai position sizing BERBASIS RISIKO (keputusan user
     2026-07-23), lalu batasi oleh modal yang benar-benar tersedia.
@@ -236,10 +238,24 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
     TIDAK didiamkan -- dikembalikan di 'dilewati' beserta ALASANnya, supaya
     user tahu kenapa sahamnya tidak muncul (bukan hilang diam-diam).
 
+    DUA BATAS OPSIONAL untuk MODE OTOMATIS (usulan 2026-07-23 "tambahin mode
+    auto"), keduanya None = tak dipakai supaya mode manual/pilih-sendiri tidak
+    berubah perilakunya. Saat sistem yang memilih, daftar kandidat bisa
+    panjang (puluhan sinyal), jadi harus ada aturan BERHENTI yang jelas:
+      - maks_posisi: berhenti setelah sekian saham (diversifikasi; tanpa ini
+        modal bisa terpecah ke belasan posisi mini yang tak terkelola).
+      - maks_total_risk_pct: berhenti kalau menambah posisi berikutnya membuat
+        AKUMULASI risiko melewati jatah total. Ini penting karena risiko per
+        posisi yang kelihatan kecil (1%) tetap menumpuk: 10 posisi = 10% modal
+        bisa hilang kalau pasar jatuh serentak, skenario yang justru lazim.
+    Sisa kandidat yang tak terpakai karena batas ini tetap dilaporkan di
+    'dilewati' dengan alasannya.
+
     candidates: [{'kode', 'entry', 'stop_loss', + field bebas yang diteruskan}]
     -- urutan input DIHORMATI (saham pertama dilayani lebih dulu saat modal
-    menipis). MURNI aritmatika, tanpa I/O -- caller (endpoint) yang mengambil
-    harga & level SL-nya.
+    menipis; mode auto mengirimnya sudah terurut dari skor tertinggi). MURNI
+    aritmatika, tanpa I/O -- caller (endpoint) yang mengambil harga & level
+    SL-nya.
 
     Returns None kalau modal/risk_pct tidak valid."""
     if modal <= 0 or risk_pct <= 0 or not candidates:
@@ -248,8 +264,24 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
     posisi: list[dict] = []
     dilewati: list[dict] = []
     sisa = float(modal)
+    risiko_terpakai = 0.0
+    budget_risiko = (modal * maks_total_risk_pct / 100) if maks_total_risk_pct else None
 
     for c in candidates:
+        # --- aturan berhenti mode otomatis ---
+        if maks_posisi is not None and len(posisi) >= maks_posisi:
+            dilewati.append({
+                "kode": c.get("kode"),
+                "alasan": f"Kuota {maks_posisi} saham sudah terpenuhi.",
+            })
+            continue
+        if budget_risiko is not None and risiko_terpakai >= budget_risiko:
+            dilewati.append({
+                "kode": c.get("kode"),
+                "alasan": f"Jatah risiko total {_pct(maks_total_risk_pct)}% modal sudah terpakai.",
+            })
+            continue
+
         kode = c.get("kode")
         entry = c.get("entry") or 0
         sl = c.get("stop_loss") or 0
@@ -300,6 +332,20 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
         dibatasi_konsentrasi = lot == lot_maks_konsentrasi < lot_risiko
         nilai = lot * harga_per_lot
         risiko_rp = lot * LOT_SIZE * (entry - sl)
+
+        # Jangan sampai posisi ini MELEWATI jatah risiko total (mode otomatis).
+        # Dilewati, bukan dipangkas paksa: memangkas lot demi muat jatah akan
+        # menghasilkan posisi yang ukurannya tidak lagi mencerminkan aturan
+        # risiko yang dipakai posisi lain.
+        if budget_risiko is not None and (risiko_terpakai + risiko_rp) > budget_risiko:
+            dilewati.append({
+                "kode": kode,
+                "alasan": (f"Tidak muat di sisa jatah risiko total "
+                           f"{_pct(maks_total_risk_pct)}% modal."),
+            })
+            continue
+
+        risiko_terpakai += risiko_rp
         sisa -= nilai
 
         posisi.append({

@@ -2044,13 +2044,15 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <p class="eyebrow">Racik Portofolio</p>
       <p class="insight muted" style="font-size:13px;margin-bottom:12px">Punya modal sekian, mau beli saham apa saja — berapa lot masing-masing? Pilih sahamnya dari sinyal yang sedang diaudit (atau ketik sendiri), sistem menghitung jumlah lot supaya risiko tiap posisi terkendali.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-        <button class="chip pf-src active" data-src="audit" type="button">Dari Audit Sinyal</button>
+        <button class="chip pf-src active" data-src="audit" type="button">Pilih dari Audit Sinyal</button>
+        <button class="chip pf-src" data-src="auto" type="button">Otomatis</button>
         <button class="chip pf-src" data-src="manual" type="button">Ketik sendiri</button>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
         <label class="fld" style="min-width:170px">Modal (Rp)<input id="pfModal" type="number" value="10000000"></label>
         <label class="fld" id="pfKodesWrap" style="min-width:240px;flex:1;display:none">Saham pilihanmu (pisahkan koma)<input id="pfKodes" placeholder="BBCA, TLKM, ASII" style="text-transform:uppercase"></label>
         <label class="fld" title="Kerugian maksimal per posisi kalau stop loss kena">Risiko/posisi %<input id="pfRisk" type="number" value="1" step="0.5" min="0.1" max="100"></label>
+        <label class="fld" id="pfMaksWrap" style="display:none" title="Berapa saham maksimal yang dipilihkan sistem">Maks saham<input id="pfMaks" type="number" value="5" step="1" min="1" max="10"></label>
         <button class="btn" id="pfBtn">Racik</button>
       </div>
       <div id="pfPicker" style="margin-top:16px"></div>
@@ -6782,12 +6784,18 @@ async function calcTC(){
    Sahamnya DIPILIH SENDIRI user dari sinyal yang sedang diaudit (revisi
    usulan: "ambil emitennya dari audit sinyal aja, nanti suruh milih
    sendiri"), atau diketik manual lewat tab "Ketik sendiri". ---- */
-let _pfSumber='audit', _pfKandidat=null;
+let _pfSumber='audit', _pfKandidat=null, _pfToken=0;
 function _pfTerpilih(){return [...document.querySelectorAll('#pfPicker input[type=checkbox]:checked')].map(c=>c.value)}
 async function loadPfKandidat(){
   const box=$('#pfPicker');
+  // Token anti-balapan: kalau user keburu pindah mode saat fetch masih jalan,
+  // hasil yang datang belakangan TIDAK boleh menimpa tampilan mode baru
+  // (bug nyata: daftar centang muncul lagi di mode Otomatis). Pola sama dgn
+  // _routeToken pada _applyRoute.
+  const token=++_pfToken;
   box.innerHTML='<div class="skel loadbar"></div>';
-  let d; try{d=await api('/api/portofolio/kandidat')}catch(e){box.innerHTML=errBox(e.message);return}
+  let d; try{d=await api('/api/portofolio/kandidat')}catch(e){if(token===_pfToken&&_pfSumber==='audit')box.innerHTML=errBox(e.message);return}
+  if(token!==_pfToken||_pfSumber!=='audit')return;   // sudah basi
   _pfKandidat=d.items||[];
   if(!_pfKandidat.length){box.innerHTML=`<p class="insight muted" style="font-size:13px">Belum ada sinyal aktif di Audit Sinyal untuk dipilih. Coba tab “Ketik sendiri”.</p>`;return}
   box.innerHTML=`
@@ -6814,18 +6822,28 @@ async function loadPfKandidat(){
 }
 function setPfSumber(src){
   _pfSumber=src;
+  _pfToken++;   // batalkan hasil fetch kandidat yang mungkin masih di jalan
   document.querySelectorAll('.pf-src').forEach(b=>b.classList.toggle('active',b.dataset.src===src));
   $('#pfKodesWrap').style.display=src==='manual'?'':'none';
-  $('#pfPicker').innerHTML='';
+  $('#pfMaksWrap').style.display=src==='auto'?'':'none';
   $('#pfOut').innerHTML='';
+  $('#pfPicker').innerHTML = src==='auto'
+    ? `<p class="insight muted" style="font-size:13px">Sistem memilihkan sendiri dari sinyal yang sedang diaudit, diurutkan dari skor keyakinan tertinggi, lalu mengisi portofolio sampai kuota saham, jatah risiko total, atau modal habis — mana pun yang lebih dulu tercapai.</p>`
+    : '';
   if(src==='audit')loadPfKandidat();
 }
 async function calcPortofolio(){
   const modal=$('#pfModal').value, risk=$('#pfRisk').value, out=$('#pfOut');
-  const kodes=_pfSumber==='audit'?_pfTerpilih().slice(0,10).join(','):$('#pfKodes').value.trim().toUpperCase();
-  if(!kodes){out.innerHTML=errBox(_pfSumber==='audit'?'Centang dulu minimal satu saham dari daftar di atas.':'Isi dulu kode saham pilihanmu, mis. BBCA, TLKM.');return}
+  let url;
+  if(_pfSumber==='auto'){
+    url=`/api/portofolio?modal=${encodeURIComponent(modal)}&risk_pct=${encodeURIComponent(risk)}&sumber=auto&maks_saham=${encodeURIComponent($('#pfMaks').value||5)}`;
+  }else{
+    const kodes=_pfSumber==='audit'?_pfTerpilih().slice(0,10).join(','):$('#pfKodes').value.trim().toUpperCase();
+    if(!kodes){out.innerHTML=errBox(_pfSumber==='audit'?'Centang dulu minimal satu saham dari daftar di atas.':'Isi dulu kode saham pilihanmu, mis. BBCA, TLKM.');return}
+    url=`/api/portofolio?modal=${encodeURIComponent(modal)}&kodes=${encodeURIComponent(kodes)}&risk_pct=${encodeURIComponent(risk)}&sumber=${_pfSumber==='audit'?'audit':'analisis'}`;
+  }
   out.innerHTML='<div class="skel loadbar" style="margin-top:14px"></div>';
-  let d; try{d=await api(`/api/portofolio?modal=${encodeURIComponent(modal)}&kodes=${encodeURIComponent(kodes)}&risk_pct=${encodeURIComponent(risk)}&sumber=${_pfSumber==='audit'?'audit':'analisis'}`)}catch(err){out.innerHTML=errBox(err.message);return}
+  let d; try{d=await api(url)}catch(err){out.innerHTML=errBox(err.message);return}
   const rows=(d.posisi||[]).map(p=>{
     // Alasan lot dipangkas ditampilkan APA ADANYA -- user berhak tahu kenapa
     // porsinya tidak sebesar yang risikonya izinkan.
@@ -6841,9 +6859,16 @@ async function calcPortofolio(){
       <td style="text-align:right" class="down">Rp${fmt(p.risiko_rp)}<br><span class="muted" style="font-size:11px">${fmt(p.risiko_pct_modal,2)}% modal</span></td>
       <td style="font-size:11px" class="muted">${notes.join(' · ')||'—'}</td>
     </tr>`}).join('');
+  // Di mode otomatis daftar "dilewati" bisa panjang karena sisa kandidat
+  // berhenti oleh kuota/jatah risiko -- itu bukan masalah, jadi diringkas satu
+  // baris supaya penolakan yang BENAR-BENAR perlu dibaca (SL tak wajar, modal
+  // kurang) tidak tenggelam.
+  const _berhenti=(d.dilewati||[]).filter(x=>/Kuota \d+ saham|jatah risiko total|risiko total .* sudah terpakai/i.test(x.alasan||''));
+  const _masalah=(d.dilewati||[]).filter(x=>!_berhenti.includes(x));
   const skipped=(d.dilewati||[]).length?`<div style="margin-top:14px">
     <p class="muted" style="font-size:12px;margin-bottom:6px">Tidak masuk portofolio:</p>
-    ${d.dilewati.map(x=>`<p class="insight" style="font-size:12px;margin:4px 0;color:var(--gold)">${icon('alert-triangle',{size:12})} <b>${escHtml(x.kode)}</b> — ${escHtml(x.alasan)}</p>`).join('')}</div>`:'';
+    ${_masalah.map(x=>`<p class="insight" style="font-size:12px;margin:4px 0;color:var(--gold)">${icon('alert-triangle',{size:12})} <b>${escHtml(x.kode)}</b> — ${escHtml(x.alasan)}</p>`).join('')}
+    ${_berhenti.length?`<p class="insight muted" style="font-size:12px;margin:4px 0">${icon('info',{size:12})} ${_berhenti.length} sinyal lain tidak diambil karena batas sudah tercapai (${escHtml(_berhenti[0].alasan)}): ${_berhenti.slice(0,12).map(x=>escHtml(x.kode)).join(', ')}${_berhenti.length>12?', …':''}</p>`:''}</div>`:'';
   out.innerHTML=(d.posisi||[]).length?`
     <div style="margin-top:16px;overflow-x:auto">
       <table class="ctable" style="min-width:720px"><thead><tr>

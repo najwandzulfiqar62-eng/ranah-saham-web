@@ -1565,7 +1565,8 @@ async def portofolio_kandidat():
 
 @app.get("/api/portofolio")
 async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
-                     sumber: str = "analisis"):
+                     sumber: str = "analisis", maks_saham: int = 5,
+                     maks_total_risk_pct: float = 5.0):
     """Racik Portofolio: dari MODAL + saham pilihan USER, hitung berapa LOT
     tiap saham (mis. ?modal=10000000&kodes=BBCA,TLKM&risk_pct=1).
 
@@ -1597,9 +1598,27 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         raise HTTPException(400, "Isi modal dalam rupiah, mis. ?modal=10000000")
     if not (0 < risk_pct <= 100):
         raise HTTPException(400, "risk_pct harus di antara 0 dan 100 (mis. 1 = 1% modal per posisi).")
-    lst = [k.strip() for k in (kodes or "").split(",") if k.strip()][:PORTOFOLIO_MAX_SAHAM]
-    if not lst:
-        raise HTTPException(400, "Sertakan minimal 1 kode saham, mis. ?kodes=BBCA,TLKM")
+
+    auto = sumber == "auto"
+    if auto:
+        # Sistem yang memilih: kandidat = SEMUA sinyal aktif, sudah terurut
+        # skor keyakinan tertinggi (lihat /api/portofolio/kandidat). Batas
+        # berhenti (kuota saham & jatah risiko total) diserahkan ke
+        # build_portfolio supaya aturannya satu tempat & tertest.
+        maks_saham = max(1, min(int(maks_saham or 5), PORTOFOLIO_MAX_SAHAM))
+        aktif = await _sinyal_aktif_per_kode()
+        if not aktif:
+            raise HTTPException(422, "Belum ada sinyal aktif di Audit Sinyal untuk diracik otomatis.")
+        urut = sorted(aktif.values(), key=lambda s: (s.get("confidence_score") or 0), reverse=True)
+        # Ambil secukupnya (kuota x3) supaya masih ada cadangan kalau sebagian
+        # ditolak (SL sudah tak wajar, 1 lot tak muat, dst) -- tanpa perlu
+        # meng-analisis seluruh puluhan sinyal (mahal, tiap kode = 1 fetch).
+        lst = [s["kode"] for s in urut][:max(maks_saham * 3, 6)]
+        sumber = "audit"   # levelnya tetap dari rencana sinyal
+    else:
+        lst = [k.strip() for k in (kodes or "").split(",") if k.strip()][:PORTOFOLIO_MAX_SAHAM]
+        if not lst:
+            raise HTTPException(400, "Sertakan minimal 1 kode saham, mis. ?kodes=BBCA,TLKM")
 
     sinyal_map = await _sinyal_aktif_per_kode() if sumber == "audit" else {}
     results = await asyncio.gather(*(_analyze_payload(k) for k in lst), return_exceptions=True)
@@ -1636,17 +1655,34 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
             "score": res.get("score"),
         })
 
-    hasil = build_portfolio(modal, candidates, risk_pct=risk_pct)
+    hasil = build_portfolio(
+        modal, candidates, risk_pct=risk_pct,
+        maks_posisi=maks_saham if auto else None,
+        maks_total_risk_pct=maks_total_risk_pct if auto else None,
+    )
     if hasil is None:
         raise HTTPException(422, "Tidak ada saham yang bisa dihitung dari masukan itu.")
     # Saham yang gagal diambil datanya digabung ke 'dilewati' -- satu tempat
     # bagi user melihat SEMUA yang tidak masuk portofolio beserta alasannya.
     hasil["dilewati"] = gagal + hasil.get("dilewati", [])
-    hasil["disclaimer"] = (
-        "Perhitungan ukuran posisi, bukan rekomendasi beli. Saham dipilih sendiri oleh kamu; "
-        "sistem hanya menghitung jumlah lot agar risiko per posisi terkendali. Stop loss memakai "
-        "support teknikal (S1) yang sama dengan halaman Analisis, dan harga bisa berubah sewaktu-waktu."
-    )
+    hasil["mode"] = "auto" if auto else sumber
+    if auto:
+        hasil["maks_saham"] = maks_saham
+        hasil["maks_total_risk_pct"] = maks_total_risk_pct
+        hasil["disclaimer"] = (
+            "Perhitungan ukuran posisi, BUKAN rekomendasi beli. Mode otomatis hanya mengurutkan "
+            "sinyal yang sudah tercatat di Audit Sinyal menurut skor keyakinan, lalu mengisi "
+            "portofolio sampai kuota saham, jatah risiko total, atau modal habis — sistem tidak "
+            "memastikan saham-saham ini akan naik. Stop loss memakai level rencana sinyalnya, "
+            "dan harga bisa berubah sewaktu-waktu."
+        )
+    else:
+        hasil["disclaimer"] = (
+            "Perhitungan ukuran posisi, bukan rekomendasi beli. Saham dipilih sendiri oleh kamu; "
+            "sistem hanya menghitung jumlah lot agar risiko per posisi terkendali. Stop loss memakai "
+            + ("level rencana sinyal di Audit Sinyal" if sumber == "audit" else "support teknikal (S1) yang sama dengan halaman Analisis")
+            + ", dan harga bisa berubah sewaktu-waktu."
+        )
     return _py(hasil)
 
 

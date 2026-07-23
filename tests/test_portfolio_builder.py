@@ -125,6 +125,44 @@ def test_modal_kecil_tetap_menghasilkan_sesuatu_atau_alasan_jelas():
     assert r["terpakai_pct"] <= 100.0
 
 
+def test_auto_berhenti_di_kuota_saham():
+    """Mode otomatis: sistem memilih sendiri, jadi WAJIB ada aturan berhenti --
+    tanpa maks_posisi modal terpecah ke belasan posisi mini."""
+    cands = [_c(f"S{i:02d}", 1000, 950) for i in range(12)]
+    r = build_portfolio(500_000_000, cands, risk_pct=1.0, maks_posisi=5)
+    assert len(r["posisi"]) == 5
+    sisa_alasan = [d["alasan"] for d in r["dilewati"]]
+    assert any("Kuota 5 saham" in a for a in sisa_alasan)
+
+
+def test_auto_hormati_jatah_risiko_total():
+    """Risiko per posisi yang kelihatan kecil tetap MENUMPUK. Dengan jatah
+    total 3% dan 1% per posisi, maksimal ~3 posisi yang boleh masuk."""
+    cands = [_c(f"S{i:02d}", 1000, 950) for i in range(10)]
+    r = build_portfolio(500_000_000, cands, risk_pct=1.0, maks_total_risk_pct=3.0)
+    assert r["total_risiko_pct"] <= 3.0
+    assert len(r["posisi"]) <= 3
+    assert any("risiko total" in d["alasan"] for d in r["dilewati"])
+
+
+def test_auto_kedua_batas_bekerja_bersama():
+    cands = [_c(f"S{i:02d}", 1000, 950) for i in range(20)]
+    r = build_portfolio(500_000_000, cands, risk_pct=0.5, maks_posisi=4, maks_total_risk_pct=10.0)
+    assert len(r["posisi"]) == 4              # kuota lebih dulu tercapai
+    assert r["total_risiko_pct"] <= 10.0
+
+
+def test_batas_auto_default_mati_untuk_mode_manual():
+    """Tanpa argumen batas, perilaku mode pilih-sendiri TIDAK berubah: tak ada
+    yang ditolak karena kuota/jatah risiko total. risk_pct 0,5% + SL 5% =>
+    tiap posisi ~10% modal, jadi kedelapan-delapannya memang muat (batas MODAL
+    tidak ikut campur, supaya yang diuji murni matinya batas otomatis)."""
+    cands = [_c(f"S{i:02d}", 1000, 950) for i in range(8)]
+    r = build_portfolio(500_000_000, cands, risk_pct=0.5)
+    assert len(r["posisi"]) == 8
+    assert not any("Kuota" in d["alasan"] or "risiko total" in d["alasan"] for d in r["dilewati"])
+
+
 def test_input_tidak_valid():
     assert build_portfolio(0, [_c("A", 100, 90)]) is None
     assert build_portfolio(1_000_000, []) is None
