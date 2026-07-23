@@ -163,6 +163,94 @@ def test_batas_auto_default_mati_untuk_mode_manual():
     assert not any("Kuota" in d["alasan"] or "risiko total" in d["alasan"] for d in r["dilewati"])
 
 
+def _ct(kode, entry, sl, target):
+    return {"kode": kode, "entry": entry, "stop_loss": sl, "target": target}
+
+
+def test_imbalan_dan_rrr_dihitung_per_posisi():
+    """Risiko saja tidak cukup menilai kelayakan -- yang menentukan justru
+    perbandingannya dgn potensi untung."""
+    r = build_portfolio(100_000_000, [_ct("AAAA", 1000, 950, 1150)], risk_pct=1.0)
+    p = r["posisi"][0]
+    assert p["target"] == 1150
+    assert p["tp_pct"] == 15.0                       # (1150-1000)/1000
+    assert p["rrr"] == 3.0                           # 150 untung : 50 rugi
+    assert p["untung_rp"] == p["lembar"] * 150
+    # konsisten: untung/rugi per lembar sesuai rrr
+    assert abs(p["untung_rp"] / p["risiko_rp"] - p["rrr"]) < 0.01
+
+
+def test_total_imbalan_dan_rrr_portofolio():
+    r = build_portfolio(100_000_000, [
+        _ct("AAAA", 1000, 950, 1150), _ct("BBBB", 2000, 1900, 2200),
+    ], risk_pct=1.0)
+    assert r["total_untung_rp"] == sum(p["untung_rp"] for p in r["posisi"])
+    assert r["rrr_portofolio"] == round(r["total_untung_rp"] / r["total_risiko_rp"], 2)
+    assert r["total_untung_pct"] > 0
+
+
+def test_tanpa_target_imbalan_none_bukan_dikarang():
+    """Kalau tidak ada level target, JANGAN mengarang angka untung."""
+    r = build_portfolio(100_000_000, [_c("AAAA", 1000, 950)], risk_pct=1.0)
+    p = r["posisi"][0]
+    assert p["untung_rp"] is None and p["tp_pct"] is None and p["rrr"] is None
+    assert r["total_untung_rp"] is None and r["rrr_portofolio"] is None
+
+
+def test_target_tidak_wajar_diabaikan():
+    """Target di bawah/sama dengan harga beli bukan take profit yang sah."""
+    for bad in (900, 1000):
+        r = build_portfolio(100_000_000, [_ct("AAAA", 1000, 950, bad)], risk_pct=1.0)
+        assert r["posisi"][0]["untung_rp"] is None
+        assert r["posisi"][0]["rrr"] is None
+
+
+def test_total_imbalan_none_kalau_sebagian_saja_punya_target():
+    """Menjumlahkan untung sebagian posisi TAPI risiko semua posisi itu
+    menyesatkan -- lebih baik None."""
+    r = build_portfolio(100_000_000, [
+        _ct("AAAA", 1000, 950, 1150), _c("BBBB", 2000, 1900),
+    ], risk_pct=1.0)
+    assert r["posisi"][0]["untung_rp"] is not None
+    assert r["posisi"][1]["untung_rp"] is None
+    assert r["total_untung_rp"] is None
+    assert r["rrr_portofolio"] is None
+
+
+def test_auto_tolak_imbal_risiko_di_bawah_ambang():
+    """Kasus NYATA dari data produksi: sinyal yang harganya sudah lari
+    mendekati target menyisakan untung tipis tapi jarak stop tetap penuh
+    (ADRO 0,02x, BBNI 0,38x). Peringkat skor keyakinan tidak menangkap ini,
+    jadi mode otomatis harus menyaringnya sendiri."""
+    r = build_portfolio(100_000_000, [
+        _ct("BAGUS", 1000, 950, 1200),   # rrr 4.0
+        _ct("TIPIS", 1000, 950, 1005),   # rrr 0.1 -> ditolak
+    ], risk_pct=1.0, min_rrr=1.0)
+    assert [p["kode"] for p in r["posisi"]] == ["BAGUS"]
+    assert any("Imbal-risiko" in d["alasan"] for d in r["dilewati"])
+
+
+def test_auto_tolak_yang_sudah_lewat_target():
+    r = build_portfolio(100_000_000, [_ct("LEWAT", 1000, 950, 980)], risk_pct=1.0, min_rrr=1.0)
+    assert r["posisi"] == []
+    assert "melewati target" in r["dilewati"][0]["alasan"]
+
+
+def test_auto_tolak_tanpa_target_saat_ambang_aktif():
+    """Tanpa level target, kesepadanannya tak bisa dinilai -- saat sistem yang
+    memilih, itu alasan cukup untuk tidak mengambilnya."""
+    r = build_portfolio(100_000_000, [_c("NOTGT", 1000, 950)], risk_pct=1.0, min_rrr=1.0)
+    assert r["posisi"] == []
+
+
+def test_ambang_imbal_risiko_mati_untuk_mode_pilih_sendiri():
+    """User yang memilih sendiri tetap boleh membeli apa pun -- rasionya
+    ditampilkan supaya dia menilai, bukan disaring diam-diam."""
+    r = build_portfolio(100_000_000, [_ct("TIPIS", 1000, 950, 1005)], risk_pct=1.0)
+    assert len(r["posisi"]) == 1
+    assert r["posisi"][0]["rrr"] == 0.1
+
+
 def test_input_tidak_valid():
     assert build_portfolio(0, [_c("A", 100, 90)]) is None
     assert build_portfolio(1_000_000, []) is None

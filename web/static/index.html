@@ -6828,7 +6828,7 @@ function setPfSumber(src){
   $('#pfMaksWrap').style.display=src==='auto'?'':'none';
   $('#pfOut').innerHTML='';
   $('#pfPicker').innerHTML = src==='auto'
-    ? `<p class="insight muted" style="font-size:13px">Sistem memilihkan sendiri dari sinyal yang sedang diaudit, diurutkan dari skor keyakinan tertinggi, lalu mengisi portofolio sampai kuota saham, jatah risiko total, atau modal habis — mana pun yang lebih dulu tercapai.</p>`
+    ? `<p class="insight muted" style="font-size:13px">Sistem memilihkan sendiri dari sinyal yang sedang diaudit, diurutkan dari skor keyakinan tertinggi, lalu mengisi portofolio sampai kuota saham, jatah risiko total, atau modal habis — mana pun yang lebih dulu tercapai. Sinyal yang harganya sudah terlanjur lari mendekati target <b>tidak diambil</b>, karena sisa untungnya jadi lebih kecil daripada risikonya (imbal-risiko di bawah 1×).</p>`
     : '';
   if(src==='audit')loadPfKandidat();
 }
@@ -6857,6 +6857,8 @@ async function calcPortofolio(){
       <td style="text-align:right"><b style="color:var(--gold)">${fmt(p.lot)}</b></td>
       <td style="text-align:right">Rp${fmt(p.nilai)}<br><span class="muted" style="font-size:11px">${fmt(p.porsi_pct,1)}%</span></td>
       <td style="text-align:right" class="down">Rp${fmt(p.risiko_rp)}<br><span class="muted" style="font-size:11px">${fmt(p.risiko_pct_modal,2)}% modal</span></td>
+      <td style="text-align:right" class="up">${p.untung_rp!=null?`Rp${fmt(p.untung_rp)}<br><span class="muted" style="font-size:11px">+${fmt(p.tp_pct,2)}% @Rp${fmt(p.target)}</span>`:'<span class="muted">–</span>'}</td>
+      <td style="text-align:right">${p.rrr!=null?`<b style="color:${p.rrr>=2?'var(--bull)':p.rrr>=1?'var(--gold)':'var(--bear)'}">${fmt(p.rrr,2)}×</b>`:'<span class="muted">–</span>'}</td>
       <td style="font-size:11px" class="muted">${notes.join(' · ')||'—'}</td>
     </tr>`}).join('');
   // Di mode otomatis daftar "dilewati" bisa panjang karena sisa kandidat
@@ -6867,24 +6869,28 @@ async function calcPortofolio(){
   const _masalah=(d.dilewati||[]).filter(x=>!_berhenti.includes(x));
   const skipped=(d.dilewati||[]).length?`<div style="margin-top:14px">
     <p class="muted" style="font-size:12px;margin-bottom:6px">Tidak masuk portofolio:</p>
-    ${_masalah.map(x=>`<p class="insight" style="font-size:12px;margin:4px 0;color:var(--gold)">${icon('alert-triangle',{size:12})} <b>${escHtml(x.kode)}</b> — ${escHtml(x.alasan)}</p>`).join('')}
+    ${_masalah.slice(0,10).map(x=>`<p class="insight" style="font-size:12px;margin:4px 0;color:var(--gold)">${icon('alert-triangle',{size:12})} <b>${escHtml(x.kode)}</b> — ${escHtml(x.alasan)}</p>`).join('')}
+    ${_masalah.length>10?`<p class="insight muted" style="font-size:12px;margin:4px 0">…dan ${_masalah.length-10} saham lain dengan alasan serupa.</p>`:''}
     ${_berhenti.length?`<p class="insight muted" style="font-size:12px;margin:4px 0">${icon('info',{size:12})} ${_berhenti.length} sinyal lain tidak diambil karena batas sudah tercapai (${escHtml(_berhenti[0].alasan)}): ${_berhenti.slice(0,12).map(x=>escHtml(x.kode)).join(', ')}${_berhenti.length>12?', …':''}</p>`:''}</div>`:'';
   out.innerHTML=(d.posisi||[]).length?`
     <div style="margin-top:16px;overflow-x:auto">
       <table class="ctable" style="min-width:720px"><thead><tr>
         <th>Saham</th><th style="text-align:right">Harga</th><th style="text-align:right">Stop Loss</th>
         <th style="text-align:right">Lot</th><th style="text-align:right">Nilai</th>
-        <th style="text-align:right">Risiko</th><th>Catatan</th>
+        <th style="text-align:right">Rugi bila SL</th><th style="text-align:right">Untung bila TP</th>
+        <th style="text-align:right" title="Imbal-risiko: potensi untung dibagi potensi rugi">Imbal:Risiko</th><th>Catatan</th>
       </tr></thead><tbody>${rows}</tbody></table>
     </div>
     <div class="grid" style="margin-top:14px">
       <div class="cell"><div class="k">Total dibelanjakan</div><div class="v">Rp${fmt(d.total_nilai)} <span class="muted" style="font-size:12px">(${fmt(d.terpakai_pct,1)}%)</span></div></div>
       <div class="cell"><div class="k">Sisa modal</div><div class="v">Rp${fmt(d.sisa_modal)}</div></div>
-      <div class="cell"><div class="k">Risiko bila SEMUA kena SL</div><div class="v down">Rp${fmt(d.total_risiko_rp)} <span class="muted" style="font-size:12px">(${fmt(d.total_risiko_pct,2)}%)</span></div></div>
+      <div class="cell"><div class="k">Rugi bila SEMUA kena SL</div><div class="v down">Rp${fmt(d.total_risiko_rp)} <span class="muted" style="font-size:12px">(${fmt(d.total_risiko_pct,2)}%)</span></div></div>
+      <div class="cell"><div class="k">Untung bila SEMUA kena TP</div><div class="v up">${d.total_untung_rp!=null?`Rp${fmt(d.total_untung_rp)} <span class="muted" style="font-size:12px">(${fmt(d.total_untung_pct,2)}%)</span>`:'<span class="muted" style="font-size:13px">sebagian posisi tak punya target</span>'}</div></div>
+      <div class="cell"><div class="k">Imbal : Risiko portofolio</div><div class="v" style="color:${d.rrr_portofolio==null?'var(--muted)':d.rrr_portofolio>=2?'var(--bull)':d.rrr_portofolio>=1?'var(--gold)':'var(--bear)'}">${d.rrr_portofolio!=null?fmt(d.rrr_portofolio,2)+'×':'–'}</div></div>
     </div>
     ${d.terpakai_pct<50?`<p class="insight" style="color:var(--gold);font-size:12.5px;margin-top:12px">${icon('alert-triangle',{size:13})} Modal baru terpakai ${fmt(d.terpakai_pct,1)}%. Itu wajar: dengan stop loss yang lebar, jatah ${fmt(d.risk_pct,1)}% risiko per posisi cuma cukup untuk sedikit lot. Kalau mau modal lebih terpakai, naikkan risiko per posisi atau pilih lebih banyak saham — <b>bukan</b> dengan memaksa lot melebihi rencana risikomu.</p>`:''}
     ${skipped}
-    ${infoNote(`<b>Cara hitungnya:</b> tiap posisi diukur agar kalau stop loss kena, ruginya maksimal ${fmt(d.risk_pct,1)}% modal — jadi saham dengan stop loss rapat dapat lot lebih banyak. Ditambah batas <b>${fmt(d.max_pos_pct,0)}% modal per saham</b> supaya satu saham tidak menyedot seluruh dana (stop rapat bisa menyesatkan: kalau harga <i>lompat</i> melewatinya, rugi nyatanya melebihi ${fmt(d.risk_pct,1)}%). Stop loss memakai support S1 dari halaman Analisis. ${escHtml(d.disclaimer||'')}`)}`
+    ${infoNote(`<b>Cara hitungnya:</b> tiap posisi diukur agar kalau stop loss kena, ruginya maksimal ${fmt(d.risk_pct,1)}% modal — jadi saham dengan stop loss rapat dapat lot lebih banyak. Ditambah batas <b>${fmt(d.max_pos_pct,0)}% modal per saham</b> supaya satu saham tidak menyedot seluruh dana (stop rapat bisa menyesatkan: kalau harga <i>lompat</i> melewatinya, rugi nyatanya melebihi ${fmt(d.risk_pct,1)}%).<br><b>Imbal:Risiko</b> = potensi untung ke target dibagi potensi rugi ke stop loss. Angka <b>2×</b> berarti kalau benar untungnya dua kali lipat dari ruginya kalau salah — makin besar makin sepadan. Kolom “Untung bila TP” dan “Rugi bila SL” itu <b>dua skenario ekstrem</b>, bukan ramalan: kenyataannya sebagian kena target, sebagian kena stop. ${escHtml(d.disclaimer||'')}`)}`
     :`${errBox('Tidak ada saham yang bisa masuk portofolio dengan modal & risiko itu.')}${skipped}`;
 }
 function _vcolFor(v){return v==='Undervalued'?'var(--bull)':v==='Overvalued'?'var(--bear)':'var(--gold)'}

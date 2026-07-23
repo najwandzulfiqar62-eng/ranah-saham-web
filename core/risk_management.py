@@ -206,7 +206,8 @@ def _pct(x: float) -> str:
 def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
                     max_pos_pct: float = MAX_POSISI_PCT,
                     maks_posisi: int | None = None,
-                    maks_total_risk_pct: float | None = None) -> dict | None:
+                    maks_total_risk_pct: float | None = None,
+                    min_rrr: float | None = None) -> dict | None:
     """Racik portofolio: dari MODAL + daftar saham pilihan USER, hitung berapa
     LOT tiap saham memakai position sizing BERBASIS RISIKO (keputusan user
     2026-07-23), lalu batasi oleh modal yang benar-benar tersedia.
@@ -248,6 +249,14 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
         AKUMULASI risiko melewati jatah total. Ini penting karena risiko per
         posisi yang kelihatan kecil (1%) tetap menumpuk: 10 posisi = 10% modal
         bisa hilang kalau pasar jatuh serentak, skenario yang justru lazim.
+      - min_rrr: tolak kandidat yang imbal-risikonya di bawah ambang ini.
+        WAJIB ada saat sistem yang memilih, karena peringkat sinyal (skor
+        keyakinan) TIDAK memperhitungkan berapa sisa jarak ke target: sinyal
+        yang harganya sudah terlanjur lari mendekati TP menyisakan untung
+        tipis TAPI jarak stop-nya tetap penuh. Terukur nyata pada data
+        produksi: ADRO 0,02x, BBNI 0,38x, BBCA 0,73x -- artinya potensi rugi
+        LEBIH BESAR dari potensi untung. Kandidat tanpa level target juga
+        ditolak saat ambang ini aktif (tidak bisa dinilai kesepadanannya).
     Sisa kandidat yang tak terpakai karena batas ini tetap dilaporkan di
     'dilewati' dengan alasannya.
 
@@ -297,6 +306,27 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
                 "alasan": "Level stop loss tidak wajar (support di atas harga sekarang), tidak bisa dihitung.",
             })
             continue
+
+        # Saringan imbal-risiko (mode otomatis). Dicek DI SINI, sebelum
+        # perhitungan lot, karena rasionya tidak bergantung jumlah lot --
+        # (target-entry)/(entry-sl) per lembar.
+        if min_rrr is not None:
+            _t = c.get("target") or 0
+            if _t <= entry:
+                dilewati.append({
+                    "kode": kode,
+                    "alasan": ("Harga sudah mencapai/melewati target rencananya, tidak ada lagi "
+                               "jarak menuju untung — imbal-risikonya tak bisa dinilai."),
+                })
+                continue
+            _rrr = (_t - entry) / (entry - sl)
+            if _rrr < min_rrr:
+                dilewati.append({
+                    "kode": kode,
+                    "alasan": (f"Imbal-risiko cuma {_pct(round(_rrr, 2))}x (potensi untung lebih kecil "
+                               f"dari potensi rugi); minimal {_pct(min_rrr)}x."),
+                })
+                continue
 
         harga_per_lot = entry * LOT_SIZE
         lot_maks_modal = math.floor(sisa / harga_per_lot)
@@ -348,11 +378,27 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
         risiko_terpakai += risiko_rp
         sisa -= nilai
 
+        # --- SISI IMBALAN (reward) ---
+        # Risiko saja tidak cukup untuk menilai layak/tidaknya sebuah posisi;
+        # yang menentukan justru PERBANDINGANnya dgn potensi untung (imbal-
+        # risiko / RRR). Target diambil dari field 'target' yang dikirim caller
+        # (TP rencana sinyal, atau resistance R1 dari Analisis) -- KALAU tidak
+        # ada / tidak wajar (<= harga), field imbalan sengaja dibiarkan None
+        # dan TIDAK dikarang, konsisten dgn prinsip "lebih baik kosong daripada
+        # angka yang kelihatan meyakinkan tapi tak berdasar".
+        target = c.get("target") or 0
+        untung_rp = tp_pct = rrr = None
+        if target and target > entry:
+            untung_rp = round(lot * LOT_SIZE * (target - entry), 0)
+            tp_pct = round((target - entry) / entry * 100, 2)
+            rrr = round((target - entry) / (entry - sl), 2)
+
         posisi.append({
             **{k: v for k, v in c.items() if k not in ("entry", "stop_loss")},
             "kode": kode,
             "harga": round(entry, 2),
             "stop_loss": round(sl, 2),
+            "target": round(target, 2) if target else None,
             "lot": lot,
             "lembar": lot * LOT_SIZE,
             "nilai": round(nilai, 0),
@@ -360,6 +406,9 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
             "risiko_rp": round(risiko_rp, 0),
             "risiko_pct_modal": round(risiko_rp / modal * 100, 2),
             "sl_pct": round((entry - sl) / entry * 100, 2),
+            "untung_rp": untung_rp,
+            "tp_pct": tp_pct,
+            "rrr": rrr,
             "dipangkas_modal": dipangkas,
             "dibatasi_konsentrasi": dibatasi_konsentrasi,
         })
@@ -370,12 +419,19 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
             "posisi": [], "dilewati": dilewati,
             "total_nilai": 0.0, "sisa_modal": round(modal, 0), "terpakai_pct": 0.0,
             "total_risiko_rp": 0.0, "total_risiko_pct": 0.0,
+            "total_untung_rp": None, "total_untung_pct": None, "rrr_portofolio": None,
         }
 
     total_nilai = sum(p["nilai"] for p in posisi)
     total_risiko = sum(p["risiko_rp"] for p in posisi)
     for p in posisi:
         p["porsi_pct"] = round(p["nilai"] / total_nilai * 100, 1)
+
+    # Total imbalan dihitung HANYA kalau SEMUA posisi punya target; kalau ada
+    # yang tidak, totalnya akan timpang (untung sebagian vs risiko semua) dan
+    # itu menyesatkan -- lebih baik None + frontend bilang apa adanya.
+    ada_target = [p for p in posisi if p["untung_rp"] is not None]
+    total_untung = sum(p["untung_rp"] for p in ada_target) if len(ada_target) == len(posisi) else None
 
     return {
         "modal": round(modal, 0),
@@ -391,4 +447,10 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
         # bukan cuma per posisi yang kelihatan kecil-kecil.
         "total_risiko_rp": round(total_risiko, 0),
         "total_risiko_pct": round(total_risiko / modal * 100, 2),
+        # Pasangannya: "kalau SEMUA kena TP". Keduanya skenario EKSTREM di dua
+        # ujung, bukan ramalan -- disandingkan supaya user menilai kesepadanan
+        # (imbal-risiko), bukan cuma melihat sisi ruginya.
+        "total_untung_rp": round(total_untung, 0) if total_untung is not None else None,
+        "total_untung_pct": round(total_untung / modal * 100, 2) if total_untung is not None else None,
+        "rrr_portofolio": round(total_untung / total_risiko, 2) if (total_untung is not None and total_risiko > 0) else None,
     }

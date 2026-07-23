@@ -1566,7 +1566,7 @@ async def portofolio_kandidat():
 @app.get("/api/portofolio")
 async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
                      sumber: str = "analisis", maks_saham: int = 5,
-                     maks_total_risk_pct: float = 5.0):
+                     maks_total_risk_pct: float = 5.0, min_rrr: float = 1.0):
     """Racik Portofolio: dari MODAL + saham pilihan USER, hitung berapa LOT
     tiap saham (mis. ?modal=10000000&kodes=BBCA,TLKM&risk_pct=1).
 
@@ -1610,10 +1610,13 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         if not aktif:
             raise HTTPException(422, "Belum ada sinyal aktif di Audit Sinyal untuk diracik otomatis.")
         urut = sorted(aktif.values(), key=lambda s: (s.get("confidence_score") or 0), reverse=True)
-        # Ambil secukupnya (kuota x3) supaya masih ada cadangan kalau sebagian
-        # ditolak (SL sudah tak wajar, 1 lot tak muat, dst) -- tanpa perlu
-        # meng-analisis seluruh puluhan sinyal (mahal, tiap kode = 1 fetch).
-        lst = [s["kode"] for s in urut][:max(maks_saham * 3, 6)]
+        # Cadangan kandidat dibuat LEBAR (kuota x5, maks 30) karena penolakan
+        # di mode otomatis lazim: selain SL tak wajar / 1 lot tak muat, saringan
+        # imbal-risiko membuang sinyal yang harganya sudah lari mendekati target
+        # -- pada data produksi itu justru MAYORITAS. Tetap dibatasi karena tiap
+        # kode = 1 fetch analisis (mahal); kalau kuota tetap tak terpenuhi,
+        # hasilnya apa adanya + alasan tiap penolakan, bukan dipaksa penuh.
+        lst = [s["kode"] for s in urut][:min(max(maks_saham * 5, 10), 30)]
         sumber = "audit"   # levelnya tetap dari rencana sinyal
     else:
         lst = [k.strip() for k in (kodes or "").split(",") if k.strip()][:PORTOFOLIO_MAX_SAHAM]
@@ -1659,6 +1662,10 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         modal, candidates, risk_pct=risk_pct,
         maks_posisi=maks_saham if auto else None,
         maks_total_risk_pct=maks_total_risk_pct if auto else None,
+        # Saringan imbal-risiko HANYA saat sistem yang memilih. Kalau user
+        # memilih sendiri, rasionya cukup DITAMPILKAN biar dia yang menilai --
+        # jangan diam-diam membuang saham yang sengaja dia pilih.
+        min_rrr=min_rrr if auto else None,
     )
     if hasil is None:
         raise HTTPException(422, "Tidak ada saham yang bisa dihitung dari masukan itu.")
@@ -1669,6 +1676,7 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
     if auto:
         hasil["maks_saham"] = maks_saham
         hasil["maks_total_risk_pct"] = maks_total_risk_pct
+        hasil["min_rrr"] = min_rrr
         hasil["disclaimer"] = (
             "Perhitungan ukuran posisi, BUKAN rekomendasi beli. Mode otomatis hanya mengurutkan "
             "sinyal yang sudah tercatat di Audit Sinyal menurut skor keyakinan, lalu mengisi "
