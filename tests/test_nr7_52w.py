@@ -75,6 +75,24 @@ def test_detect_nr7_52w_rejects_insufficient_history():
     assert detect_nr7_52w(_uptrend_df().tail(100)) is None
 
 
+def test_detect_nr7_52w_works_with_one_idx_trading_year():
+    """BUG NYATA (2026-07-23): ambang lama `len(df) < 252` memakai konvensi
+    hari bursa AS, padahal BEI cuma ~244 hari bursa setahun. Pemanggil di
+    produksi (_build_confidence_raw) mengambil period="1y" -> TEPAT 244 baris
+    -> detect selalu None, sehingga sumber sinyal NR7 tidak pernah sekali pun
+    tercatat. Dengan 244 baris (setahun BEI yang sah) deteksi HARUS jalan."""
+    df = _uptrend_df(n=244, last_range=3.5)
+    assert len(df) == 244
+    r = detect_nr7_52w(df)
+    assert r is not None and r["is_nr7_52w"] is True
+
+
+def test_detect_nr7_52w_masih_tolak_data_kurang_dari_setahun():
+    """Batas bawahnya tetap ada -- 200 bar (~10 bulan) belum sah disebut
+    'tertinggi 52 minggu'."""
+    assert detect_nr7_52w(_uptrend_df(n=200, last_range=3.5)) is None
+
+
 def test_detect_nr7_52w_never_returns_nan_levels():
     """Bug nyata (2026-07-23): yfinance kerap mengembalikan bar TERAKHIR
     berisi NaN (hari berjalan/belum lengkap). Tanpa membuang NaN, setiap

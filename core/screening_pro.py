@@ -248,6 +248,19 @@ def _score_minervini(df: pd.DataFrame, name: str,
 NR7_MIN_SL_PCT = 1.0     # lantai stop% -- range NR7 super sempit bisa <1%, terlalu rawan noise
 NR7_MAX_SL_PCT = 7.0     # plafon: kalau "tersempit dari 7 hari" pun >7%, bukan setup NR7 ketat -> skip
 NR7_52W_NEAR_PCT = 0.98  # close >= 98% dari 52W high = "di area tertinggi 52 minggu"
+# Jendela "52 minggu" = 252 hari bursa, ANGKA KONVENSI PASAR AS. BEI cuma
+# ~244 hari bursa setahun (libur nasional lebih banyak), jadi mensyaratkan
+# >=252 BARIS berarti menuntut LEBIH dari setahun penuh data BEI -- syarat
+# yang tidak akan pernah terpenuhi oleh pemanggil yang mengambil period="1y".
+# BUG NYATA (2026-07-23): auto-cycle (_build_confidence_raw) memakai
+# period="1y" -> tepat 244 baris utk SEMUA ticker -> detect_nr7_52w selalu
+# mengembalikan None, sehingga sumber sinyal NR7 TIDAK PERNAH sekali pun
+# tercatat sejak fitur ini dirilis (tab "Per Teori" cuma menampilkan 2 teori).
+# Ambang minimum karena itu disetel ke jumlah hari bursa BEI yang realistis;
+# jendela 52W high di bawah tetap tail(252) -- kalau datanya cuma 244 baris,
+# tail() otomatis mengambil semuanya (= tepat ~1 tahun), jadi maknanya benar.
+NR7_52W_MIN_BARS = 240
+NR7_52W_WINDOW = 252
 
 
 def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
@@ -255,8 +268,8 @@ def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
     dict level SL/TP berbasis teori kalau setup valid (entry ditentukan saat
     perekaman = harga pasar), else None. MURNI (tanpa I/O) -- mudah ditest
     dgn df sintetis."""
-    if df is None or len(df) < 252:
-        return None  # butuh >= 52 minggu data utk 52W high yang sah
+    if df is None or len(df) < NR7_52W_MIN_BARS:
+        return None  # butuh ~1 tahun data utk 52W high yang sah
     # Buang baris OHLC NaN dulu -- yfinance kerap mengembalikan bar terakhir
     # (hari berjalan/belum lengkap) berisi NaN. Kalau tidak dibuang, SETIAP
     # perbandingan di bawah (mis. `today_range <= 0`) diam-diam lolos karena
@@ -264,7 +277,7 @@ def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
     # dict berisi NaN untuk SEMUA saham (bug nyata: 178/178 "cocok" dgn
     # SL=NaN). Sama kelas bug-nya dgn NaN di core/corp_actions.py.
     df = df.dropna(subset=["High", "Low", "Close"])
-    if len(df) < 252:
+    if len(df) < NR7_52W_MIN_BARS:
         return None
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
@@ -277,7 +290,7 @@ def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
         return None  # hari ini bukan range tersempit -> bukan NR7
 
     # --- 52W High: close di/dekat tertinggi 52 minggu ---
-    high_52w = float(high.tail(252).max())
+    high_52w = float(high.tail(NR7_52W_WINDOW).max())
     last_close = float(close.iloc[-1])
     if high_52w <= 0 or last_close < high_52w * NR7_52W_NEAR_PCT:
         return None  # belum di area tertinggi 52 minggu
