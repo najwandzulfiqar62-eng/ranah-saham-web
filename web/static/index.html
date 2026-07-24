@@ -2050,7 +2050,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
         <label class="fld" style="min-width:170px">Modal (Rp)<input id="pfModal" type="number" value="10000000"></label>
-        <label class="fld" id="pfKodesWrap" style="min-width:240px;flex:1;display:none">Saham pilihanmu (pisahkan koma)<input id="pfKodes" placeholder="BBCA, TLKM, ASII" style="text-transform:uppercase"></label>
+        <label class="fld" id="pfKodesWrap" style="min-width:260px;flex:1;display:none">Saham pilihanmu — tambah <b>@harga</b> untuk tentukan entry sendiri<input id="pfKodes" placeholder="BBCA@6500, TLKM, ASII@5100" style="text-transform:uppercase"></label>
         <label class="fld" title="Kerugian maksimal per posisi kalau stop loss kena">Risiko/posisi %<input id="pfRisk" type="number" value="1" step="0.5" min="0.1" max="100"></label>
         <label class="fld" id="pfMaksWrap" style="display:none" title="Berapa saham maksimal yang dipilihkan sistem">Maks saham<input id="pfMaks" type="number" value="5" step="1" min="1" max="10"></label>
         <button class="btn" id="pfBtn">Racik</button>
@@ -6852,7 +6852,7 @@ async function calcPortofolio(){
     if(p.dipangkas_modal)notes.push('dipangkas sisa modal');
     return `<tr>
       <td><b>${escHtml(p.kode)}</b>${p.likuiditas&&/Tidak|Kurang/.test(p.likuiditas)?`<br><span class="muted" style="font-size:11px;color:var(--gold)">${escHtml(p.likuiditas)}</span>`:''}</td>
-      <td style="text-align:right">Rp${fmt(p.harga)}</td>
+      <td style="text-align:right">Rp${fmt(p.harga)}${p.asal_entry==='pilihanmu'?`<br><span class="chip" style="font-size:9px;padding:0 5px;color:var(--gold)">entry kamu</span>${p.harga_pasar&&p.harga_pasar!=p.harga?`<br><span class="muted" style="font-size:10px;opacity:.7">pasar Rp${fmt(p.harga_pasar)}</span>`:''}`:''}</td>
       <td style="text-align:right" class="down">Rp${fmt(p.stop_loss)}<br><span class="muted" style="font-size:11px">−${fmt(p.sl_pct,2)}%</span>${p.asal_sl?`<br><span class="muted" style="font-size:10px;opacity:.75">${escHtml(p.asal_sl)}</span>`:''}</td>
       <td style="text-align:right"><b style="color:var(--gold)">${fmt(p.lot)}</b></td>
       <td style="text-align:right">Rp${fmt(p.nilai)}<br><span class="muted" style="font-size:11px">${fmt(p.porsi_pct,1)}%</span></td>
@@ -6890,7 +6890,7 @@ async function calcPortofolio(){
     </div>
     ${d.terpakai_pct<50?`<p class="insight" style="color:var(--gold);font-size:12.5px;margin-top:12px">${icon('alert-triangle',{size:13})} Modal baru terpakai ${fmt(d.terpakai_pct,1)}%. Itu wajar: dengan stop loss yang lebar, jatah ${fmt(d.risk_pct,1)}% risiko per posisi cuma cukup untuk sedikit lot. Kalau mau modal lebih terpakai, naikkan risiko per posisi atau pilih lebih banyak saham — <b>bukan</b> dengan memaksa lot melebihi rencana risikomu.</p>`:''}
     ${skipped}
-    ${infoNote(`<b>Cara hitungnya:</b> tiap posisi diukur agar kalau stop loss kena, ruginya maksimal ${fmt(d.risk_pct,1)}% modal — jadi saham dengan stop loss rapat dapat lot lebih banyak. Ditambah batas <b>${fmt(d.max_pos_pct,0)}% modal per saham</b> supaya satu saham tidak menyedot seluruh dana (stop rapat bisa menyesatkan: kalau harga <i>lompat</i> melewatinya, rugi nyatanya melebihi ${fmt(d.risk_pct,1)}%).<br><b>Imbal:Risiko</b> = potensi untung ke target dibagi potensi rugi ke stop loss. Angka <b>2×</b> berarti kalau benar untungnya dua kali lipat dari ruginya kalau salah — makin besar makin sepadan. Kolom “Untung bila TP” dan “Rugi bila SL” itu <b>dua skenario ekstrem</b>, bukan ramalan: kenyataannya sebagian kena target, sebagian kena stop. ${escHtml(d.disclaimer||'')}`)}`
+    ${infoNote(`<b>Cara hitungnya:</b> tiap posisi diukur agar kalau stop loss kena, ruginya maksimal ${fmt(d.risk_pct,1)}% modal — jadi saham dengan stop loss rapat dapat lot lebih banyak. Ditambah batas <b>${fmt(d.max_pos_pct,0)}% modal per saham</b> supaya satu saham tidak menyedot seluruh dana (stop rapat bisa menyesatkan: kalau harga <i>lompat</i> melewatinya, rugi nyatanya melebihi ${fmt(d.risk_pct,1)}%).${_pfSumber==='manual'?`<br><b>Entry:</b> default harga pasar sekarang. Mau entry di harga lain? Tulis <b>@harga</b> di belakang kode, mis. <b>BBCA@6500</b> — lot & imbal-risiko dihitung dari harga entry itu.`:''}<br><b>Imbal:Risiko</b> = potensi untung ke target dibagi potensi rugi ke stop loss. Angka <b>2×</b> berarti kalau benar untungnya dua kali lipat dari ruginya kalau salah — makin besar makin sepadan. Kolom “Untung bila TP” dan “Rugi bila SL” itu <b>dua skenario ekstrem</b>, bukan ramalan: kenyataannya sebagian kena target, sebagian kena stop. ${escHtml(d.disclaimer||'')}`)}`
     :`${errBox('Tidak ada saham yang bisa masuk portofolio dengan modal & risiko itu.')}${skipped}`;
 }
 function _vcolFor(v){return v==='Undervalued'?'var(--bull)':v==='Overvalued'?'var(--bear)':'var(--gold)'}

@@ -303,7 +303,8 @@ def build_portfolio(modal: float, candidates: list[dict], risk_pct: float = 1.0,
         if sl <= 0 or sl >= entry:
             dilewati.append({
                 "kode": kode,
-                "alasan": "Level stop loss tidak wajar (support di atas harga sekarang), tidak bisa dihitung.",
+                "alasan": (f"Stop loss ({_rp(sl)}) berada di atas atau sama dengan harga "
+                           f"entry ({_rp(entry)}) — posisi beli tidak bisa dihitung."),
             })
             continue
 

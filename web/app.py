@@ -1515,6 +1515,14 @@ _PORTO_SRC_LABEL = {"TOP_PICK": "Top Pick", "SMART_MONEY": "Smart Money",
                     "NR7_52W": "NR7 + 52W High"}
 
 
+def _parse_harga_input(s: str) -> float | None:
+    """Ambil angka rupiah dari input user (mis. '6.500', 'Rp6500', '6500').
+    Harga saham IDX bilangan bulat, jadi cukup ambil digitnya. None kalau
+    tidak ada digit sama sekali."""
+    digits = "".join(ch for ch in (s or "") if ch.isdigit())
+    return float(digits) if digits else None
+
+
 async def _sinyal_aktif_per_kode() -> dict[str, dict]:
     """{kode: sinyal} utk sinyal BELI yang masih aktif (OPEN/PENDING_ENTRY),
     satu per kode. Dipakai Racik Portofolio mode 'audit' -- usulan 2026-07-23:
@@ -1583,10 +1591,12 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
       - 'audit': SL dari RENCANA sinyal yang sedang diaudit di Audit Sinyal
         (usulan 2026-07-23 "ambil emitennya dari audit sinyal aja"), sehingga
         portofolio nyambung dgn rekam jejak yang memang dilacak sistem.
-    Pada kedua mode, ENTRY tetap harga pasar SEKARANG (user membeli hari ini),
-    bukan entry_price historis saat sinyal dulu dicatat -- kalau harga kini
-    sudah berada di bawah level SL-nya, build_portfolio menolaknya dgn alasan
-    jelas (bukan diam-diam memakai risiko negatif).
+    ENTRY: default harga pasar SEKARANG, TAPI user boleh menentukan sendiri
+    lewat sintaks 'KODE@harga' di kolom kode (mis. 'BBCA@6500' = mau entry
+    BBCA di 6500) -- permintaan user "entrynya sesuain sama usernya, mau entry
+    dimana". Kalau entry (pasar/pilihan) berada di bawah/sama dengan level SL,
+    build_portfolio menolaknya dgn alasan jelas (bukan diam-diam memakai
+    risiko negatif). Ukuran lot & imbal-risiko dihitung dari entry yang dipakai.
 
     BUKAN nasihat investasi: sistem tidak menilai saham pilihan user bagus
     atau tidak, hanya menghitung ukuran posisi yang sesuai risiko. Konteks
@@ -1599,6 +1609,12 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
     if not (0 < risk_pct <= 100):
         raise HTTPException(400, "risk_pct harus di antara 0 dan 100 (mis. 1 = 1% modal per posisi).")
 
+    # Entry pilihan USER per-kode (opsional). Sintaks di kolom kode: 'BBCA@6500'
+    # = mau entry BBCA di 6500. Tanpa '@', entry default = harga pasar sekarang.
+    # (permintaan user 2026-07-24: "entrynya sesuain sama usernya, mau entry
+    # dimana"). Cuma berlaku di mode ketik-sendiri; mode auto/audit-picker
+    # kirim kode polos.
+    entry_override: dict[str, float] = {}
     auto = sumber == "auto"
     if auto:
         # Sistem yang memilih: kandidat = SEMUA sinyal aktif, sudah terurut
@@ -1619,9 +1635,18 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         lst = [s["kode"] for s in urut][:min(max(maks_saham * 5, 10), 30)]
         sumber = "audit"   # levelnya tetap dari rencana sinyal
     else:
-        lst = [k.strip() for k in (kodes or "").split(",") if k.strip()][:PORTOFOLIO_MAX_SAHAM]
-        if not lst:
+        raw = [k.strip() for k in (kodes or "").split(",") if k.strip()][:PORTOFOLIO_MAX_SAHAM]
+        if not raw:
             raise HTTPException(400, "Sertakan minimal 1 kode saham, mis. ?kodes=BBCA,TLKM")
+        lst = []
+        for tok in raw:
+            kode_part, sep, harga_part = tok.partition("@")
+            kode_part = kode_part.strip()
+            lst.append(kode_part)
+            if sep and harga_part.strip():
+                hv = _parse_harga_input(harga_part)
+                if hv and hv > 0:
+                    entry_override[_norm_kode(kode_part)] = hv
 
     sinyal_map = await _sinyal_aktif_per_kode() if sumber == "audit" else {}
     results = await asyncio.gather(*(_analyze_payload(k) for k in lst), return_exceptions=True)
@@ -1644,12 +1669,17 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
                 continue
             sl = sig.get("sl_price") or 0
             asal_sl = f"SL rencana sinyal {_PORTO_SRC_LABEL.get(sig.get('source'), sig.get('source') or '')}".strip()
+        # Entry: pakai harga pilihan user kalau ada, else harga pasar sekarang.
+        user_entry = entry_override.get(res["kode"])
+        entry = user_entry if user_entry else (res.get("price") or 0)
         candidates.append({
             "kode": res["kode"],
-            "entry": res.get("price") or 0,
+            "entry": entry,
             "stop_loss": sl,
             "target": (sig or {}).get("tp_price") if sumber == "audit" else res.get("r1"),
             "asal_sl": asal_sl,
+            "asal_entry": "pilihanmu" if user_entry else "harga pasar",
+            "harga_pasar": res.get("price") or 0,
             "sinyal_source": (sig or {}).get("source") if sumber == "audit" else None,
             "sinyal_status": (sig or {}).get("status") if sumber == "audit" else None,
             "grade": res.get("grade"),

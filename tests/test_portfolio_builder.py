@@ -86,6 +86,20 @@ def test_saham_yang_tidak_kebagian_dilaporkan_dengan_alasan():
     assert "tidak cukup" in next(d["alasan"] for d in r["dilewati"] if d["kode"] == "MAHAL").lower()
 
 
+def test_entry_yang_dipakai_menentukan_lot_dan_risiko():
+    """Entry bisa ditentukan user (permintaan 2026-07-24: 'entrynya sesuain
+    sama usernya, mau entry dimana'). Entry berbeda -> jarak ke SL berbeda ->
+    lot & risiko rupiah ikut berubah, dan rrr dihitung dari entry itu."""
+    # entry lebih tinggi (jarak ke SL 950 lebih lebar) -> lot lebih sedikit
+    lebar = build_portfolio(100_000_000, [_ct("AAAA", 1050, 950, 1200)], risk_pct=1.0)["posisi"][0]
+    rapat = build_portfolio(100_000_000, [_ct("AAAA", 1000, 950, 1200)], risk_pct=1.0)["posisi"][0]
+    assert lebar["harga"] == 1050 and rapat["harga"] == 1000
+    assert rapat["lot"] > lebar["lot"]                 # SL lebih rapat -> lot lebih banyak
+    # rrr dihitung dari entry masing-masing: (1200-entry)/(entry-950)
+    assert abs(rapat["rrr"] - (1200-1000)/(1000-950)) < 0.01
+    assert abs(lebar["rrr"] - (1200-1050)/(1050-950)) < 0.01
+
+
 def test_tolak_stop_loss_tidak_wajar():
     """SL >= harga (support di atas harga) bukan stop loss beli yang sah."""
     r = build_portfolio(10_000_000, [
