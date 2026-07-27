@@ -1510,6 +1510,75 @@ def test_classify_entry_mode_insufficient_data_is_area_aman():
     assert classify_entry_mode(df, is_breakout=True, volume_confirmation=True) == "AREA_AMAN"
 
 
+def test_classify_entry_mode_market_not_ok_downgrades_agresif():
+    """Permintaan user 2026-07-27: saat IHSG rawan (chase_ok=False), entry
+    yang HARUSNYA AGRESIF (breakout+volume, momentum saham kuat) DITURUNKAN
+    ke AREA_AMAN -- jangan kejar di market yang rawan koreksi."""
+    from core.trading_plan import classify_entry_mode
+    df = _synthetic_ohlcv([100 + i for i in range(60)])  # uptrend kuat
+    # pasar sehat -> tetap AGRESIF
+    assert classify_entry_mode(df, is_breakout=True, volume_confirmation=True, chase_ok=True) == "AGRESIF"
+    # pasar rawan -> diturunkan ke AREA_AMAN meski momentum saham kuat
+    assert classify_entry_mode(df, is_breakout=True, volume_confirmation=True, chase_ok=False) == "AREA_AMAN"
+
+
+def _ihsg_series(closes):
+    import pandas as pd
+    return pd.Series(closes, index=pd.date_range("2026-01-01", periods=len(closes), freq="D"))
+
+
+def test_assess_market_context_overbought_blocks_chase():
+    """Kasus NYATA 20-23 Juli 2026: IHSG RSI >80 (overbought), masih di atas
+    MA20 -> harus OVERBOUGHT & chase_ok=False (bukan SEHAT). Filter kasar
+    'harga<MA20' TIDAK menangkap ini; overbought yang menangkap."""
+    from core.trading_plan import assess_market_context
+    # naik tajam terus-menerus -> RSI mentok tinggi, harga jauh di atas MA20
+    closes = [5000 + i * 25 for i in range(60)]
+    r = assess_market_context(_ihsg_series(closes))
+    assert r["state"] == "OVERBOUGHT" and r["chase_ok"] is False
+    assert r["rsi"] > 70
+
+
+def test_assess_market_context_healthy_uptrend_allows_chase():
+    """Tren naik SEHAT (RSI wajar ~68, di atas MA5 & MA20) -> chase_ok=True.
+    Naik dengan pullback berkala supaya RSI TIDAK mentok overbought (beda dari
+    kasus 20-23 Juli yg naik lurus tanpa jeda -> RSI 80-an)."""
+    from core.trading_plan import assess_market_context
+    base = 5000
+    closes = []
+    for i in range(59):
+        base += 5 if (i % 3) != 2 else -6   # 2 hari naik, 1 hari turun
+        closes.append(base)
+    closes.append(base + 5)                 # akhiri 1 hari naik -> di atas MA5
+    r = assess_market_context(_ihsg_series(closes))
+    assert r["chase_ok"] is True and r["state"] == "SEHAT"
+    assert r["rsi"] <= 70
+
+
+def test_assess_market_context_below_ma5_is_weakening():
+    """Momentum jangka pendek berbalik (harga jatuh di bawah MA5) tapi masih
+    di atas MA20 -> MELEMAH, chase_ok=False (kasus 24-27 Juli)."""
+    from core.trading_plan import assess_market_context
+    closes = [5000 + i * 5 for i in range(50)] + [5260, 5255, 5240, 5210, 5180]  # naik lalu jatuh tajam
+    r = assess_market_context(_ihsg_series(closes))
+    assert r["chase_ok"] is False and r["state"] in ("MELEMAH", "BEARISH")
+
+
+def test_assess_market_context_below_ma20_is_bearish():
+    from core.trading_plan import assess_market_context
+    closes = [6000 - i * 8 for i in range(40)]  # downtrend jelas
+    r = assess_market_context(_ihsg_series(closes))
+    assert r["state"] == "BEARISH" and r["chase_ok"] is False
+
+
+def test_assess_market_context_missing_data_is_permissive():
+    """Tanpa data IHSG, jangan memblokir apa pun (fail-open) -- entry ikut
+    momentum saham saja."""
+    from core.trading_plan import assess_market_context
+    assert assess_market_context(None)["chase_ok"] is True
+    assert assess_market_context(_ihsg_series([100, 101, 102]))["chase_ok"] is True
+
+
 def test_record_top_picks_agresif_opens_immediately(clean_signal_db):
     """Permintaan user 'masuk langsung ketika agresif ... BREAKOUT KADANG
     FAKE': sinyal ber-entry_mode AGRESIF dicatat LANGSUNG sbg OPEN (posisi

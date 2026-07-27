@@ -2479,6 +2479,13 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
     # tersedia utk fungsi lain yang dipanggilnya (termasuk fungsi
     # module-level terpisah spt ini) -- dibutuhkan langsung di loop bawah.
     from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns, detect_nr7_52w
+    from core.trading_plan import assess_market_context
+    # Kondisi pasar (IHSG) dihitung SEKALI di sini, bukan per-saham -- lalu
+    # chase_ok dipakai menyesuaikan ENTRY tiap sinyal (permintaan user
+    # 2026-07-27). Saat IHSG overbought/melemah/bearish, entry tidak mengejar
+    # di market melainkan menunggu pullback. Lihat assess_market_context.
+    mkt_ctx = assess_market_context(market_close)
+    chase_ok = mkt_ctx["chase_ok"]
     items = []
     for ticker, df in data.items():
         kode = ticker.replace(".JK", "")
@@ -2542,7 +2549,7 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
             # tidak ada (harusnya nyaris tidak pernah -- _determine_entry_
             # points selalu punya fallback sintetis).
             from core.trading_plan import calculate_fixed_entry_levels_from_df
-            plan = calculate_fixed_entry_levels_from_df(df, "")
+            plan = calculate_fixed_entry_levels_from_df(df, "", chase_ok=chase_ok)
             scenarios = (plan or {}).get("scenarios") or {}
             recommended_key = (plan or {}).get("recommended_scenario", "pullback")
             # AGRESIF (masuk langsung): permintaan user "gausah make breakout,
@@ -2608,6 +2615,10 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
                 "pattern": pattern_name,
                 "pattern_bias": pattern_bias,
                 "entry_mode": (plan or {}).get("entry_mode"),
+                # Konteks pasar (IHSG) yang mempengaruhi entry sinyal ini --
+                # sama utk semua saham di siklus ini, tapi disertakan supaya
+                # frontend/audit bisa menjelaskan KENAPA entry dibuat konservatif.
+                "market_context": mkt_ctx,
             }
             # Deteksi setup NR7 + 52W High (teori breakout momentum independen,
             # DITANDAI HIGH RISK) -- df sudah di tangan di sini, jadi lebih
@@ -2848,6 +2859,12 @@ async def confidence():
     except Exception:
         pass
 
+    # Konteks pasar yg MEMPENGARUHI ENTRY sinyal (chase_ok) -- diambil dari
+    # item mana pun (sama utk semua saham di siklus ini). Beda dari
+    # market_regime (skor AI IHSG, informasional): ini yang benar-benar
+    # dipakai menyesuaikan entry AGRESIF->AREA_AMAN.
+    market_context = items[0]["market_context"] if items else None
+
     return _py({
         "items": items,
         "weights": weights,
@@ -2855,6 +2872,7 @@ async def confidence():
         "universe": len(LIQUID_250),
         "market_regime": market_regime,
         "market_regime_score": market_regime_score,
+        "market_context": market_context,
         "computed_at": int(time.time()),
     })
 

@@ -138,11 +138,75 @@ def _determine_entry_points(current_price: float, atr: float, sr: dict) -> dict:
     }
 
 
+def assess_market_context(ihsg_close) -> dict:
+    """Nilai kondisi pasar (IHSG) untuk MENYESUAIKAN ENTRY sinyal saham
+    (permintaan user 2026-07-27: "sesuaikan entrynya dengan IHSG -- kalau IHSG
+    bearish hati-hati dulu, baru kasih buy dimana").
+
+    LATAR BUKTI (data produksi Juli 2026): sinyal yang direkam 20-24 Juli
+    winrate 0% (12 SL, 0 TP), SEMUA saat IHSG RSI 81-87 (overbought ekstrem,
+    +5-6% di atas MA20) tepat sebelum IHSG koreksi dari puncak 6340. Sinyal
+    yang menang (awal-tengah Juli) direkam saat IHSG RSI <=61. Pemisahnya
+    bersih -> RSI 70 jadi ambang alami, BUKAN angka dikarang. Catatan penting:
+    IHSG saat koreksi MASIH di atas MA20, jadi filter kasar 'harga<MA20' TIDAK
+    menangkap ini -- yang menangkap justru overbought (RSI) + jatuh di bawah
+    MA5 (momentum jangka pendek berbalik).
+
+    Return {chase_ok, state, reason, rsi, pct_vs_ma20}. chase_ok=False berarti
+    JANGAN mengejar entry di market (AGRESIF diturunkan ke AREA_AMAN = tunggu
+    pullback ke support) -- lihat classify_entry_mode(chase_ok=...). MURNI
+    kalkulasi, aman ditest."""
+    import math
+    import pandas as pd
+
+    if ihsg_close is None:
+        return {"chase_ok": True, "state": "TIDAK_DIKETAHUI", "rsi": None,
+                "pct_vs_ma20": None,
+                "reason": "Data IHSG tidak tersedia — entry mengikuti momentum saham saja."}
+    s = ihsg_close
+    if isinstance(s, pd.DataFrame):
+        s = s.iloc[:, 0]
+    s = pd.Series(s).astype(float).dropna()
+    if len(s) < 20:
+        return {"chase_ok": True, "state": "TIDAK_DIKETAHUI", "rsi": None,
+                "pct_vs_ma20": None,
+                "reason": "Data IHSG belum cukup — entry mengikuti momentum saham saja."}
+
+    last = float(s.iloc[-1])
+    ma5 = float(s.tail(5).mean())
+    ma20 = float(s.tail(20).mean())
+    rsi_series = calculate_rsi(s)
+    rsi_now = float(rsi_series.iloc[-1])
+    if math.isnan(rsi_now):
+        rsi_now = 50.0
+    pct20 = round((last / ma20 - 1) * 100, 2) if ma20 else 0.0
+    base = {"rsi": round(rsi_now, 1), "pct_vs_ma20": pct20}
+
+    # Urutan prioritas: tren menengah (MA20) -> momentum pendek (MA5) ->
+    # euforia (RSI overbought). Salah satu aktif -> jangan kejar.
+    if last < ma20:
+        return {**base, "chase_ok": False, "state": "BEARISH",
+                "reason": (f"IHSG di bawah rata-rata 20 hari (tren menengah menurun, "
+                           f"{pct20:+.1f}%) — entry menunggu pullback, tidak mengejar di market.")}
+    if last < ma5:
+        return {**base, "chase_ok": False, "state": "MELEMAH",
+                "reason": ("IHSG jatuh di bawah rata-rata 5 hari (momentum jangka pendek "
+                           "berbalik turun) — entry dibuat konservatif (tunggu pullback).")}
+    if rsi_now > 70:
+        return {**base, "chase_ok": False, "state": "OVERBOUGHT",
+                "reason": (f"IHSG overbought (RSI {rsi_now:.0f}, {pct20:+.1f}% di atas MA20) — "
+                           "pasar euforia/extended dan rawan koreksi; entry menunggu pullback "
+                           "alih-alih mengejar di puncak.")}
+    return {**base, "chase_ok": True, "state": "SEHAT",
+            "reason": "IHSG dalam tren sehat — entry mengikuti momentum saham."}
+
+
 def classify_entry_mode(
     df,
     *,
     is_breakout: bool = False,
     volume_confirmation: bool = False,
+    chase_ok: bool = True,
 ) -> str:
     """Klasifikasi momentum entry: AGRESIF vs AREA_AMAN.
 
@@ -183,6 +247,17 @@ def classify_entry_mode(
     from core.indicators import calculate_macd, calculate_rsi, calculate_stochrsi
 
     if df is None or len(df) < 50:
+        return "AREA_AMAN"
+
+    # Gate pasar (permintaan user 2026-07-27): saat IHSG bearish/melemah/
+    # overbought (chase_ok=False dari assess_market_context), JANGAN entry
+    # agresif di market -- turunkan ke AREA_AMAN (tunggu pullback ke support).
+    # Momentum SAHAM boleh kuat, tapi mengejar di market yang rawan koreksi
+    # justru pola yang menghasilkan winrate 0% pada 20-24 Juli 2026 (semua
+    # SL). AREA_AMAN mencatat PENDING_ENTRY di level pullback -> kalau harga
+    # tidak pernah pullback (pasar lanjut turun), sinyal EXPIRED_NO_ENTRY
+    # (tanpa rugi) alih-alih SL_HIT dari entry di puncak.
+    if not chase_ok:
         return "AREA_AMAN"
 
     close = df["Close"]
@@ -242,10 +317,15 @@ def classify_entry_mode(
     return "AREA_AMAN"
 
 
-def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | None:
+def calculate_fixed_entry_levels_from_df(df, created_date_str: str,
+                                         chase_ok: bool = True) -> dict | None:
     """Hitung 4 skenario fixed entry levels (dipakai saat add ke watchlist).
     Murni kalkulasi -- caller bertanggung jawab menyediakan df yang sudah
     didownload dan dibersihkan, serta timestamp untuk created_date.
+
+    chase_ok (default True): kondisi pasar IHSG (lihat assess_market_context).
+    False -> entry_mode tidak akan AGRESIF (tunggu pullback), meski momentum
+    saham kuat. Caller (web/app.py) menghitungnya sekali dari IHSG per siklus.
 
     Returns None kalau data tidak cukup (< 50 baris).
     """
@@ -311,6 +391,7 @@ def calculate_fixed_entry_levels_from_df(df, created_date_str: str) -> dict | No
 
     entry_mode = classify_entry_mode(
         df, is_breakout=is_breakout, volume_confirmation=volume_confirmation,
+        chase_ok=chase_ok,
     )
 
     return {

@@ -3856,6 +3856,13 @@ async function loadTopPick(){
   const regimeBanner=d.market_regime?`<div class="audit-note" style="margin-bottom:12px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#07120F">
     <b style="color:${regimeColor}">Regime IHSG: ${d.market_regime}</b> — skor di bawah ini dibaca DI DALAM kondisi pasar ini, bukan lepas darinya. Sinyal individual yang bagus di tengah pasar bearish tetap butuh konfirmasi ekstra.
   </div>`:'';
+  // Banner PENYESUAIAN ENTRY berbasis IHSG (permintaan user): saat pasar
+  // rawan (chase_ok=false), semua entry diturunkan ke "tunggu pullback".
+  const mc=d.market_context;
+  const mcBanner=(mc&&mc.chase_ok===false)?`<div class="audit-note" style="margin-bottom:12px;border:1px solid var(--gold);border-radius:8px;padding:10px 12px;background:#12100a">
+    ${icon('alert-triangle',{size:13})} <b style="color:var(--gold)">Entry dibuat konservatif — ${escHtml(mc.state)}</b><br>
+    <span style="font-size:12.5px">${escHtml(mc.reason)} Artinya sinyal baru dicatat menunggu <b>pullback ke support</b> dulu (bukan langsung masuk di harga pasar). Kalau harga tak pernah pullback, sinyal kedaluwarsa tanpa posisi — bukan rugi.</span>
+  </div>`:'';
   const rrColorTp=rr=>rr==null?'var(--muted)':rr>=1.5?'var(--bull)':rr>=1?'var(--gold)':'var(--bear)';
   const tr=items.map(r=>{
     const note=(r.warnings&&r.warnings[0])||(r.reasons&&r.reasons[0])||'';
@@ -3870,6 +3877,7 @@ async function loadTopPick(){
     <td style="color:${rrColorTp(r.rr_ratio)}">${r.rr_ratio!=null?('1:'+fmt(r.rr_ratio,2)):'-'}</td>
     <td>Rp${fmt(r.harga)}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
+    ${mcBanner}
     ${regimeBanner}
     ${infoNote(`Bobot saat ini: AI Score ${fmt(d.weights.ai*100,0)}% · Minervini ${fmt(d.weights.mv*100,0)}% · Confluence ${fmt(d.weights.cf*100,0)}% · Likuiditas ${fmt(d.weights.liq*100,0)}% · Risk/Reward ${fmt(d.weights.rr*100,0)}%. Saham kurang/tidak likuid (⚠) skornya DIBATASI, bukan disembunyikan. Fundamental & X-15 muncul di alasan/warning kalau relevan, TIDAK memengaruhi skor. Tap baris untuk analisis.`,'Metodologi skor')}
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor Keyakinan</th><th class="hide-xs">AI Score</th><th class="hide-xs">Sektor</th><th>Likuiditas</th><th>RR</th><th>Harga</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
