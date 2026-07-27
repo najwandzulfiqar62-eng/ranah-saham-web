@@ -649,6 +649,38 @@ def _ensure_table():
         # yang men-dedup TAMPILANnya per kode, BUKAN datanya (user: "daftar
         # utama tetap rapi"). Index lama di-DROP eksplisit supaya DB produksi
         # yang sudah punya index per-kode lintas-source ikut termigrasi.
+        #
+        # BUG NYATA ditemukan di produksi 2026-07-27: migrasi ini LUPA
+        # membersihkan baris yang melanggar constraint BARU sebelum membuat
+        # index-nya (pola beda dari migrasi kelima/keenam di atas, yang
+        # keduanya benar DELETE dulu baru CREATE INDEX) -- CREATE UNIQUE
+        # INDEX pada data yang sudah melanggar langsung melempar
+        # IntegrityError, dan karena ini terjadi DI DALAM _ensure_table()
+        # SEBELUM baris terakhirnya tercapai, flag `_ensured` tidak pernah
+        # ke-set True, jadi migrasi ini diulang dari awal (dan gagal lagi
+        # dgn error yang SAMA) di SETIAP pemanggilan fungsi manapun yang
+        # menyentuh signal_history -- itulah sebabnya /api/signals & /api/
+        # portofolio gagal TOTAL & TERUS-MENERUS ("Gagal memuat data."),
+        # bukan cuma sesekali. Dedup sekarang dijalankan lebih dulu, pola
+        # SAMA persis (grup by kode dlm scope index, sisakan id TERKECIL).
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source IN ('TOP_PICK', 'SMART_MONEY')
+            AND id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source IN ('TOP_PICK', 'SMART_MONEY')
+                GROUP BY kode
+            )
+        ''')
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'NR7_52W'
+            AND id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'NR7_52W'
+                GROUP BY kode
+            )
+        ''')
         conn.execute('DROP INDEX IF EXISTS idx_signal_unique_open_kode')
         conn.execute('DROP INDEX IF EXISTS idx_signal_unique_active_kode')
         conn.execute('''
