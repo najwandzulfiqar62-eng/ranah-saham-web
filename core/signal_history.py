@@ -543,6 +543,24 @@ def _ensure_table():
         # disentuh sama sekali -- persis permintaan user "entrynya jgn
         # diubah-ubah") -- siklus audit normal yang akan menentukan ulang
         # nasibnya memakai harga LIVE saat ini, bukan dikarang manual.
+        # BUG NYATA ditemukan di produksi 2026-07-27 (BSSR): kalau kode yang
+        # sama SUDAH punya baris aktif lain (OPEN/PENDING_ENTRY, dari SOURCE
+        # apa pun -- mis. TOP_PICK yang masih OPEN), menghidupkan baris
+        # SL_HIT ini balik ke OPEN akan membuat DUA baris OPEN utk kode yang
+        # sama pada TITIK INI di urutan migrasi -- index lama
+        # idx_signal_unique_open_kode (satu OPEN per kode, LINTAS source)
+        # masih AKTIF di sini (baru di-DROP belakangan, setelah migrasi
+        # ke-16/17), jadi UPDATE ini sendiri melempar IntegrityError SEBELUM
+        # migrasi sempat mengganti ke index yang lebih longgar per-source-
+        # group. Sama seperti CREATE UNIQUE INDEX di migrasi ke-16/17,
+        # exception di sini terjadi SEBELUM `_ensured` ke-set True, jadi
+        # migrasi diulang & gagal lagi dgn error SAMA di SETIAP pemanggilan
+        # apa pun yang menyentuh signal_history -- akar masalah "Gagal
+        # memuat data" yang KEDUA, ditemukan setelah fix pertama (dedup
+        # sebelum CREATE INDEX) di-deploy tapi errornya masih ada. Fix:
+        # jangan hidupkan balik kalau kode itu SUDAH py baris aktif lain --
+        # 1 cerita aktif per kode tetap dijaga, konsisten dgn migrasi
+        # keenam (lihat komentarnya di atas).
         from core.trading_plan import MIN_SL_PCT as _MIN_SL_PCT2
         conn.execute('''
             UPDATE signal_history
@@ -551,6 +569,9 @@ def _ensure_table():
             WHERE status = 'SL_HIT'
               AND sl_pct < ?
               AND resolved_price > entry_price * (1 - ? / 100.0)
+              AND kode NOT IN (
+                  SELECT kode FROM signal_history WHERE status IN ('OPEN', 'PENDING_ENTRY')
+              )
         ''', (_MIN_SL_PCT2, _MIN_SL_PCT2, _MIN_SL_PCT2))
         # Migrasi keempat belas: permintaan user langsung ("misalkan kena
         # area tp1 tandai juga lanjut ke area tp selanjutnya") -- TP

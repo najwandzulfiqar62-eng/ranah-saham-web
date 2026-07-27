@@ -68,3 +68,47 @@ def test_ensure_table_self_heals_from_duplicate_active_rows(clean_signal_db):
     assert len(rows) == 1, "duplikat aktif seharusnya dibersihkan, sisakan satu"
     assert rows[0]["id"] == first_id, "yang dipertahankan harus yang id TERKECIL (paling awal)"
     assert idx_exists is not None, "index unik harus berhasil dibangun ulang setelah dedup"
+
+
+def test_ensure_table_does_not_revive_sl_hit_into_conflict_with_existing_active_row(clean_signal_db):
+    """Bug produksi NYATA KEDUA, ditemukan SETELAH fix pertama di atas
+    di-deploy tapi /api/signals & /api/portofolio masih 500 (kasus asli:
+    BSSR) -- migrasi "hidupkan balik SL_HIT yang sl_pct-nya ternyata di
+    bawah floor MIN_SL_PCT" (lihat komentar panjang di _ensure_table)
+    men-UPDATE status jadi 'OPEN' TANPA cek apakah kode itu SUDAH punya
+    baris aktif lain. Index LAMA idx_signal_unique_open_kode (1 OPEN per
+    kode, LINTAS source) masih AKTIF persis di titik UPDATE ini berjalan
+    (baru di-DROP jauh belakangan di migrasi ke-16/17) -- jadi kalau kode
+    yang sama sudah OPEN dari source lain, UPDATE ini sendiri melempar
+    IntegrityError, migrasi tak pernah tuntas, `_ensured` tak pernah True,
+    dan /api/signals dkk gagal PERMANEN (persis kasus BSSR: OPEN dari
+    TOP_PICK id 251, SL_HIT sl_pct=1.0 dari NR7_52W id 333)."""
+    sh._ensure_table()
+
+    with get_db() as conn:
+        # Baris AKTIF yang sudah ada (BSSR yang masih OPEN, dari TOP_PICK).
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, source)
+            VALUES ('BSSR', 4288, 5, 3, 'OPEN', 'TOP_PICK')
+        ''')
+        # Baris SL_HIT dgn sl_pct di bawah floor (1.0% < MIN_SL_PCT 3.0%)
+        # DAN resolved_price masih di atas floor yang benar -- persis
+        # kriteria "revival" migrasi ini (angka BSSR asli dari produksi).
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, status, source, resolved_price)
+            VALUES ('BSSR', 4300, 5, 1.0, 'SL_HIT', 'NR7_52W', 4240)
+        ''')
+
+    sh._ensured = False
+
+    sh._ensure_table()  # TIDAK BOLEH melempar IntegrityError
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, sl_pct FROM signal_history WHERE kode='BSSR' AND source='NR7_52W'"
+        ).fetchone()
+
+    # Tidak dihidupkan (tetap SL_HIT) -- karena kode ini SUDAH punya posisi
+    # aktif lain, menghidupkannya akan melanggar "1 cerita aktif per kode".
+    # Kejujuran data > memaksa koreksi yang justru bikin data ganda.
+    assert row["status"] == "SL_HIT"
