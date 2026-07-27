@@ -93,7 +93,7 @@ from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
 from core.volume_patterns import calculate_ad_line
 from core.charts.snr_chart import calculate_snr_levels
-from core.config import SAHAM_XLSX_PATH
+from core.config import SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
 # tidak tersedia dari yfinance, jadi dipetakan manual untuk universe ini.
@@ -285,6 +285,25 @@ async def _lifespan(_app: "FastAPI"):
 app = FastAPI(title="Ranah Saham API", version="1.0", lifespan=_lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Tanpa ini, exception yang TIDAK tertangkap di endpoint balik sbg 500
+    polos tanpa body JSON (default Starlette) -- frontend (lihat fungsi
+    api() di index.html) gagal mem-parse .json() nya, jatuh ke pesan
+    fallback generik "Gagal memuat data." tanpa jejak apa pun di sisi
+    pengguna. Traceback lengkap tetap di-print ke stdout (tertangkap
+    journalctl di VPS) supaya penyebab SESUNGGUHNYA bisa ditelusuri lain
+    kali -- bug nyata 2026-07-27: /api/signals & /api/portofolio gagal
+    tanpa jejak sama sekali karena persis ketiadaan handler ini."""
+    import traceback
+    print(f"⚠️ Unhandled exception di {request.url.path}: {type(exc).__name__}: {exc}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Terjadi kesalahan di server. Coba lagi sebentar."},
+    )
+
 _BASE = os.path.dirname(os.path.abspath(__file__))
 _STATIC = os.path.join(_BASE, "static")
 
@@ -410,7 +429,12 @@ async def _realtime_price(ticker: str) -> dict | None:
                 float(dlow) if dlow else None,
                 float(dhigh) if dhigh else None)
 
-    last, prev, dlow, dhigh = await asyncio.to_thread(_fetch)
+    try:
+        last, prev, dlow, dhigh = await asyncio.wait_for(
+            asyncio.to_thread(_fetch), timeout=YF_FETCH_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        return None
     if last and last > 0:
         change = ((last - prev) / prev * 100) if (prev and prev > 0) else 0.0
         result = {"price": last, "prev_close": prev, "change_1d": round(change, 4),

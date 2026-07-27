@@ -47,6 +47,19 @@ FALLBACK_TICKERS = [
 YF_BATCH_SIZE = 40            # jumlah ticker per batch
 YF_BATCH_DELAY_SECONDS = 0.8  # jeda antar batch
 
+# Batas waktu per panggilan yfinance (fast_info & download) -- SEBELUMNYA
+# tidak ada sama sekali, jadi kalau Yahoo Finance hang (bukan error, cuma
+# lambat/tidak merespons), asyncio.to_thread() menunggu TANPA BATAS. Endpoint
+# yang menggabungkan banyak panggilan sekaligus (mis. /api/signals mengambil
+# harga live semua sinyal OPEN, /api/portofolio mode otomatis menganalisis
+# puluhan kandidat) ikut tersangkut kalau SATU SAJA ticker macet -- baru
+# gagal setelah request timeout di level browser/proxy, muncul sbg
+# "Gagal memuat data." tanpa penjelasan (bug nyata, ditemukan 2026-07-27).
+# Timeout mengubah hang jadi exception biasa, yang jalur error-handling yang
+# SUDAH ADA di tiap pemanggil sanggup menangani (skip ticker itu, bukan
+# menggantung selamanya).
+YF_FETCH_TIMEOUT_SECONDS = 20
+
 # ---- Forum komunitas ----
 # Kode rahasia admin Forum (badge "Admin" + hak hapus thread/balasan).
 # Diverifikasi di SERVER (web/app.py::_forum_is_admin, hmac.compare_digest)

@@ -35,6 +35,14 @@ def _get_connection() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        # Tanpa ini, SQLite gagal SEKETIKA ("database is locked") kalau
+        # koneksi thread lain (mis. siklus audit latar belakang) sedang
+        # menulis -- WAL mode melindungi pembaca dari SATU penulis aktif,
+        # tapi bukan dari DUA PENULIS yang kebetulan tumpang tindih (audit
+        # loop, cache warmer, dsb berjalan di thread/koneksi terpisah).
+        # busy_timeout membuat SQLite menunggu (retry internal) sampai N ms
+        # sebelum benar-benar menyerah, alih-alih langsung melempar error.
+        conn.execute("PRAGMA busy_timeout=5000")
         _local.conn = conn
     return conn
 

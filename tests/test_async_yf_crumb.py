@@ -4,6 +4,7 @@
 # _reset_yf_crumb) SEBELUM percobaan berikutnya. Ini akar berulangnya
 # "kadang gagal memuat data" -- test ini menjaganya tidak regres.
 import asyncio
+import time
 
 import pandas as pd
 
@@ -65,3 +66,44 @@ def test_async_download_does_not_reset_crumb_on_ratelimit(monkeypatch):
 
     assert calls["n"] == 2          # tetap retry
     assert calls["reset"] == 0      # TAPI tidak pernah reset crumb
+
+
+def test_async_download_times_out_instead_of_hanging_forever(monkeypatch):
+    """Bug nyata 2026-07-27: yf.download() yang HANG (bukan error, cuma tidak
+    pernah merespons) dulu bikin async_download() menunggu TANPA BATAS --
+    endpoint yang menggabungkan banyak panggilan sekaligus (/api/signals,
+    /api/portofolio mode otomatis) ikut tersangkut kalau SATU SAJA ticker
+    macet. YF_FETCH_TIMEOUT_SECONDS harus membatasi ini jadi exception biasa,
+    bukan hang selamanya.
+
+    Sengaja PAKAI loop manual (bukan asyncio.run) -- asyncio.run() menunggu
+    shutdown_default_executor() sebelum kembali, yang membuat proses tes ikut
+    menunggu thread yf.download() palsu selesai tidur (5 detik) WALAUPUN
+    async_download() sendiri sudah berhenti menunggu di 0.2 detik. Yang mau
+    diukur adalah seberapa cepat PEMANGGIL ASYNC dibebaskan, bukan kapan
+    thread baground itu benar-benar selesai (yang memang tidak bisa
+    dipaksa berhenti -- keterbatasan asli Python thread)."""
+    monkeypatch.setattr(ay, "YF_FETCH_TIMEOUT_SECONDS", 0.2)
+
+    def fake_hanging_download(*a, **k):
+        time.sleep(5)  # jauh lebih lama dari timeout -- simulasi Yahoo hang
+        return pd.DataFrame({"Close": [1.0]})
+
+    monkeypatch.setattr(ay.yf, "download", fake_hanging_download)
+
+    loop = asyncio.new_event_loop()
+    try:
+        start = time.monotonic()
+        raised = False
+        try:
+            loop.run_until_complete(
+                ay.async_download("BBCA.JK", period="1mo", max_retries=1)
+            )
+        except Exception:
+            raised = True
+        elapsed = time.monotonic() - start
+    finally:
+        loop.close()
+
+    assert raised, "seharusnya melempar TimeoutError, bukan mengembalikan data hang"
+    assert elapsed < 3, f"seharusnya berhenti sekitar 0.2 detik, nyatanya {elapsed:.1f}s -- timeout tidak bekerja"

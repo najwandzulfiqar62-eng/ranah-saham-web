@@ -3656,6 +3656,37 @@ def test_signals_endpoint_returns_report_structure(client, clean_signal_db):
     assert "signals" in data and "stats" in data and "n_open" in data and "n_total" in data
 
 
+def test_unhandled_exception_returns_json_not_bare_500(clean_signal_db, monkeypatch):
+    """Bug nyata 2026-07-27: exception TAK TERTANGKAP di endpoint (mis.
+    get_signal_report melempar error tak terduga) dulu balik 500 POLOS tanpa
+    body JSON -- fungsi api() di frontend gagal mem-parse .json()-nya, jatuh
+    ke pesan fallback generik "Gagal memuat data." tanpa jejak sama sekali,
+    baik di UI maupun di log server. Handler global (_unhandled_exception_
+    handler) harus menangkap ini dan tetap balas JSON ber-'detail' supaya
+    frontend punya sesuatu utk ditampilkan.
+
+    Sengaja bikin TestClient sendiri dgn raise_server_exceptions=False --
+    fixture `client` bawaan (default True) MELEMPAR ULANG exception aslinya
+    ke tes ini walau handler global sudah menangkapnya & mengirim respons
+    JSON ke "klien" sungguhan (ini perilaku standar Starlette utk tetap
+    membuat exception tampak di server/log, BUKAN indikasi handler-nya
+    gagal) -- di sini yang mau diverifikasi justru RESPONS HTTP-nya."""
+    import core.signal_history as sh
+    from fastapi.testclient import TestClient
+    from web.app import app
+
+    def _boom():
+        raise RuntimeError("simulated unexpected failure")
+
+    monkeypatch.setattr(sh, "get_signal_report", _boom)
+
+    test_client = TestClient(app, raise_server_exceptions=False)
+    r = test_client.get("/api/signals")
+    assert r.status_code == 500
+    data = r.json()
+    assert "detail" in data and data["detail"]
+
+
 def test_signals_endpoint_enriches_open_signals_with_floating_pnl(client, clean_signal_db):
     """Regresi fitur baru (permintaan user: 'liatkan floatingnya juga'):
     sinyal yang MASIH OPEN harus dilengkapi floating_price/floating_

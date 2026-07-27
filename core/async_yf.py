@@ -25,7 +25,7 @@ import asyncio
 import yfinance as yf
 import pandas as pd
 
-from core.config import YF_BATCH_SIZE, YF_BATCH_DELAY_SECONDS
+from core.config import YF_BATCH_SIZE, YF_BATCH_DELAY_SECONDS, YF_FETCH_TIMEOUT_SECONDS
 
 
 def _is_crumb_error(exc: Exception) -> bool:
@@ -81,7 +81,10 @@ async def async_download(*args, max_retries: int = 2, **kwargs) -> pd.DataFrame:
     df = None
     for attempt in range(max_retries):
         try:
-            df = await asyncio.to_thread(yf.download, *args, **kwargs)
+            df = await asyncio.wait_for(
+                asyncio.to_thread(yf.download, *args, **kwargs),
+                timeout=YF_FETCH_TIMEOUT_SECONDS,
+            )
             if df is not None and not df.empty:
                 return df
             last_exc = None
@@ -101,7 +104,7 @@ async def async_ticker_info(ticker: str) -> dict:
     """Versi non-blocking dari yf.Ticker(ticker).info."""
     def _fetch():
         return yf.Ticker(ticker).info
-    return await asyncio.to_thread(_fetch)
+    return await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=YF_FETCH_TIMEOUT_SECONDS)
 
 
 async def async_download_many(tickers: list[str], **download_kwargs) -> dict[str, pd.DataFrame]:
