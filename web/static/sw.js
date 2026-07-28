@@ -1,7 +1,12 @@
 /* RANAH SAHAM service worker.
    Strategi: cache "shell" aplikasi agar bisa dibuka cepat / offline, TAPI
    JANGAN pernah cache data live (/api/*) karena harga & analisis sensitif waktu. */
-const CACHE = 'ranahsaham-v25';
+// v26 (2026-07-29): WAJIB dinaikkan tiap perubahan penting di index.html --
+// lihat catatan strategi stale-while-revalidate di handler fetch di bawah.
+// Kalau lupa, user tetap melihat UI versi LAMA walau server sudah menyajikan
+// yang baru (persis yang terjadi pada perbaikan "satu saham, dua teori":
+// backend & file di server sudah benar, tapi shell lama masih dari cache).
+const CACHE = 'ranahsaham-v26';
 const SHELL = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
