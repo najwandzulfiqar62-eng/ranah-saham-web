@@ -204,3 +204,42 @@ def test_nr7_open_does_not_block_main_group(clean_signal_db):
     asyncio.run(record_nr7_52w_signals([_nr7_item("EEEE")]))
     assert _has_open_nr7("EEEE") is True          # NR7 memang aktif
     assert _has_open_signal("EEEE") is False       # tapi grup main lihatnya kosong
+
+
+def test_signal_report_returns_both_theories_for_same_kode_with_own_plans(clean_signal_db):
+    """Regresi utk bug UI NYATA 2026-07-29 (kasus GJTL & MLBI di produksi):
+    notifikasi sudah bilang "sinyal baru masuk Audit Sinyal" utk sinyal NR7,
+    tapi daftar "Semua Sinyal" MEN-DEDUP per-kode di frontend dan cuma
+    menyisakan sumber berprioritas lebih tinggi (Top Pick) -- sinyal NR7-nya
+    seolah hilang, padahal rencananya beda sendiri. De-dup itu sudah dibuang
+    (web/static/index.html::renderAuditList).
+
+    Test di sini menjaga KONTRAK DATA yang jadi sandaran perubahan itu:
+    laporan HARUS mengembalikan KEDUA baris utk kode yang sama, masing-masing
+    membawa RENCANA SENDIRI. Itulah alasan dua-duanya layak tampil -- bukan
+    sekadar beda label sumber, tapi beda entry & beda level TP/SL, jadi
+    menyembunyikan salah satunya = menghilangkan satu rencana trading utuh."""
+    from core.signal_history import get_signal_report
+
+    # Top Pick GJTL: entry & level dari skenario confidence (angka produksi asli).
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history (kode, entry_price, tp_pct, sl_pct, source, status, direction) "
+            "VALUES ('GJTL', 1139.0, 3.0, 3.0, 'TOP_PICK', 'OPEN', 'BUY')"
+        )
+    # NR7 + 52W High GJTL: entry MARKET & level dari teori NR7 -- beda semuanya.
+    saved = asyncio.run(record_nr7_52w_signals([_nr7_item("GJTL", harga=1195.0)]))
+    assert len(saved) == 1
+
+    rows = [s for s in get_signal_report()["signals"] if s["kode"] == "GJTL"]
+    by_src = {s["source"]: s for s in rows}
+
+    assert sorted(by_src) == ["NR7_52W", "TOP_PICK"], (
+        "kedua teori harus tetap terbawa ke laporan -- jangan di-dedup per-kode"
+    )
+    assert len(rows) == 2, "tepat dua baris: satu per teori, tidak lebih"
+    # Rencananya BENAR-BENAR berbeda, bukan cuma beda label sumber.
+    assert by_src["TOP_PICK"]["entry_price"] == 1139.0
+    assert by_src["NR7_52W"]["entry_price"] == 1195.0
+    assert by_src["NR7_52W"]["sl_pct"] != by_src["TOP_PICK"]["sl_pct"]
+    assert by_src["NR7_52W"]["tp_pct"] != by_src["TOP_PICK"]["tp_pct"]

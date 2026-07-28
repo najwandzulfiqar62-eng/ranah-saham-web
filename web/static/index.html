@@ -4353,23 +4353,22 @@ async function loadSignalAudit(){
     _auditCharts.forEach(c => { try { c.remove(); } catch (e) {} });
     _auditCharts = [];
     if (_auditIO) { try { _auditIO.disconnect(); } catch (e) {} _auditIO = null; }
-    // De-dup daftar "Semua Sinyal": satu KODE cuma tampil sekali utk sinyal
-    // AKTIF (OPEN/PENDING_ENTRY) walau >1 teori memegangnya (mis. Top Pick +
-    // NR7_52W utk saham yang sama) -- permintaan user "daftar utama tetap
-    // rapi". Sinyal yang SUDAH selesai (TP_HIT/SL_HIT/EXPIRED*) TIDAK
-    // di-dedup: tiap baris itu trade nyata yang berbeda per teori (track
-    // record -- prinsip "jangan hapus buat ngetrack"). Rincian per-teori
-    // (termasuk NR7 yang tertutup di sini) tetap utuh di tab "Per Teori".
-    const _SRC_PRI = {TOP_PICK:0, SMART_MONEY:1, NR7_52W:2};
-    const _isActiveSig = s => s.status === 'OPEN' || s.status === 'PENDING_ENTRY';
-    const _seenActive = {};
-    const base = [];
-    for(const s of signals){
-      if(!_isActiveSig(s)){ base.push(s); continue; }
-      const at = _seenActive[s.kode];
-      if(at === undefined){ _seenActive[s.kode] = base.length; base.push(s); }
-      else if((_SRC_PRI[s.source]??9) < (_SRC_PRI[base[at].source]??9)){ base[at] = s; }
-    }
+    // TIDAK ada de-dup per-kode di daftar "Semua Sinyal" (DIBALIK 2026-07-29
+    // atas permintaan user langsung setelah melihat GJTL & MLBI di produksi).
+    // Satu saham BOLEH tampil >1 kali kalau memang dipegang >1 teori, karena
+    // tiap teori itu RENCANA TRADING yang berdiri sendiri -- GJTL misalnya:
+    // Top Pick entry Rp1.139 (TP/SL dari skenario confidence) vs NR7 + 52W
+    // High entry Rp1.195 (SL di bawah Low bar NR7, TP R-multiple). Angkanya
+    // BEDA, jadi menyembunyikan salah satunya bukan "merapikan" melainkan
+    // menghilangkan rencana yang berbeda -- dan bikin tidak konsisten dgn
+    // notifikasi, yang sudah terlanjur bilang "sinyal baru masuk Audit
+    // Sinyal" utk sinyal yang ternyata tak pernah muncul di daftar.
+    // Badge sumber + HIGH RISK di tiap baris yang membedakannya.
+    // Catatan: ini SPESIFIK utk NR7_52W vs grup main. TOP_PICK & SMART_MONEY
+    // tidak pernah bisa bentrok begini -- keduanya saling mengunci di backend
+    // (_has_open_signal), justru KARENA entry/TP/SL-nya nyaris identik dan
+    // dulu betul-betul terlihat seperti "double" yang membingungkan.
+    const base = signals;
     let filtered = base;
     if(auditFilter !== 'ALL'){
       if(auditFilter === 'EXPIRED') filtered = base.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY');

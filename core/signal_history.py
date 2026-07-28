@@ -341,17 +341,45 @@ def _ensure_table():
         # Bersihkan dulu baris OPEN duplikat lintas-source SEBELUM index
         # baru dibuat (pola sama dgn migrasi kelima), menyisakan id
         # TERKECIL (paling awal direkam, source mana pun) per kode.
+        #
+        # DIBATASI ke grup 'main' (TOP_PICK/SMART_MONEY) sejak 2026-07-29.
+        # BUG NYATA & PALING PARAH dari rangkaian ini, dilacak dgn trace
+        # callback dari laporan user (GJTL & MLBI): migrasi ini ditulis
+        # SEBELUM source NR7_52W ada (2026-07-22), jadi "lintas-source" saat
+        # itu cuma berarti TOP_PICK vs SMART_MONEY -- dua teori yang memang
+        # entry/TP/SL-nya nyaris identik & sengaja dibikin saling mengunci.
+        # Rantai migrasi ini jalan ULANG SETIAP proses start (`_ensured`
+        # cuma flag per-proses, bukan versi skema yang tersimpan di DB), jadi
+        # SETIAP restart server baris NR7_52W utk saham yang kebetulan juga
+        # punya sinyal main aktif LANGSUNG TERHAPUS -- padahal koeksistensi
+        # itu justru INTI fitur NR7 (perbandingan head-to-head antar teori,
+        # lihat _has_open_nr7 & migrasi ke-17 yang memang membuat index unik
+        # TERPISAH per source-group supaya keduanya boleh hidup bersamaan).
+        # Gejalanya persis yang dilaporkan: sinyal NR7 muncul di notifikasi
+        # ("Sinyal baru: GJTL -- NR7 + 52W High"), lalu lenyap dari Audit
+        # Sinyal dan cuma menyisakan baris Top Pick. Terkonfirmasi di data:
+        # tabel ini TIDAK punya SATU PUN baris NR7_52W yang bertahan selama
+        # seminggu fitur itu aktif.
         conn.execute('''
             DELETE FROM signal_history
-            WHERE status = 'OPEN' AND id NOT IN (
-                SELECT MIN(id) FROM signal_history WHERE status = 'OPEN' GROUP BY kode
+            WHERE status = 'OPEN' AND source IN ('TOP_PICK', 'SMART_MONEY')
+            AND id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                WHERE status = 'OPEN' AND source IN ('TOP_PICK', 'SMART_MONEY')
+                GROUP BY kode
             )
         ''')
         conn.execute('DROP INDEX IF EXISTS idx_signal_unique_open')
+        # Index-nya ikut di-scope ke grup main dgn alasan yang SAMA: tanpa
+        # itu, CREATE INDEX ini SENDIRI yang melempar IntegrityError begitu
+        # ada kode dgn NR7 OPEN + main OPEN bersamaan -- persis kelas
+        # kegagalan "Gagal memuat data" yang sudah dua kali kejadian (lihat
+        # migrasi ke-13 & ke-17). Index ini toh di-DROP dan digantikan
+        # idx_signal_active_main/idx_signal_active_nr7 di migrasi ke-17.
         conn.execute('''
             CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique_open_kode
             ON signal_history(kode)
-            WHERE status = 'OPEN'
+            WHERE status = 'OPEN' AND source IN ('TOP_PICK', 'SMART_MONEY')
         ''')
         # Migrasi ketujuh: MACD_CROSS sudah dihapus dari confidence() (tidak
         # ada baris baru lagi sejak migrasi keenam), tapi baris LAMA yang
@@ -561,6 +589,18 @@ def _ensure_table():
         # jangan hidupkan balik kalau kode itu SUDAH py baris aktif lain --
         # 1 cerita aktif per kode tetap dijaga, konsisten dgn migrasi
         # keenam (lihat komentarnya di atas).
+        #
+        # DIPERSEMPIT ke SESAMA source-group 2026-07-29, mengikuti migrasi
+        # keenam yang barusan di-scope: penjaga versi pertama menolak
+        # menghidupkan baris SL_HIT kalau kode itu punya baris aktif dari
+        # source APA PUN. Setelah index di atas ter-scope per grup, syarat
+        # seketat itu jadi TERLALU KETAT dan mengulang kesalahan yang sama --
+        # sinyal NR7 dgn SL keketatan tidak akan pernah dikoreksi cuma karena
+        # kebetulan ada Top Pick aktif utk saham yang sama, padahal keduanya
+        # memang dirancang boleh hidup berdampingan. Sekarang bentrokan
+        # dinilai DI DALAM grupnya sendiri saja (NR7 vs NR7, main vs main),
+        # persis sama dgn apa yang benar-benar dijaga index aktif di titik
+        # ini maupun idx_signal_active_main/_nr7 di migrasi ke-17.
         from core.trading_plan import MIN_SL_PCT as _MIN_SL_PCT2
         conn.execute('''
             UPDATE signal_history
@@ -569,8 +609,12 @@ def _ensure_table():
             WHERE status = 'SL_HIT'
               AND sl_pct < ?
               AND resolved_price > entry_price * (1 - ? / 100.0)
-              AND kode NOT IN (
-                  SELECT kode FROM signal_history WHERE status IN ('OPEN', 'PENDING_ENTRY')
+              AND NOT EXISTS (
+                  SELECT 1 FROM signal_history AS lain
+                  WHERE lain.kode = signal_history.kode
+                    AND lain.status IN ('OPEN', 'PENDING_ENTRY')
+                    AND (CASE WHEN lain.source = 'NR7_52W' THEN 1 ELSE 0 END)
+                      = (CASE WHEN signal_history.source = 'NR7_52W' THEN 1 ELSE 0 END)
               )
         ''', (_MIN_SL_PCT2, _MIN_SL_PCT2, _MIN_SL_PCT2))
         # Migrasi keempat belas: permintaan user langsung ("misalkan kena
