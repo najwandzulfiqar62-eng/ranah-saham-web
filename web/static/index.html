@@ -4368,7 +4368,30 @@ async function loadSignalAudit(){
     // tidak pernah bisa bentrok begini -- keduanya saling mengunci di backend
     // (_has_open_signal), justru KARENA entry/TP/SL-nya nyaris identik dan
     // dulu betul-betul terlihat seperti "double" yang membingungkan.
-    const base = signals;
+    // Baris AKTIF untuk saham yang SAMA dikumpulkan BERDAMPINGAN. Tanpa ini
+    // dua teori atas satu saham bisa terpisah puluhan baris karena daftar
+    // urut tanggal -- GJTL nyatanya: Top Pick direkam 23 Juli, NR7 28 Juli,
+    // jadi di layar pertama cuma satu yang kelihatan dan user melapor
+    // "gada GJTL sumber NR7" padahal datanya ada (dikonfirmasi via API).
+    // Baris yang SUDAH selesai (TP_HIT/SL_HIT/EXPIRED*) TIDAK dipindah:
+    // urutan kronologisnya itu sendiri rekam jejak yang tidak boleh diatur
+    // ulang. Di dalam satu kelompok, urutan mengikuti prioritas sumber
+    // supaya konsisten (Top Pick dulu, lalu Smart Money, lalu NR7).
+    const _aktif = s => s.status === 'OPEN' || s.status === 'PENDING_ENTRY';
+    const _PRI = {TOP_PICK:0, SMART_MONEY:1, NR7_52W:2};
+    const base = [];
+    const _anchor = {};            // kode -> posisi baris aktif PERTAMA kode itu
+    for(const s of signals){
+      if(!_aktif(s)){ base.push(s); continue; }
+      const at = _anchor[s.kode];
+      if(at === undefined){ _anchor[s.kode] = base.length; base.push(s); continue; }
+      let ins = at;
+      while(ins < base.length && _aktif(base[ins]) && base[ins].kode === s.kode
+            && (_PRI[base[ins].source] ?? 9) <= (_PRI[s.source] ?? 9)) ins++;
+      base.splice(ins, 0, s);
+      for(const k in _anchor){ if(_anchor[k] >= ins) _anchor[k]++; }
+      _anchor[s.kode] = Math.min(at, ins);
+    }
     let filtered = base;
     if(auditFilter !== 'ALL'){
       if(auditFilter === 'EXPIRED') filtered = base.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY');
