@@ -1537,6 +1537,41 @@ _PORTO_SRC_PRIORITAS = {"TOP_PICK": 0, "SMART_MONEY": 1, "NR7_52W": 2}
 # datang dari rencana sinyal yang mana.
 _PORTO_SRC_LABEL = {"TOP_PICK": "Top Pick", "SMART_MONEY": "Smart Money",
                     "NR7_52W": "NR7 + 52W High"}
+# Verdict yang dianggap LAYAK dipilihkan SISTEM di mode Otomatis. Kosakata ini
+# BUKAN standar baru: persis daftar yang sudah dipakai migrasi kesembilan di
+# core/signal_history.py (yang membuang sinyal SMART_MONEY ber-recommendation
+# di luar daftar ini) -- di sini cuma diterapkan konsisten ke pemilihan
+# otomatis. Dua kosakata bercampur karena sumbernya beda: TOP_PICK/NR7_52W
+# memakai ai_rating (SANGAT BAGUS/BAGUS/...), SMART_MONEY memakai verdict
+# Ringkasan Sinyal Teknikal (BELI KUAT/BELI).
+_PORTO_REKOMENDASI_LAYAK = {"SANGAT BAGUS", "BAGUS", "BELI KUAT", "BELI"}
+
+
+def _pilih_kandidat_otomatis(aktif: dict[str, dict]) -> list[dict]:
+    """Urutan kandidat mode Otomatis: SARING dulu menurut mutu, BARU urutkan
+    menurut skor keyakinan.
+
+    Saringan mutu ini ditambahkan 2026-07-30 atas permintaan user langsung
+    ("yg di fitur otomatis itu bener-bener saham yg bagus"). Sebelumnya mode
+    otomatis mengurutkan SEMUA sinyal aktif hanya dengan confidence_score,
+    tanpa peduli verdict-nya -- dan itu bukan masalah teoretis: pada data
+    produksi 2026-07-30, 40 dari 79 sinyal aktif ber-recommendation 'NETRAL'
+    dan satu bahkan 'BURUK', sementara di 15 besar confidence_score sudah
+    nongol BRMS/LEAD/BDMN/BSSR yang semuanya NETRAL. Karena penolakan di
+    build_portfolio (SL tak wajar, 1 lot tak muat, imbal-risiko di bawah
+    ambang) memang LAZIM -- lihat catatan 'justru MAYORITAS' di pemanggilnya
+    -- pengisian portofolio rutin menggali jauh ke bawah peringkat, sehingga
+    saham NETRAL benar-benar bisa masuk.
+
+    Skor keyakinan TIDAK dipakai sebagai pengganti verdict: keduanya mengukur
+    hal berbeda (skor = kekuatan setup teknikal saat sinyal direkam, verdict =
+    penilaian menyeluruh emitennya), jadi skor tinggi TIDAK menjamin verdict
+    layak. Karena itu mutu disaring dulu, bukan sekadar diberi bobot.
+
+    Sengaja dibuat fungsi MURNI (tanpa I/O) supaya bisa diuji langsung."""
+    layak = [s for s in aktif.values()
+             if (s.get("recommendation") or "").strip().upper() in _PORTO_REKOMENDASI_LAYAK]
+    return sorted(layak, key=lambda s: (s.get("confidence_score") or 0), reverse=True)
 
 
 def _parse_harga_input(s: str) -> float | None:
@@ -1649,7 +1684,17 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         aktif = await _sinyal_aktif_per_kode()
         if not aktif:
             raise HTTPException(422, "Belum ada sinyal aktif di Audit Sinyal untuk diracik otomatis.")
-        urut = sorted(aktif.values(), key=lambda s: (s.get("confidence_score") or 0), reverse=True)
+        # Saring mutu DULU (lihat _pilih_kandidat_otomatis), baru urut skor.
+        urut = _pilih_kandidat_otomatis(aktif)
+        disaring_mutu = len(aktif) - len(urut)
+        if not urut:
+            raise HTTPException(
+                422,
+                "Belum ada sinyal aktif yang verdict-nya layak dipilihkan otomatis "
+                f"(dari {len(aktif)} sinyal aktif, tidak satu pun berverdict "
+                "SANGAT BAGUS/BAGUS/BELI KUAT/BELI). Pakai mode 'Pilih dari Audit "
+                "Sinyal' kalau mau menimbang sendiri.",
+            )
         # Cadangan kandidat dibuat LEBAR (kuota x5, maks 30) karena penolakan
         # di mode otomatis lazim: selain SL tak wajar / 1 lot tak muat, saringan
         # imbal-risiko membuang sinyal yang harganya sudah lari mendekati target
@@ -1731,12 +1776,15 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         hasil["maks_saham"] = maks_saham
         hasil["maks_total_risk_pct"] = maks_total_risk_pct
         hasil["min_rrr"] = min_rrr
+        hasil["disaring_mutu"] = disaring_mutu
         hasil["disclaimer"] = (
-            "Perhitungan ukuran posisi, BUKAN rekomendasi beli. Mode otomatis hanya mengurutkan "
-            "sinyal yang sudah tercatat di Audit Sinyal menurut skor keyakinan, lalu mengisi "
-            "portofolio sampai kuota saham, jatah risiko total, atau modal habis — sistem tidak "
-            "memastikan saham-saham ini akan naik. Stop loss memakai level rencana sinyalnya, "
-            "dan harga bisa berubah sewaktu-waktu."
+            "Perhitungan ukuran posisi, BUKAN rekomendasi beli. Mode otomatis memakai sinyal yang "
+            "sudah tercatat di Audit Sinyal, MENYARING dulu yang verdict-nya SANGAT BAGUS/BAGUS/"
+            "BELI KUAT/BELI"
+            + (f" ({disaring_mutu} sinyal aktif lain tidak lolos saringan mutu ini)" if disaring_mutu else "")
+            + ", mengurutkannya menurut skor keyakinan, lalu mengisi portofolio sampai kuota saham, "
+            "jatah risiko total, atau modal habis — sistem tidak memastikan saham-saham ini akan "
+            "naik. Stop loss memakai level rencana sinyalnya, dan harga bisa berubah sewaktu-waktu."
         )
     else:
         hasil["disclaimer"] = (

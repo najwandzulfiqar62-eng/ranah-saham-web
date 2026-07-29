@@ -265,6 +265,60 @@ def test_ambang_imbal_risiko_mati_untuk_mode_pilih_sendiri():
     assert r["posisi"][0]["rrr"] == 0.1
 
 
+# ---------------------------------------------------------------------------
+# Saringan MUTU mode Otomatis (_pilih_kandidat_otomatis di web/app.py)
+# ---------------------------------------------------------------------------
+def _sig(kode, skor, rekomendasi):
+    return {"kode": kode, "confidence_score": skor, "recommendation": rekomendasi}
+
+
+def test_otomatis_hanya_memilih_verdict_yang_layak():
+    """Permintaan user langsung 2026-07-30: "yg di fitur otomatis itu
+    bener-bener saham yg bagus". Sebelum ini mode otomatis mengurutkan SEMUA
+    sinyal aktif cuma dengan confidence_score, sehingga saham berverdict
+    NETRAL/CUKUP/BURUK ikut terpilih asalkan skornya kebetulan tinggi --
+    dan pada data produksi itu bukan kasus langka (40 dari 79 sinyal aktif
+    ber-verdict NETRAL, satu bahkan BURUK).
+
+    Sengaja skor si NETRAL dibuat PALING TINGGI: kalau saringan mutu hilang,
+    dialah yang jadi peringkat satu, jadi test ini gagal dengan jelas."""
+    from web.app import _pilih_kandidat_otomatis
+
+    aktif = {
+        "NETRALX": _sig("NETRALX", 99.0, "NETRAL"),      # skor tertinggi tapi tak layak
+        "BURUKX": _sig("BURUKX", 95.0, "BURUK"),
+        "CUKUPX": _sig("CUKUPX", 90.0, "CUKUP"),
+        "BAGUSX": _sig("BAGUSX", 60.0, "BAGUS"),
+        "SANGATX": _sig("SANGATX", 55.0, "SANGAT BAGUS"),
+        "BELIKX": _sig("BELIKX", 50.0, "BELI KUAT"),
+        "BELIX": _sig("BELIX", 45.0, "BELI"),
+    }
+    hasil = _pilih_kandidat_otomatis(aktif)
+    kodes = [s["kode"] for s in hasil]
+
+    assert "NETRALX" not in kodes, "verdict NETRAL tidak boleh dipilihkan sistem"
+    assert "BURUKX" not in kodes
+    assert "CUKUPX" not in kodes
+    # keempat verdict layak tetap lolos, urut skor keyakinan menurun
+    assert kodes == ["BAGUSX", "SANGATX", "BELIKX", "BELIX"]
+
+
+def test_otomatis_toleran_pada_verdict_kosong_atau_beda_kapital():
+    """recommendation bisa None (data lama) atau beda huruf besar/kecil --
+    yang kosong TIDAK boleh lolos (tak ada dasar menilainya), yang cuma beda
+    kapitalisasi harus tetap dikenali."""
+    from web.app import _pilih_kandidat_otomatis
+
+    aktif = {
+        "KOSONG": _sig("KOSONG", 99.0, None),
+        "SPASI": _sig("SPASI", 98.0, "   "),
+        "KECIL": _sig("KECIL", 70.0, "bagus"),
+        "SPASIX": _sig("SPASIX", 65.0, "  BELI KUAT  "),
+    }
+    kodes = [s["kode"] for s in _pilih_kandidat_otomatis(aktif)]
+    assert kodes == ["KECIL", "SPASIX"]
+
+
 def test_input_tidak_valid():
     assert build_portfolio(0, [_c("A", 100, 90)]) is None
     assert build_portfolio(1_000_000, []) is None
