@@ -46,11 +46,48 @@ def test_detect_nr7_52w_valid_setup():
 
 
 def test_detect_nr7_52w_floor_on_ultratight_range():
-    # range terakhir SANGAT sempit -> sl% mentah <1% -> di-floor ke 1.0
+    """Range terakhir SANGAT sempit -> sl% mentah di bawah lantai -> di-floor.
+    Lantainya SEKARANG = lantai GLOBAL MIN_SL_PCT (3,0), bukan 1,0 seperti
+    dulu -- lihat test_nr7_tp_selalu_2r_dari_sl_final di bawah utk alasannya.
+    TP tetap dihitung dari sl_pct SESUDAH di-floor, jadi 2R/3R/4R utuh."""
+    from core.trading_plan import MIN_SL_PCT
+
     r = detect_nr7_52w(_uptrend_df(last_range=0.4))
     assert r is not None
-    assert r["nr7_sl_pct"] == 1.0
-    assert r["nr7_tp1_pct"] == 2.0  # 2R dari floor
+    assert r["nr7_sl_pct"] == MIN_SL_PCT
+    assert r["nr7_tp1_pct"] == MIN_SL_PCT * 2   # 2R dari lantai yang BENAR
+
+
+def test_nr7_tp_selalu_2r_dari_sl_final_tidak_pernah_di_bawah_sl():
+    """Regresi bug produksi NYATA 2026-07-30 (GJTL, MLBI, BSSR): rencana NR7
+    tersimpan dgn TP1 +2,0% padahal SL -3,0% -- imbal-risiko 0,67x, artinya
+    rugi potensialnya LEBIH BESAR daripada untung di TP1. Persis kebalikan
+    premis teorinya (TP1 = 2R).
+
+    Sebabnya dua lantai stop yang tidak sinkron: detect_nr7_52w dulu memakai
+    lantai sendiri 1,0% (TP jadi 2/3/4%), lalu migrasi kesebelas di
+    core/signal_history.py melebarkan sl_pct ke lantai GLOBAL 3,0% tanpa ikut
+    menskala TP-nya. Dijaga di sini: berapa pun sempitnya range NR7, TP1 tidak
+    pernah lebih kecil dari 2x SL final -- jadi imbal-risiko di TP1 >= 2."""
+    from core.trading_plan import MIN_SL_PCT
+
+    # rentang range dari super sempit sampai lebar-tapi-masih-valid
+    for lr in (0.2, 0.4, 1.0, 2.0, 3.5, 5.0):
+        r = detect_nr7_52w(_uptrend_df(last_range=lr))
+        if r is None:
+            continue  # setup ditolak -- tidak relevan utk invarian ini
+        sl = r["nr7_sl_pct"]
+        assert sl >= MIN_SL_PCT, (
+            f"last_range={lr}: sl {sl}% di bawah lantai global {MIN_SL_PCT}% -- "
+            "akan dilebarkan migrasi lalu merusak hubungan R-multiple"
+        )
+        assert r["nr7_tp1_pct"] >= sl * 2 - 0.02, (
+            f"last_range={lr}: TP1 {r['nr7_tp1_pct']}% < 2R dari SL {sl}%"
+        )
+        assert r["nr7_tp1_pct"] > sl, (
+            f"last_range={lr}: TP1 {r['nr7_tp1_pct']}% TIDAK BOLEH di bawah "
+            f"SL {sl}% (imbal-risiko < 1)"
+        )
 
 
 def test_detect_nr7_52w_rejects_wide_last_bar():

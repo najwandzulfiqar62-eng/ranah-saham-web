@@ -57,6 +57,11 @@ from core.indicators import (
     calculate_stochrsi, calculate_atr,
 )
 from core.backtest import backtest_condition
+# Lantai stop% GLOBAL. Diimpor (bukan disalin angkanya) supaya lantai NR7 di
+# bawah TIDAK BISA lagi menyimpang diam-diam dari lantai yang benar-benar
+# diberlakukan core/signal_history.py saat sinyal disimpan -- persis
+# ketidakcocokan yang bikin TP NR7 lebih kecil daripada SL-nya.
+from core.trading_plan import MIN_SL_PCT as MIN_SL_PCT_GLOBAL
 
 
 # ──────────────────────────────────────────────
@@ -245,7 +250,18 @@ def _score_minervini(df: pd.DataFrame, name: str,
 #   ATR supaya tidak persis di low (rawan noise-out 1 tick).
 # - TP = kelipatan risiko R (risk-reward textbook): TP1=2R, TP2=3R, TP3=4R.
 # ===========================================================================
-NR7_MIN_SL_PCT = 1.0     # lantai stop% -- range NR7 super sempit bisa <1%, terlalu rawan noise
+# Lantai stop% NR7. DINAIKKAN dari 1,0 ke lantai GLOBAL MIN_SL_PCT (3,0)
+# pada 2026-07-30 -- BUG NYATA yang ditemukan di data produksi (GJTL, MLBI,
+# BSSR): TP di sini dihitung sbg kelipatan R dari sl_pct, TAPI sl_pct-nya
+# kemudian DILEBARKAN lagi ke lantai global 3,0% oleh migrasi kesebelas di
+# core/signal_history.py (keputusan user "sl masih kedeketan tolong perbaiki
+# semua"). Migrasi itu cuma menyentuh sl_pct dan TIDAK ikut menskala ulang
+# TP-nya, sehingga rencana yang tersimpan jadi TIDAK KOHEREN: GJTL berakhir
+# dgn TP1 +2,0% padahal SL -3,0% (imbal-risiko 0,67x -- rugi potensialnya
+# lebih besar daripada untung di TP1, kebalikan dari premis "TP1=2R").
+# Dengan menyamakan lantai di SINI, TP ikut dihitung dari sl_pct yang SUDAH
+# final, jadi hubungan 2R/3R/4R tetap utuh sampai ke baris yang tersimpan.
+NR7_MIN_SL_PCT = MIN_SL_PCT_GLOBAL   # = 3.0, lihat core/trading_plan.py
 NR7_MAX_SL_PCT = 7.0     # plafon: kalau "tersempit dari 7 hari" pun >7%, bukan setup NR7 ketat -> skip
 NR7_52W_NEAR_PCT = 0.98  # close >= 98% dari 52W high = "di area tertinggi 52 minggu"
 # Jendela "52 minggu" = 252 hari bursa, ANGKA KONVENSI PASAR AS. BEI cuma

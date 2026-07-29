@@ -769,6 +769,33 @@ def _ensure_table():
         cols3 = {r["name"] for r in conn.execute("PRAGMA table_info(signal_history)").fetchall()}
         if "entry_mode" not in cols3:
             conn.execute("ALTER TABLE signal_history ADD COLUMN entry_mode TEXT")
+        # Migrasi kedelapan belas (2026-07-30): PULIHKAN hubungan R-multiple
+        # pada sinyal NR7_52W yang rencananya terlanjur tidak koheren.
+        # Teori NR7 menetapkan TP1/TP2/TP3 = 2R/3R/4R dari SL-nya, tapi
+        # detect_nr7_52w dulu memakai lantai stop sendiri (1,0%) yang LEBIH
+        # RENDAH dari lantai global MIN_SL_PCT (3,0%). Migrasi kesebelas lalu
+        # melebarkan sl_pct ke 3,0% TANPA ikut menskala TP -- hasilnya, di
+        # produksi GJTL/MLBI/BSSR tersimpan dgn TP1 +2,0% padahal SL -3,0%
+        # (imbal-risiko 0,67x: rugi potensial LEBIH BESAR dari untung di TP1,
+        # persis kebalikan premis teorinya). Akar penyebabnya sudah ditutup di
+        # core/screening_pro.py (lantai NR7 kini mengimpor lantai global), ini
+        # membereskan baris yang terlanjur tersimpan.
+        #
+        # HANYA menyentuh baris yang MASIH AKTIF. Baris yang sudah resolve
+        # TIDAK diubah: hasilnya sudah terjadi di pasar dgn target apa adanya,
+        # dan mengubah target sinyal yang sudah selesai = mengarang ulang
+        # track record (prinsip inti modul ini, lihat retraksi migrasi
+        # kesepuluh & kedua belas).
+        conn.execute('''
+            UPDATE signal_history
+            SET tp_pct = sl_pct * 2,
+                tp2_pct = sl_pct * 3,
+                tp3_pct = sl_pct * 4
+            WHERE source = 'NR7_52W'
+              AND status IN ('OPEN', 'PENDING_ENTRY')
+              AND sl_pct > 0
+              AND tp_pct < sl_pct * 2
+        ''')
     _ensured = True
 
 

@@ -220,6 +220,54 @@ def test_ensure_table_does_not_delete_nr7_row_coexisting_with_top_pick(clean_sig
     assert all(r["status"] == "OPEN" for r in rows), "keduanya tetap OPEN, bukan diam-diam di-resolve"
 
 
+def test_ensure_table_repairs_nr7_tp_that_fell_below_its_own_sl(clean_signal_db):
+    """Bug produksi NYATA 2026-07-30 (GJTL, MLBI, BSSR): baris NR7_52W
+    tersimpan dgn TP1 +2,0% padahal SL -3,0% -- imbal-risiko 0,67x, rugi
+    potensial LEBIH BESAR dari untung di TP1, kebalikan premis teori NR7
+    (TP1=2R). Sebabnya detect_nr7_52w dulu memakai lantai stop 1,0% (TP jadi
+    2/3/4%) lalu migrasi kesebelas melebarkan sl_pct ke lantai global 3,0%
+    tanpa ikut menskala TP. Akarnya sudah ditutup di core/screening_pro.py;
+    migrasi kedelapan belas membereskan baris yang terlanjur tersimpan."""
+    sh._ensure_table()
+
+    with get_db() as conn:
+        # persis bentuk GJTL di produksi: sl sudah 3,0 tapi TP masih 2/3/4
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
+                                        status, source, direction, entry_mode)
+            VALUES ('GJTL', 1195, 2.0, 3.0, 4.0, 3.0, 'OPEN', 'NR7_52W', 'BUY', 'AGRESIF')
+        ''')
+        # kontrol: baris NR7 yang SUDAH SELESAI tidak boleh diutak-atik --
+        # hasilnya sudah terjadi di pasar, mengubah targetnya = mengarang
+        # ulang track record.
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
+                                        status, source, direction, resolved_price, return_pct)
+            VALUES ('GGRM', 17675, 2.5, 3.7, 5.0, 3.0, 'TP_HIT', 'NR7_52W', 'BUY', 18112, 2.5)
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        aktif = conn.execute(
+            "SELECT tp_pct, tp2_pct, tp3_pct, sl_pct FROM signal_history "
+            "WHERE kode='GJTL' AND source='NR7_52W'").fetchone()
+        selesai = conn.execute(
+            "SELECT tp_pct, tp2_pct, tp3_pct, status FROM signal_history "
+            "WHERE kode='GGRM' AND source='NR7_52W'").fetchone()
+
+    # hubungan R-multiple pulih: 2R/3R/4R dari SL yang berlaku
+    assert aktif["tp_pct"] == aktif["sl_pct"] * 2 == 6.0
+    assert aktif["tp2_pct"] == aktif["sl_pct"] * 3 == 9.0
+    assert aktif["tp3_pct"] == aktif["sl_pct"] * 4 == 12.0
+    assert aktif["tp_pct"] > aktif["sl_pct"], "TP1 tidak boleh di bawah SL"
+
+    # yang sudah resolve TIDAK disentuh
+    assert selesai["status"] == "TP_HIT"
+    assert selesai["tp_pct"] == 2.5, "target sinyal yang sudah selesai jangan diubah"
+
+
 def test_ensure_table_still_dedups_two_active_rows_within_main_group(clean_signal_db):
     """Kontrol utk test di atas: mempersempit migrasi keenam ke grup 'main'
     TIDAK boleh mematikan tujuan aslinya. TOP_PICK vs SMART_MONEY utk kode

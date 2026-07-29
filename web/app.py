@@ -87,7 +87,7 @@ from core.wyckoff import detect_phases
 from core.risk_management import (
     calculate_risk_reward, calculate_target_levels,
     calculate_cutloss_levels, calculate_position_size,
-    calculate_average_down,
+    calculate_average_down, MAX_POSISI_PCT,
 )
 from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
@@ -1545,6 +1545,39 @@ _PORTO_SRC_LABEL = {"TOP_PICK": "Top Pick", "SMART_MONEY": "Smart Money",
 # memakai ai_rating (SANGAT BAGUS/BAGUS/...), SMART_MONEY memakai verdict
 # Ringkasan Sinyal Teknikal (BELI KUAT/BELI).
 _PORTO_REKOMENDASI_LAYAK = {"SANGAT BAGUS", "BAGUS", "BELI KUAT", "BELI"}
+# Verdict analisis HARI INI yang bikin saham DITOLAK saat sistem yang memilih.
+# Kosakata beda dari di atas karena sumbernya beda: ini keluaran
+# calculate_ai_score (core/ai_score.py) -- STRONG BUY / BUY / HOLD / WATCH /
+# AVOID. Saringan ini melengkapi _PORTO_REKOMENDASI_LAYAK, yang cuma menilai
+# verdict SAAT SINYAL DIREKAM (bisa berumur beberapa hari): ADRO tercatat
+# 'BAGUS' waktu sinyalnya lahir, tapi 2026-07-30 verdict-nya sudah AVOID
+# (grade D, skor 26). Tanpa saringan ini, saham yang sudah rusak tetap ikut
+# diracik hanya karena penilaian lamanya bagus.
+#
+# SENGAJA berupa DAFTAR TOLAK (cuma AVOID), BUKAN daftar-layak BUY/STRONG BUY.
+# Versi pertama memakai daftar-layak dan itu KELIRU -- terbukti saat diuji ke
+# data sungguhan: skor ai_score adalah potret momentum SESAAT, dan pada
+# 2026-07-30 hampir semua kandidat produksi berada di 24-46 (RAJA 24, ADRO 26,
+# BBNI 37, GGRM 46), sehingga syarat "harus BUY (>=60)" mengosongkan portofolio
+# SEPENUHNYA. Menuntut skor BUY hari ini juga bertentangan dgn cara kerja Audit
+# Sinyal: sinyal direkam pada momen setup-nya, lalu dipegang -- bukan disyaratkan
+# terus-menerus mencetak sinyal baru. Yang wajar dijaga: jangan menaruh uang di
+# saham yang HARI INI pun sistem bilang hindari.
+_PORTO_VERDICT_KINI_TOLAK = {"AVOID"}
+
+
+def _alasan_tolak_verdict_kini(res: dict) -> str | None:
+    """Alasan menolak kandidat karena kondisinya HARI INI, atau None kalau
+    masih boleh diracik. Fungsi MURNI supaya bisa diuji langsung (lihat
+    _PORTO_VERDICT_KINI_TOLAK utk latar belakang & kenapa ini daftar-tolak,
+    bukan daftar-layak)."""
+    verdict = (res.get("recommendation") or "").strip().upper()
+    if verdict not in _PORTO_VERDICT_KINI_TOLAK:
+        return None
+    grade = res.get("grade")
+    rinci = f" (grade {grade}, skor {res.get('score')})" if grade else ""
+    return (f"Analisis hari ini menilainya {verdict}{rinci}"
+            " — sudah memburuk sejak sinyalnya direkam, tidak ikut diracik.")
 
 
 def _pilih_kandidat_otomatis(aktif: dict[str, dict]) -> list[dict]:
@@ -1633,7 +1666,8 @@ async def portofolio_kandidat():
 @app.get("/api/portofolio")
 async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
                      sumber: str = "analisis", maks_saham: int = 5,
-                     maks_total_risk_pct: float = 5.0, min_rrr: float = 1.0):
+                     maks_total_risk_pct: float = 5.0, min_rrr: float = 1.0,
+                     max_pos_pct: float = MAX_POSISI_PCT):
     """Racik Portofolio: dari MODAL + saham pilihan USER, hitung berapa LOT
     tiap saham (mis. ?modal=10000000&kodes=BBCA,TLKM&risk_pct=1).
 
@@ -1667,6 +1701,13 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         raise HTTPException(400, "Isi modal dalam rupiah, mis. ?modal=10000000")
     if not (0 < risk_pct <= 100):
         raise HTTPException(400, "risk_pct harus di antara 0 dan 100 (mis. 1 = 1% modal per posisi).")
+    # Batas konsentrasi kini bisa diatur user (usulan 2026-07-30: "tambahin
+    # opsi berapa persen dari modal"). Ini BUKAN pengganti sizing berbasis
+    # risiko -- risk_pct tetap yang menentukan lot; max_pos_pct cuma PLAFON
+    # berapa banyak modal yang boleh menumpuk di satu saham, yang sebelumnya
+    # terkunci di 40%.
+    if not (0 < max_pos_pct <= 100):
+        raise HTTPException(400, "max_pos_pct harus di antara 0 dan 100 (mis. 40 = maksimal 40% modal per saham).")
 
     # Entry pilihan USER per-kode (opsional). Sintaks di kolom kode: 'BBCA@6500'
     # = mau entry BBCA di 6500. Tanpa '@', entry default = harga pasar sekarang.
@@ -1738,6 +1779,16 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
                 continue
             sl = sig.get("sl_price") or 0
             asal_sl = f"SL rencana sinyal {_PORTO_SRC_LABEL.get(sig.get('source'), sig.get('source') or '')}".strip()
+        # Saringan mutu KEDUA, HANYA saat sistem yang memilih: verdict analisis
+        # HARI INI. Yang pertama (di _pilih_kandidat_otomatis) menilai verdict
+        # saat sinyalnya DIREKAM -- bisa sudah basi beberapa hari. Kalau user
+        # memilih sendiri, sahamnya TIDAK disaring: verdict-nya cukup
+        # ditampilkan biar dia yang menimbang (pola sama dgn min_rrr).
+        if auto:
+            _tolak = _alasan_tolak_verdict_kini(res)
+            if _tolak:
+                gagal.append({"kode": kode, "alasan": _tolak})
+                continue
         # Entry: pakai harga pilihan user kalau ada, else harga pasar sekarang.
         user_entry = entry_override.get(res["kode"])
         entry = user_entry if user_entry else (res.get("price") or 0)
@@ -1759,6 +1810,7 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
 
     hasil = build_portfolio(
         modal, candidates, risk_pct=risk_pct,
+        max_pos_pct=max_pos_pct,
         maks_posisi=maks_saham if auto else None,
         maks_total_risk_pct=maks_total_risk_pct if auto else None,
         # Saringan imbal-risiko HANYA saat sistem yang memilih. Kalau user
@@ -1779,12 +1831,14 @@ async def portofolio(modal: float = 0, kodes: str = "", risk_pct: float = 1.0,
         hasil["disaring_mutu"] = disaring_mutu
         hasil["disclaimer"] = (
             "Perhitungan ukuran posisi, BUKAN rekomendasi beli. Mode otomatis memakai sinyal yang "
-            "sudah tercatat di Audit Sinyal, MENYARING dulu yang verdict-nya SANGAT BAGUS/BAGUS/"
-            "BELI KUAT/BELI"
-            + (f" ({disaring_mutu} sinyal aktif lain tidak lolos saringan mutu ini)" if disaring_mutu else "")
-            + ", mengurutkannya menurut skor keyakinan, lalu mengisi portofolio sampai kuota saham, "
-            "jatah risiko total, atau modal habis — sistem tidak memastikan saham-saham ini akan "
-            "naik. Stop loss memakai level rencana sinyalnya, dan harga bisa berubah sewaktu-waktu."
+            "sudah tercatat di Audit Sinyal dengan DUA saringan mutu: verdict saat sinyal direkam "
+            "harus SANGAT BAGUS/BAGUS/BELI KUAT/BELI"
+            + (f" ({disaring_mutu} sinyal aktif lain tidak lolos saringan ini)" if disaring_mutu else "")
+            + ", DAN analisis HARI INI tidak boleh menilainya AVOID — supaya saham yang sudah "
+            "memburuk sejak sinyalnya lahir tidak ikut diracik. Sisanya diurutkan menurut "
+            "skor keyakinan lalu mengisi portofolio sampai kuota saham, jatah risiko total, atau "
+            "modal habis — sistem tidak memastikan saham-saham ini akan naik. Stop loss memakai "
+            "level rencana sinyalnya, dan harga bisa berubah sewaktu-waktu."
         )
     else:
         hasil["disclaimer"] = (

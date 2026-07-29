@@ -303,6 +303,60 @@ def test_otomatis_hanya_memilih_verdict_yang_layak():
     assert kodes == ["BAGUSX", "SANGATX", "BELIKX", "BELIX"]
 
 
+def test_otomatis_tolak_saham_yang_kini_avoid_tapi_bukan_yang_sekadar_lemah():
+    """Saringan mutu KEDUA: verdict analisis HARI INI. Saringan pertama cuma
+    menilai verdict SAAT SINYAL DIREKAM, yang bisa berumur beberapa hari --
+    kasus nyata 2026-07-30: ADRO tercatat 'BAGUS' waktu sinyalnya lahir tapi
+    hari itu sudah AVOID (grade D, skor 26).
+
+    Yang ditolak SENGAJA cuma AVOID, bukan semua yang di bawah BUY. Versi
+    pertama menuntut BUY/STRONG BUY dan itu terbukti KELIRU saat diuji ke data
+    produksi: skor ai_score adalah potret momentum sesaat -- hari itu hampir
+    semua kandidat ada di 24-46 (RAJA 24, BBNI 37, GGRM 46), jadi syarat >=60
+    mengosongkan portofolio SEPENUHNYA. Test ini mengunci kedua sisinya."""
+    from web.app import _alasan_tolak_verdict_kini
+
+    # yang sudah rusak -> ditolak, dgn alasan yang menyebut angkanya
+    alasan = _alasan_tolak_verdict_kini(
+        {"recommendation": "AVOID", "grade": "D", "score": 26})
+    assert alasan is not None
+    assert "AVOID" in alasan and "26" in alasan
+
+    # yang sekadar lemah/menunggu -> TETAP boleh diracik (kalau tidak,
+    # portofolio kosong terus di pasar yang sedang lesu)
+    for v in ("WATCH", "HOLD", "BUY", "STRONG BUY"):
+        assert _alasan_tolak_verdict_kini(
+            {"recommendation": v, "grade": "D", "score": 37}) is None, (
+            f"verdict {v} seharusnya masih boleh diracik")
+
+    # verdict kosong/tak dikenal -> jangan menolak diam-diam
+    assert _alasan_tolak_verdict_kini({"recommendation": None}) is None
+    assert _alasan_tolak_verdict_kini({}) is None
+    # beda kapital & spasi tetap dikenali
+    assert _alasan_tolak_verdict_kini({"recommendation": "  avoid "}) is not None
+
+
+def test_batas_konsentrasi_bisa_diatur_bukan_terkunci_40():
+    """Usulan user 2026-07-30 ("tambahin opsi berapa persen dari modal"):
+    plafon konsentrasi dulu terkunci 40% sehingga user yang modalnya kecil
+    kerap melihat 'dibatasi 40% modal/saham' tanpa bisa mengubahnya. Sekarang
+    bisa diatur. Dites lewat build_portfolio langsung (endpoint cuma
+    meneruskan parameternya)."""
+    kandidat = [_c("AAAA", 1000, 900)]   # SL 10% -> risiko lebar, lot dibatasi
+    longgar = build_portfolio(10_000_000, kandidat, risk_pct=50.0, max_pos_pct=90.0)
+    ketat = build_portfolio(10_000_000, kandidat, risk_pct=50.0, max_pos_pct=10.0)
+
+    assert longgar["max_pos_pct"] == 90.0
+    assert ketat["max_pos_pct"] == 10.0
+    # plafon lebih ketat -> nilai posisi yang boleh dibeli lebih kecil.
+    # Diukur terhadap MODAL (bukan porsi_pct, yang artinya porsi terhadap
+    # total portofolio -- dgn satu posisi nilainya selalu 100%).
+    assert ketat["posisi"][0]["nilai"] < longgar["posisi"][0]["nilai"]
+    assert ketat["posisi"][0]["nilai"] <= 10_000_000 * 0.10
+    assert longgar["posisi"][0]["nilai"] <= 10_000_000 * 0.90
+    assert ketat["posisi"][0]["dibatasi_konsentrasi"] is True
+
+
 def test_otomatis_toleran_pada_verdict_kosong_atau_beda_kapital():
     """recommendation bisa None (data lama) atau beda huruf besar/kecil --
     yang kosong TIDAK boleh lolos (tak ada dasar menilainya), yang cuma beda

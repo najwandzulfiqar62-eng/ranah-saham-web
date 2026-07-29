@@ -6,7 +6,7 @@
 // Kalau lupa, user tetap melihat UI versi LAMA walau server sudah menyajikan
 // yang baru (persis yang terjadi pada perbaikan "satu saham, dua teori":
 // backend & file di server sudah benar, tapi shell lama masih dari cache).
-const CACHE = 'ranahsaham-v27';
+const CACHE = 'ranahsaham-v28';
 const SHELL = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
