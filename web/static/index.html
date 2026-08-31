@@ -1547,6 +1547,53 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   .landing-foot{flex-direction:column;align-items:flex-start}
 }
 @media(prefers-reduced-motion:reduce){.reveal,.landing-support{opacity:1;transform:none;transition:none}.bento-card:hover{transform:none}}
+
+/* ===== LIGHT MODE — PALET TERANG KHUSUS, BUKAN DARK MODE YANG DIBALIK =====
+   Diletakkan paling akhir supaya modul lama yang masih memakai warna gelap
+   literal tidak menimpa keterbacaan tema terang. */
+:root[data-theme="light"]{
+  --bg:#F4F7F3;--panel:#FFFFFF;--panel2:#ECF2ED;--elev:#F8FAF8;
+  --line:#D6E1D9;--line-soft:#E5ECE7;
+  --text:#14251E;--muted:#5C7066;--faint:#7A8B81;
+  --gold:#A87512;--gold-soft:rgba(168,117,18,.10);--gold-dim:rgba(168,117,18,.42);
+  --bull:#078957;--bear:#C7473E;--neutral:#708177;
+  --shadow-xs:0 1px 2px rgba(20,37,30,.06);
+  --shadow-sm:0 4px 12px -6px rgba(20,37,30,.13),0 1px 2px rgba(20,37,30,.06);
+  --shadow-md:0 14px 30px -16px rgba(20,37,30,.18),0 3px 8px -5px rgba(20,37,30,.09);
+  --shadow-lg:0 26px 54px -24px rgba(20,37,30,.24),0 8px 20px -12px rgba(20,37,30,.12);
+}
+:root[data-theme="light"] body{
+  background:radial-gradient(900px 500px at 4% -12%,rgba(168,117,18,.11),transparent 62%),radial-gradient(760px 440px at 100% 12%,rgba(7,137,87,.075),transparent 65%),#F4F7F3;
+}
+:root[data-theme="light"] header{background:rgba(252,253,251,.93);border-bottom-color:rgba(20,37,30,.10);box-shadow:0 9px 25px -16px rgba(20,37,30,.22)}
+:root[data-theme="light"] .ticker-marquee{background:#EAF2ED;border-bottom-color:#D7E3DB}
+:root[data-theme="light"] .news-marquee{background:#F9F7F0;border-bottom-color:#E5E2D6}
+:root[data-theme="light"] .rs-research-hero{
+  margin:8px 0 22px;padding:36px;background:linear-gradient(125deg,#FFFDF8 0%,#FFFFFF 54%,#F0F6F1 100%);
+  border:1px solid #DCE6DF;border-radius:16px;box-shadow:var(--shadow-sm);
+}
+:root[data-theme="light"] .rs-research-hero::before{opacity:.055}
+:root[data-theme="light"] .rs-research-hero::after{background:radial-gradient(closest-side at 35% 40%,rgba(168,117,18,.12),transparent 70%),radial-gradient(closest-side at 75% 75%,rgba(7,137,87,.065),transparent 70%)}
+:root[data-theme="light"] .home-sub,:root[data-theme="light"] .analysis-sub{color:#52685D}
+:root[data-theme="light"] .home-search-card{
+  background:linear-gradient(160deg,#FDFBF5,#F4F8F4);border-color:rgba(168,117,18,.32);box-shadow:0 18px 36px -24px rgba(20,37,30,.30);
+}
+:root[data-theme="light"] .home-search input{background:#FFFFFF;color:var(--text);border-color:#D2DED6}
+:root[data-theme="light"] .home-quick button{background:#FFFFFF;color:#385146;border-color:#D8E2DB}
+:root[data-theme="light"] .home-quick button:hover{background:#F7F1DF;border-color:var(--gold-dim);color:#6B4B0B}
+:root[data-theme="light"] .pulse-card{background:linear-gradient(180deg,#FFFFFF,#FBFCFA);border-color:#DDE6E0}
+:root[data-theme="light"] .pc-label{color:#718278}
+:root[data-theme="light"] .analysis-shell{background:linear-gradient(180deg,rgba(168,117,18,.07),rgba(168,117,18,.015)),#FFFFFF;border-color:rgba(168,117,18,.25)}
+:root[data-theme="light"] .analysis-score-card,:root[data-theme="light"] .decision-card,:root[data-theme="light"] .chart-panel #chart,:root[data-theme="light"] .risk-item{background:#FBFCFA;border-color:#DCE6DF}
+:root[data-theme="light"] .case-card{background:#F3F7F4;border-color:#DCE6DF}
+:root[data-theme="light"] .case-card ul,:root[data-theme="light"] .risk-item,:root[data-theme="light"] .audit-note{color:#30463B}
+:root[data-theme="light"] .panel-quiet{border-color:#DCE6DF}
+:root[data-theme="light"] .site-footer{background:linear-gradient(to bottom,#EDF3EE,#E3ECE5);box-shadow:0 -20px 42px -28px rgba(20,37,30,.25)}
+:root[data-theme="light"] .site-footer .footer-disclaimer{background:#E3ECE5;border-top-color:#D1DED5}
+:root[data-theme="light"] .footer-social a{background:#F8FAF8;border-color:#D4E0D8}
+:root[data-theme="light"] .footer-col .footer-divider{border-top-color:#D4E0D8}
+:root[data-theme="light"] .decision-card:hover,:root[data-theme="light"] .case-card:hover,:root[data-theme="light"] .berulang-card:hover,:root[data-theme="light"] .port-sum-card:hover,:root[data-theme="light"] .alert-row:hover,:root[data-theme="light"] .home-search-card:hover{box-shadow:0 10px 24px -14px rgba(20,37,30,.25)}
+@media(max-width:640px){:root[data-theme="light"] .rs-research-hero{margin:0 0 14px;padding:20px 18px;border-radius:12px}}
 </style>
 </head>
 <body class="access-locked">
@@ -1627,7 +1674,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     try{
       const data=await fetch('/api/access/admin/users?status=all',{credentials:'same-origin'}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.detail);return d});
       const rows=(data.users||[]).filter(u=>!u.is_admin),pending=rows.filter(u=>u.status==='pending'),history=rows.filter(u=>u.status!=='pending'),box=panel.querySelector('#accessAdminContent');
-      const row=u=>'<div class="access-user-row"><div><b>'+escapeHtml(u.name)+'</b><span>'+escapeHtml(u.email)+'</span>'+(u.status==='pending'?'':'<i class="access-status '+escapeHtml(u.status)+'">'+(u.status==='approved'?'Disetujui':'Ditolak')+'</i>')+'</div>'+(u.status==='pending'?'<div class="access-user-actions"><button class="approve" data-access-action="approve" data-id="'+u.id+'">Setujui</button><button class="reject" data-access-action="reject" data-id="'+u.id+'">Tolak</button></div>':'')+'</div>';
+      const row=u=>'<div class="access-user-row"><div><b>'+escapeHtml(u.name)+'</b><span>'+escapeHtml(u.email)+'</span>'+(u.has_proof?'<a class="access-proof-link" href="/api/access/admin/users/'+u.id+'/proof" target="_blank" rel="noopener">Lihat bukti WA</a>':'<i class="access-status rejected">Bukti belum ada</i>')+(u.status==='pending'?'':'<i class="access-status '+escapeHtml(u.status)+'">'+(u.status==='approved'?'Disetujui':'Ditolak')+'</i>')+'</div>'+(u.status==='pending'?'<div class="access-user-actions"><button class="approve" data-access-action="approve" data-id="'+u.id+'">Setujui</button><button class="reject" data-access-action="reject" data-id="'+u.id+'">Tolak</button></div>':u.status==='approved'?'<div class="access-user-actions"><button class="reject" data-access-action="revoke" data-id="'+u.id+'">Batalkan</button></div>':'')+'</div>';
       box.innerHTML='<p style="font-size:12px;color:var(--muted);margin:0 0 8px">Permintaan akses menunggu persetujuan ('+pending.length+')</p>'+(pending.length?pending.map(row).join(''):'<p style="color:var(--muted);font-size:13px">Belum ada permintaan baru.</p>')+'<p class="access-history-title">Riwayat permintaan akses</p>'+(history.length?history.map(row).join(''):'<p style="color:var(--muted);font-size:13px">Belum ada riwayat.</p>');
       box.querySelectorAll('[data-access-action]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await jsonRequest('/api/access/admin/users/'+b.dataset.id+'/'+b.dataset.accessAction);await refreshAdminNotice();window.openAccessPanel()}catch(err){showMessage(err.message,'err');b.disabled=false}});
     }catch(err){panel.querySelector('#accessAdminContent').textContent=err.message||'Gagal memuat permintaan akses.'}
