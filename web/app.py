@@ -166,6 +166,23 @@ SECTOR_MAP_UNIVERSE = {
     "BEST": "Real Estate",
     "HITS": "Transportation & Logistics", "LEAD": "Transportation & Logistics",
     "TMAS": "Transportation & Logistics", "SHIP": "Transportation & Logistics",
+    # Extended Minervini / Top Pick discovery universe
+    "BBKP": "Financials", "BBYB": "Financials", "BMAS": "Financials", "NOBU": "Financials",
+    "PNLF": "Financials", "TUGU": "Financials", "SRTG": "Financials", "BHIT": "Financials", "APIC": "Financials",
+    "CMRY": "Consumer Non-Cyclical", "CLEO": "Consumer Non-Cyclical", "ADES": "Consumer Non-Cyclical",
+    "CEKA": "Consumer Non-Cyclical", "SIMP": "Consumer Non-Cyclical", "HOKI": "Consumer Non-Cyclical",
+    "WMPP": "Consumer Non-Cyclical", "FOOD": "Consumer Non-Cyclical",
+    "BUMI": "Energy", "DOID": "Energy", "MBAP": "Energy", "ENRG": "Energy", "ESSA": "Energy",
+    "AIMS": "Energy", "SUGI": "Energy", "TBS": "Energy", "AADI": "Energy", "RATU": "Energy",
+    "AVIA": "Basic Materials", "IMPC": "Basic Materials", "MBMA": "Basic Materials", "HRTA": "Basic Materials", "FPNI": "Basic Materials",
+    "ASGR": "Industrials", "MPMX": "Industrials", "MARK": "Industrials", "JTPE": "Industrials",
+    "IPCC": "Industrials", "IPCM": "Industrials",
+    "MAPA": "Consumer Cyclical", "SCMA": "Consumer Cyclical", "FILM": "Consumer Cyclical", "BELL": "Consumer Cyclical",
+    "SAME": "Healthcare", "MEDI": "Healthcare",
+    "WIFI": "Technology", "EDGE": "Technology", "BELI": "Technology", "NFCX": "Technology",
+    "PANI": "Real Estate", "SSIA": "Real Estate", "DILD": "Real Estate", "SCBD": "Real Estate",
+    "BSBK": "Real Estate", "EMDE": "Real Estate", "CBDK": "Real Estate",
+    "BULL": "Transportation & Logistics", "WINS": "Transportation & Logistics", "WEHA": "Transportation & Logistics", "CMPP": "Transportation & Logistics",
 }
 
 # Peta grup konglomerasi (kepemilikan/afiliasi bisnis keluarga besar IDX).
@@ -2202,6 +2219,31 @@ LIQUID_250 = [
     "HITS", "LEAD", "TMAS", "SHIP",
 ]
 
+# Lapisan discovery untuk Minervini dan Top Pick. LIQUID_250 sendiri
+# cenderung berisi saham lama/lapis pertama; daftar ini menambah emiten aktif
+# dari beberapa sektor yang sering tidak terjangkau scan utama. Tetap bukan
+# daftar rekomendasi: setiap kandidat harus lolos data 200 hari, skor
+# Minervini, AI score, konfluens, likuiditas, dan risk/reward yang sama.
+# Dedupe sengaja dilakukan di bawah agar aman bila satu kode kemudian masuk
+# LIQUID_250 utama.
+TOP_PICK_DISCOVERY = [
+    # Financials
+    "BBKP", "BBYB", "BMAS", "NOBU", "PNLF", "TUGU", "SRTG", "BHIT", "APIC",
+    # Consumer
+    "CMRY", "CLEO", "ADES", "CEKA", "SIMP", "HOKI", "WMPP", "FOOD",
+    # Energy & Mining
+    "BUMI", "DOID", "MBAP", "ENRG", "ESSA", "AIMS", "SUGI", "TBS", "AADI", "RATU",
+    # Basic Materials & Industrials
+    "AVIA", "IMPC", "MBMA", "HRTA", "FPNI", "ASGR", "MPMX", "MARK", "JTPE", "IPCC", "IPCM",
+    # Consumer Cyclical & Healthcare
+    "MAPA", "SCMA", "FILM", "BELL", "SAME", "MEDI",
+    # Technology
+    "WIFI", "EDGE", "BELI", "NFCX",
+    # Real Estate & Transportation
+    "PANI", "SSIA", "DILD", "SCBD", "BSBK", "EMDE", "CBDK", "BULL", "WINS", "WEHA", "CMPP",
+]
+TOP_PICK_UNIVERSE = list(dict.fromkeys([*LIQUID_250, *TOP_PICK_DISCOVERY]))
+
 
 @app.get("/api/smc/{kode}/{kind}")
 async def smc_chart(kode: str, kind: str):
@@ -2239,9 +2281,9 @@ async def screenerpro():
     momentum). Skor ≥65 saja. Atas universe likuid, di-cache.
 
     Universe DIPERLUAS (permintaan user: "banyakin screening minervini lagi")
-    dari SCREENER_UNIVERSE (~45, LQ45-ish) ke LIQUID_250 (178 saham likuid --
-    universe yang SAMA dipakai Top Pick/confidence, batching+retih
-    async_download_many sudah teruji utk skala ~200 ticker). Makin banyak
+    dari SCREENER_UNIVERSE (~45, LQ45-ish) ke universe extended (likuid
+    utama + discovery lintas sektor) yang SAMA dipakai Top Pick/confidence.
+    Makin banyak
     kandidat yang dipindai = makin besar peluang menemukan saham tren kuat
     yang lolos trend template, bukan cuma dari 45 saham teratas."""
     cached = _cache_get("screenerpro")
@@ -2251,10 +2293,10 @@ async def screenerpro():
     try:
         ihsg_raw = await _clean("^JKSE", period="1y")
         market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
-        res = await run_screenerpro([t + ".JK" for t in LIQUID_250], market_close=market_close)
+        res = await run_screenerpro([t + ".JK" for t in TOP_PICK_UNIVERSE], market_close=market_close)
     except Exception:
         raise HTTPException(502, "Gagal menjalankan screener pro.")
-    payload = _py({"items": res or [], "universe": len(LIQUID_250)})
+    payload = _py({"items": res or [], "universe": len(TOP_PICK_UNIVERSE)})
     _cache_set("screenerpro", payload)
     return payload
 
@@ -2781,7 +2823,7 @@ async def _confidence_raw_signals() -> list[dict]:
 
 async def _build_confidence_raw() -> list[dict]:
     """Hitung AI Score + Minervini + Confluence + likuiditas + risk/reward
-    + proxy bandar untuk LIQUID_250 dari satu fetch period=1y bersama.
+    + proxy bandar untuk universe extended dari satu fetch period=1y bersama.
     Bagian BERAT -- dipanggil via single-flight (lihat _confidence_raw_signals)
     & oleh auto-cycle (yang ikut menghangatkan cache-nya)."""
     ihsg_raw = await _clean("^JKSE", period="1y")
@@ -2799,7 +2841,7 @@ async def _build_confidence_raw() -> list[dict]:
     # ganti universe. record_top_picks() di confidence() tetap MAX_
     # RECORDED_PER_DAY=10/hari, jadi Audit Sinyal tidak dibanjiri meski
     # kandidat yang di-scan sekarang jauh lebih banyak.
-    tickers = [t + ".JK" for t in LIQUID_250]
+    tickers = [t + ".JK" for t in TOP_PICK_UNIVERSE]
     data = await async_download_many(tickers, period="1y", interval="1d")
     data = {t: fix_yf_columns(d).apply(pd.to_numeric, errors="coerce").dropna() for t, d in data.items()}
     # Tambal celah bar harian terbaru (lihat _backfill_recent_gap) -- SATU
@@ -2995,7 +3037,7 @@ async def confidence():
         "items": items,
         "weights": weights,
         "weight_source": weight_source,
-        "universe": len(LIQUID_250),
+        "universe": len(TOP_PICK_UNIVERSE),
         "market_regime": market_regime,
         "market_regime_score": market_regime_score,
         "market_context": market_context,
