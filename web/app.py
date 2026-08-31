@@ -29,6 +29,7 @@ import hashlib
 import hmac
 import json
 import uuid
+from io import BytesIO
 from urllib.parse import urlencode
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -37,6 +38,7 @@ import redis
 import pickle
 import pandas as pd
 import httpx
+from PIL import Image, UnidentifiedImageError
 
 
 # socket_connect_timeout/socket_timeout WAJIB diisi: redis-py sinkron
@@ -366,6 +368,52 @@ async def _access_payload(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+_PROFILE_UPLOAD_DIR = os.path.join(_STATIC, "profile_uploads")
+_PROFILE_AVATAR_MAX_BYTES = 2 * 1024 * 1024
+
+
+async def _save_profile_avatar(file, user_id: int) -> str | None:
+    """Simpan avatar sebagai JPEG hasil normalisasi, bukan file sembarang."""
+    if not file or not getattr(file, "filename", ""):
+        return None
+    if (getattr(file, "content_type", "") or "").lower() not in {
+        "image/jpeg", "image/png", "image/webp"
+    }:
+        raise HTTPException(400, "Foto harus berformat JPG, PNG, atau WEBP.")
+    raw = await file.read(_PROFILE_AVATAR_MAX_BYTES + 1)
+    if not raw:
+        return None
+    if len(raw) > _PROFILE_AVATAR_MAX_BYTES:
+        raise HTTPException(400, "Ukuran foto profil maksimal 2 MB.")
+    try:
+        image = Image.open(BytesIO(raw))
+        image.verify()
+        image = Image.open(BytesIO(raw)).convert("RGB")
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(400, "Berkas yang diunggah bukan gambar yang valid.")
+
+    image.thumbnail((512, 512))
+    os.makedirs(_PROFILE_UPLOAD_DIR, exist_ok=True)
+    filename = f"u{user_id}_{uuid.uuid4().hex}.jpg"
+    path = os.path.join(_PROFILE_UPLOAD_DIR, filename)
+    image.save(path, format="JPEG", quality=88, optimize=True)
+    return f"/profile_uploads/{filename}"
+
+
+def _delete_local_profile_avatar(url: str | None) -> None:
+    """Hapus hanya file avatar yang memang berada di folder upload aplikasi."""
+    prefix = "/profile_uploads/"
+    if not url or not url.startswith(prefix):
+        return
+    filename = os.path.basename(url)
+    path = os.path.join(_PROFILE_UPLOAD_DIR, filename)
+    try:
+        if os.path.commonpath([_PROFILE_UPLOAD_DIR, path]) == _PROFILE_UPLOAD_DIR:
+            os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
 @app.get("/api/access/me")
 async def api_access_me(request: Request):
     user = _access_user(request)
@@ -420,12 +468,33 @@ async def api_access_profile(request: Request):
     user = _access_user(request)
     if not user:
         raise HTTPException(401, "Silakan masuk terlebih dahulu.")
-    body = await _access_payload(request)
+    old_avatar = user.get("avatar_url")
+    if (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        form = await request.form()
+        avatar_url = old_avatar
+        if str(form.get("remove_avatar") or "") == "1":
+            avatar_url = None
+        else:
+            uploaded = await _save_profile_avatar(form.get("avatar"), user["id"])
+            if uploaded:
+                avatar_url = uploaded
+        body = {"name": form.get("name", ""), "bio": form.get("bio", "")}
+    else:
+        body = await _access_payload(request)
+        avatar_url = body.get("avatar_url", old_avatar)
     try:
-        updated = update_profile(user["id"], body.get("name", ""), body.get("avatar_url"))
+        updated = update_profile(user["id"], body.get("name", ""), body.get("bio", ""), avatar_url)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    if old_avatar != updated.get("avatar_url"):
+        _delete_local_profile_avatar(old_avatar)
     return {"user": updated}
+
+
+@app.get("/api/access/admin/summary")
+async def api_access_admin_summary(request: Request):
+    _require_admin(request)
+    return {"pending_count": len(list_users("pending"))}
 
 
 @app.get("/api/access/google/login")

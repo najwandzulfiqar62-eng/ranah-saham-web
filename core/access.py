@@ -64,6 +64,7 @@ def _public(row) -> dict:
         "created_at": row["created_at"],
         "approved_at": row["approved_at"],
         "avatar_url": row["avatar_url"] if "avatar_url" in row.keys() else None,
+        "bio": row["bio"] if "bio" in row.keys() else "",
     }
 
 
@@ -102,6 +103,8 @@ def ensure_access_tables() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(access_user)").fetchall()}
         if "avatar_url" not in cols:
             conn.execute("ALTER TABLE access_user ADD COLUMN avatar_url TEXT")
+        if "bio" not in cols:
+            conn.execute("ALTER TABLE access_user ADD COLUMN bio TEXT NOT NULL DEFAULT ''")
         if "google_sub" not in cols:
             conn.execute("ALTER TABLE access_user ADD COLUMN google_sub TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_user_google_sub ON access_user(google_sub) WHERE google_sub IS NOT NULL")
@@ -212,16 +215,19 @@ def revoke_session(token: str | None) -> None:
         conn.execute("DELETE FROM access_session WHERE token_hash = ?", (hashlib.sha256(token.encode("utf-8")).hexdigest(),))
 
 
-def update_profile(user_id: int, name: str, avatar_url: str | None = None) -> dict:
+def update_profile(user_id: int, name: str, bio: str | None = None, avatar_url: str | None = None) -> dict:
     ensure_access_tables()
     name = " ".join((name or "").strip().split())
     if not 2 <= len(name) <= 60:
         raise ValueError("Nama harus terdiri dari 2–60 karakter.")
+    bio = " ".join((bio or "").strip().split())
+    if len(bio) > 180:
+        raise ValueError("Bio maksimal 180 karakter.")
     avatar_url = (avatar_url or "").strip() or None
     if avatar_url and (len(avatar_url) > 2048 or not avatar_url.startswith(("https://", "http://", "/profile_uploads/"))):
-        raise ValueError("URL foto profil tidak valid.")
+        raise ValueError("Lokasi foto profil tidak valid.")
     with get_db() as conn:
-        conn.execute("UPDATE access_user SET name = ?, avatar_url = ? WHERE id = ?", (name, avatar_url, user_id))
+        conn.execute("UPDATE access_user SET name = ?, bio = ?, avatar_url = ? WHERE id = ?", (name, bio, avatar_url, user_id))
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
     return _public(row)
 
@@ -254,7 +260,7 @@ def upsert_google_user(google_sub: str, email: str, name: str, avatar_url: str |
             )
             row = conn.execute("SELECT * FROM access_user WHERE email = ?", (email,)).fetchone()
         else:
-            conn.execute("UPDATE access_user SET google_sub = ?, avatar_url = COALESCE(?, avatar_url) WHERE id = ?", (google_sub, avatar_url, row["id"]))
+            conn.execute("UPDATE access_user SET google_sub = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?", (google_sub, avatar_url, row["id"]))
             row = conn.execute("SELECT * FROM access_user WHERE id = ?", (row["id"],)).fetchone()
     return _public(row)
 
