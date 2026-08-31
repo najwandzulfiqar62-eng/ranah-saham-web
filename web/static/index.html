@@ -30,6 +30,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+  // Terapkan pilihan lebih awal agar halaman tidak sempat berkedip ke tema lain.
+  try{if(localStorage.getItem('rs_theme')==='light')document.documentElement.dataset.theme='light'}catch(e){}
+</script>
 <style>
   /* SATU sumber kebenaran palet (dulu ADA DUA blok :root -- basis biru di
      sini + override hijau-emas ~700 baris di bawah; yang aktif selalu yang
@@ -52,6 +56,29 @@
     --shadow-lg:0 22px 46px -14px rgba(0,0,0,.6), 0 8px 18px -8px rgba(0,0,0,.4);
     --ease-premium:cubic-bezier(.2,.7,.2,1);
   }
+  :root[data-theme="light"]{
+    --bg:#F4F8F5; --panel:#FFFFFF; --panel2:#EEF4F0; --elev:#F8FBF9;
+    --line:#D6E1DA; --line-soft:#E6EEE9;
+    --text:#17241D; --muted:#506259; --faint:#78877E;
+    --gold:#A87812; --gold-soft:rgba(168,120,18,.11); --gold-dim:rgba(168,120,18,.43);
+    --bull:#168454; --bear:#C5473C; --neutral:#6F8177;
+    --shadow-inset-top:0 1px 0 rgba(255,255,255,.8) inset;
+    --shadow-xs:0 1px 2px rgba(23,36,29,.08);
+    --shadow-sm:0 3px 10px -4px rgba(23,36,29,.14),0 1px 2px rgba(23,36,29,.08);
+    --shadow-md:0 12px 28px -12px rgba(23,36,29,.18),0 3px 8px -4px rgba(23,36,29,.1);
+    --shadow-lg:0 22px 46px -18px rgba(23,36,29,.23),0 8px 18px -10px rgba(23,36,29,.13);
+  }
+  :root[data-theme="light"] header{background:rgba(248,252,249,.88);box-shadow:0 8px 24px -12px rgba(23,36,29,.18)}
+  :root[data-theme="light"] .nav-dd,:root[data-theme="light"] .notif-panel{background:rgba(255,255,255,.94)}
+  :root[data-theme="light"] .ticker-marquee,:root[data-theme="light"] .news-marquee{background:#EAF2ED}
+  :root[data-theme="light"] .rs-research-hero,:root[data-theme="light"] .analysis-score-card,:root[data-theme="light"] .decision-card,:root[data-theme="light"] .chart-panel #chart,:root[data-theme="light"] .risk-item,:root[data-theme="light"] .audit-note,:root[data-theme="light"] .home-search input,:root[data-theme="light"] .home-quick button{background:#FFFFFF}
+  :root[data-theme="light"] p.insight,:root[data-theme="light"] .case-card ul,:root[data-theme="light"] .audit-note,:root[data-theme="light"] .risk-item{color:var(--text)}
+  :root[data-theme="light"] .site-footer{background:linear-gradient(to bottom,#EEF4F0,#E4EEE8);box-shadow:0 -20px 40px -20px rgba(23,36,29,.16)}
+  :root[data-theme="light"] .site-footer .footer-disclaimer{background:#E4EEE8;border-top-color:rgba(23,36,29,.08)}
+  :root[data-theme="light"] #landingHero{background:#F4F8F5}
+  :root[data-theme="light"] .landing-bg::after{background:linear-gradient(to top,#F4F8F5 0%,transparent 100%)}
+  :root[data-theme="light"] .landing-nav{background:rgba(248,252,249,.82)}
+  :root[data-theme="light"] .landing-preview-frame,:root[data-theme="light"] .landing-mock-card{background:rgba(255,255,255,.72);border-color:rgba(23,36,29,.1)}
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
   body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;
@@ -202,6 +229,12 @@
        jelas + tombol back browser asli) & HANYA saat bukan di Beranda
        (lihat _applyRoute -- toggle hidden di situ).*/
     .mob-back-btn{display:flex!important}
+  }
+
+  @media(max-width:768px){
+    :root[data-theme="light"] header,:root[data-theme="light"] .landing-nav{background:rgba(248,252,249,.97)!important}
+    :root[data-theme="light"] .mob-drawer,:root[data-theme="light"] .cmdk,:root[data-theme="light"] .tourk{background:rgba(23,36,29,.24)!important}
+    :root[data-theme="light"] .notif-panel{background:#FFFFFF!important}
   }
 
   main{padding:26px 0 60px;animation:fadeUp .4s ease}
@@ -692,6 +725,9 @@
 /* ---- tur singkat (onboarding) ---- */
 .tour-btn{width:32px;height:32px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:15px;font-weight:700;cursor:pointer;transition:.15s;flex-shrink:0}
 .tour-btn:hover{border-color:var(--gold);color:var(--gold)}
+.theme-btn{width:32px;height:32px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);color:var(--muted);cursor:pointer;transition:.15s;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;padding:0}
+.theme-btn:hover{border-color:var(--gold);color:var(--gold);transform:rotate(12deg)}
+.theme-btn svg{width:16px;height:16px}
 .tourk{position:fixed;inset:0;background:rgba(5,9,16,.75);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:95;padding:20px}
 .tourk.on{display:flex}
 .tourbox{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:20px;width:min(430px,94vw);padding:34px 30px 26px;text-align:center;box-shadow:0 24px 70px rgba(0,0,0,.55)}
@@ -1710,6 +1746,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="tabs" id="tabs"></div>
   <div class="kbd" id="openCmd">Cari saham <kbd>Ctrl K</kbd></div>
   <button class="notif-btn" id="notifBtn" title="Notifikasi" aria-label="Notifikasi"><span id="notifBell"></span><span class="notif-badge" id="notifBadge" hidden></span></button>
+  <button class="theme-btn" id="themeBtn" type="button" title="Aktifkan mode terang" aria-label="Aktifkan mode terang"></button>
   <button class="tour-btn" id="tourBtn" title="Tur singkat" aria-label="Tur singkat">?</button>
   <button class="hbg" id="hbg" aria-label="Menu" onclick="toggleMobMenu()">
     <span></span><span></span><span></span>
@@ -2369,6 +2406,23 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 
 <script>
 const $=s=>document.querySelector(s), el=h=>{const d=document.createElement('div');d.innerHTML=h.trim();return d.firstChild};
+const THEME_STORAGE_KEY='rs_theme';
+function setTheme(theme){
+  const light=theme==='light';
+  if(light)document.documentElement.dataset.theme='light';else delete document.documentElement.dataset.theme;
+  try{localStorage.setItem(THEME_STORAGE_KEY,light?'light':'dark')}catch(e){}
+  const meta=document.querySelector('meta[name="theme-color"]');
+  if(meta)meta.content=light?'#F4F8F5':'#06110F';
+  const btn=$('#themeBtn'); if(!btn)return;
+  btn.innerHTML=light
+    ?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.7 6.7 0 0 0 21 12.8Z"/></svg>'
+    :'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
+  const label=light?'Aktifkan mode gelap':'Aktifkan mode terang';
+  btn.title=label;btn.setAttribute('aria-label',label);
+}
+function toggleTheme(){setTheme(document.documentElement.dataset.theme==='light'?'dark':'light')}
+setTheme(document.documentElement.dataset.theme==='light'?'light':'dark');
+$('#themeBtn')?.addEventListener('click',toggleTheme);
 const POPULAR=['BBCA','BBRI','BMRI','TLKM','ASII','BBNI','UNVR','GOTO','ANTM','ADRO','ICBP','MDKA'];
 const loaded={};
 let chartObj=null, ihsgChartObj=null;
