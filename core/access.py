@@ -63,6 +63,7 @@ def _public(row) -> dict:
         "is_admin": bool(row["is_admin"]),
         "created_at": row["created_at"],
         "approved_at": row["approved_at"],
+        "avatar_url": row["avatar_url"] if "avatar_url" in row.keys() else None,
     }
 
 
@@ -98,6 +99,12 @@ def ensure_access_tables() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_user_status ON access_user(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_session_expiry ON access_session(expires_at)")
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(access_user)").fetchall()}
+        if "avatar_url" not in cols:
+            conn.execute("ALTER TABLE access_user ADD COLUMN avatar_url TEXT")
+        if "google_sub" not in cols:
+            conn.execute("ALTER TABLE access_user ADD COLUMN google_sub TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_user_google_sub ON access_user(google_sub) WHERE google_sub IS NOT NULL")
     _ensured = True
 
 
@@ -203,6 +210,53 @@ def revoke_session(token: str | None) -> None:
     ensure_access_tables()
     with get_db() as conn:
         conn.execute("DELETE FROM access_session WHERE token_hash = ?", (hashlib.sha256(token.encode("utf-8")).hexdigest(),))
+
+
+def update_profile(user_id: int, name: str, avatar_url: str | None = None) -> dict:
+    ensure_access_tables()
+    name = " ".join((name or "").strip().split())
+    if not 2 <= len(name) <= 60:
+        raise ValueError("Nama harus terdiri dari 2–60 karakter.")
+    avatar_url = (avatar_url or "").strip() or None
+    if avatar_url and (len(avatar_url) > 2048 or not avatar_url.startswith(("https://", "http://", "/profile_uploads/"))):
+        raise ValueError("URL foto profil tidak valid.")
+    with get_db() as conn:
+        conn.execute("UPDATE access_user SET name = ?, avatar_url = ? WHERE id = ?", (name, avatar_url, user_id))
+        row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
+    return _public(row)
+
+
+def create_session_for_user(user_id: int) -> str:
+    ensure_access_tables()
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat(timespec="seconds")
+    with get_db() as conn:
+        conn.execute("DELETE FROM access_session WHERE expires_at <= ?", (_now(),))
+        conn.execute("INSERT INTO access_session (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", (token_hash, user_id, expires, _now()))
+    return token
+
+
+def upsert_google_user(google_sub: str, email: str, name: str, avatar_url: str | None) -> dict:
+    """Link akun Google terverifikasi ke akun lokal berdasarkan sub/email."""
+    ensure_access_tables()
+    email = (email or "").strip().lower()
+    name = " ".join((name or "").strip().split())[:60] or email.split("@", 1)[0]
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM access_user WHERE google_sub = ?", (google_sub,)).fetchone()
+        if row is None:
+            row = conn.execute("SELECT * FROM access_user WHERE email = ?", (email,)).fetchone()
+        if row is None:
+            conn.execute(
+                """INSERT INTO access_user (name, email, password_hash, status, is_admin, created_at, google_sub, avatar_url)
+                   VALUES (?, ?, 'google-only', 'pending', 0, ?, ?, ?)""",
+                (name, email, _now(), google_sub, avatar_url),
+            )
+            row = conn.execute("SELECT * FROM access_user WHERE email = ?", (email,)).fetchone()
+        else:
+            conn.execute("UPDATE access_user SET google_sub = ?, avatar_url = COALESCE(?, avatar_url) WHERE id = ?", (google_sub, avatar_url, row["id"]))
+            row = conn.execute("SELECT * FROM access_user WHERE id = ?", (row["id"],)).fetchone()
+    return _public(row)
 
 
 def list_users(status: str = "pending") -> list[dict]:

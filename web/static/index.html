@@ -1564,6 +1564,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <label>Email<input name="email" type="email" autocomplete="email" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="access-submit" type="submit">Masuk ke Ranah Saham</button>
+      <button class="access-submit" id="googleLoginBtn" type="button" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">Lanjutkan dengan Google</button>
     </form>
     <form class="access-form" id="accessRegisterForm" hidden>
       <label>Nama<input name="name" autocomplete="name" minlength="2" maxlength="60" required></label>
@@ -1586,7 +1587,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   function jsonRequest(url,body){return fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}).then(async r=>{const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.detail||'Permintaan gagal.');return data})}
   function refreshAccountButton(){const b=document.getElementById('accessAccountBtn');if(!b)return;b.hidden=!currentUser;b.textContent=currentUser?(currentUser.is_admin?'Admin':'Akun'):''}
   function unlock(user){currentUser=user;window.rsAccessUser=user;document.body.classList.remove('access-locked');gate.setAttribute('aria-hidden','true');refreshAccountButton()}
-  window.rsAccessReady=fetch('/api/access/me',{credentials:'same-origin'}).then(async r=>{const data=await r.json().catch(()=>({}));if(data.user)unlock(data.user);return data.user||null}).catch(()=>null);
+  window.rsAccessReady=fetch('/api/access/me',{credentials:'same-origin'}).then(async r=>{const data=await r.json().catch(()=>({}));window.rsGoogleEnabled=!!data.google_enabled;const gb=document.getElementById('googleLoginBtn');if(gb&&!data.google_enabled){gb.hidden=true}if(data.user)unlock(data.user);return data.user||null}).catch(()=>null);
   window.rsRefreshAccountButton=refreshAccountButton;
   document.querySelectorAll('[data-access-tab]').forEach(btn=>btn.addEventListener('click',()=>{
     const register=btn.dataset.accessTab==='register';
@@ -1597,14 +1598,16 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     e.preventDefault();const form=e.currentTarget,btn=form.querySelector('button');btn.disabled=true;showMessage('Memeriksa akun...');
     try{await jsonRequest('/api/access/login',Object.fromEntries(new FormData(form)));location.reload()}catch(err){showMessage(err.message,'err');btn.disabled=false}
   });
+  document.getElementById('googleLoginBtn').addEventListener('click',()=>{location.href='/api/access/google/login'});
   document.getElementById('accessRegisterForm').addEventListener('submit',async e=>{
     e.preventDefault();const form=e.currentTarget,btn=form.querySelector('button');btn.disabled=true;showMessage('Mengirim permintaan akses...');
     try{const res=await jsonRequest('/api/access/register',Object.fromEntries(new FormData(form)));showMessage(res.message,'ok');form.reset()}catch(err){showMessage(err.message,'err')}finally{btn.disabled=false}
   });
   window.openAccessPanel=async function(){
     if(!currentUser)return;
-    panel.style.display='flex';panel.innerHTML='<section class="access-admin-card"><div class="access-admin-head"><div><h2>Akun</h2><p>'+currentUser.name+' · '+currentUser.email+'</p></div><button class="access-close" aria-label="Tutup">×</button></div><div id="accessAdminContent">Memuat…</div><button class="access-logout" type="button">Keluar dari akun</button></section>';
+    panel.style.display='flex';panel.innerHTML='<section class="access-admin-card"><div class="access-admin-head"><div><h2>Profil akun</h2><p>'+currentUser.email+'</p></div><button class="access-close" aria-label="Tutup">×</button></div><form id="profileForm" class="access-form" style="margin-bottom:16px"><label>Nama profil<input name="name" value="'+escapeHtml(currentUser.name)+'" maxlength="60" required></label><label>Link foto profil <small>(opsional; foto Google otomatis dipakai)</small><input name="avatar_url" value="'+escapeHtml(currentUser.avatar_url||'')+'" placeholder="https://..."></label><button class="access-submit" type="submit">Simpan profil</button></form><div id="accessAdminContent">Memuat…</div><button class="access-logout" type="button">Keluar dari akun</button></section>';
     panel.querySelector('.access-close').onclick=()=>panel.style.display='none';
+    panel.querySelector('#profileForm').onsubmit=async e=>{e.preventDefault();try{const out=await jsonRequest('/api/access/profile',Object.fromEntries(new FormData(e.currentTarget)));currentUser=out.user;window.rsAccessUser=out.user;refreshAccountButton();showMessage('Profil tersimpan.','ok')}catch(err){showMessage(err.message,'err')}};
     panel.querySelector('.access-logout').onclick=async()=>{await jsonRequest('/api/access/logout');location.reload()};
     if(!currentUser.is_admin){panel.querySelector('#accessAdminContent').innerHTML='<p style="color:var(--muted);font-size:13px">Akunmu sudah aktif. Terima kasih sudah ikut menjaga komunitas Ranah Saham.</p>';return}
     try{
@@ -2415,7 +2418,6 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <div class="note-wrap" style="margin:0 0 8px"><button type="button" class="note-toggle"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Tentang forum</button><div class="note-body">Tanya seputar analisis saham ke komunitas atau admin. Konten dari pengguna (tanpa akun/verifikasi identitas) — bukan nasihat investasi resmi, DYOR.</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn" id="forumNewBtn">+ Pertanyaan Baru</button>
-        <button class="btn ghost" id="forumAdminBtn" style="font-size:12px;padding:7px 12px">Admin</button>
       </div>
       <div id="forumAdminBox"></div>
       <div id="forumNewBox"></div>
@@ -4853,6 +4855,11 @@ function _forumTimeAgo(iso){return _timeAgo((iso||'').replace(' ','T'))||_forumF
 function _forumAdminBadge(isAdmin){
   return isAdmin?` <span class="chip" style="font-size:9.5px;padding:1px 6px;color:var(--gold);border-color:var(--gold)66">Admin</span>`:'';
 }
+function _forumAvatar(item,size=24){
+  const src=item&&item.author_avatar_url;
+  const initial=escHtml((item&&item.nama||'?').slice(0,1).toUpperCase());
+  return src?`<img src="${escHtml(src)}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;vertical-align:middle">`:`<span style="display:inline-grid;place-items:center;width:${size}px;height:${size}px;border-radius:50%;background:var(--elev);border:1px solid var(--line);font-size:11px;font-weight:700;color:var(--gold)">${initial}</span>`;
+}
 function _forumKategoriBadge(kategori){
   return `<span class="chip" style="font-size:9.5px;padding:1px 6px">${FORUM_KATEGORI[kategori]||FORUM_KATEGORI.umum}</span>`;
 }
@@ -4860,14 +4867,14 @@ function _forumKategoriBadge(kategori){
 // BUKAN batas keamanan sungguhan, server tetap verifikasi ulang tiap
 // request DELETE (lihat _forum_is_admin di web/app.py).
 function _forumDeleteBtn(kind,id){
-  if(!rsGet('rs_forum_admin_code'))return '';
+  if(!window.rsAccessUser?.is_admin)return '';
   return `<button class="btn ghost forum-del-btn" data-kind="${kind}" data-id="${id}" style="padding:3px 9px;font-size:11px;color:var(--bear);border-color:var(--bear)55">${icon('trash',{size:11})} Hapus</button>`;
 }
 async function _forumDelete(kind,id){
   if(!confirm('Hapus permanen? Tidak bisa dibatalkan.'))return;
   try{
     const url=kind==='thread'?`/api/forum/threads/${id}`:`/api/forum/replies/${id}`;
-    const resp=await fetch(url,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_code:rsGet('rs_forum_admin_code')})});
+    const resp=await fetch(url,{method:'DELETE'});
     if(!resp.ok) throw new Error(await _respErr(resp,'Gagal menghapus.'));
     toast('Terhapus.','ok');
     if(kind==='thread'){loadForum()}else{renderForumThread(_forumCurrentThreadId)}
@@ -4977,7 +4984,7 @@ function _forumReportBtn(kind,id){
 // tersimpan lokal), server tetap verifikasi ulang admin_code (lihat
 // _forum_is_admin di web/app.py) -- sama pola dgn _forumDeleteBtn.
 function _forumBestBtn(r){
-  if(!rsGet('rs_forum_admin_code'))return '';
+  if(!window.rsAccessUser?.is_admin)return '';
   return `<button class="forum-vote-btn forum-best-btn" data-id="${r.id}">${icon('award',{size:12})} ${r.is_best_answer?'Lepas Jawaban Terbaik':'Tandai Jawaban Terbaik'}</button>`;
 }
 async function _forumUpvote(btn){
@@ -5008,8 +5015,7 @@ async function _forumReport(btn){
 }
 async function _forumToggleBest(btn){
   try{
-    const resp=await fetch(`/api/forum/replies/${btn.dataset.id}/best-answer`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({admin_code:rsGet('rs_forum_admin_code')})});
+    const resp=await fetch(`/api/forum/replies/${btn.dataset.id}/best-answer`,{method:'POST'});
     if(!resp.ok) throw new Error(await _respErr(resp,'Gagal.'));
     toast('Status jawaban terbaik diperbarui.','ok');
     renderForumThread(_forumCurrentThreadId);
@@ -5034,7 +5040,7 @@ function _forumAdminBoxHtml(){
 function _forumNewFormHtml(){
   const katChips=Object.keys(FORUM_KATEGORI).map(k=>`<button type="button" class="chip forum-kat-pick${k==='umum'?' active':''}" data-kat="${k}">${FORUM_KATEGORI[k]}</button>`).join('');
   return `<div class="panel" style="margin-top:10px">
-    <label class="fld" style="margin-bottom:10px">Nama<input id="forumNewNama" placeholder="Nama kamu" maxlength="50" value="${escHtml(rsGet('rs_forum_name'))}" style="width:100%;box-sizing:border-box"></label>
+    <p class="muted" style="font-size:12px">Posting sebagai <b style="color:var(--text)">${escHtml((window.rsAccessUser||{}).name||'Akun')}</b>. Ubah di menu Akun.</p>
     <label class="fld" style="margin-bottom:10px">Judul pertanyaan<input id="forumNewJudul" placeholder="Judul singkat pertanyaanmu" maxlength="200" style="width:100%;box-sizing:border-box"></label>
     <label class="fld" style="margin-bottom:10px">Isi<textarea id="forumNewIsi" placeholder="Jelaskan pertanyaanmu... (kode saham spt BBCA otomatis jadi link)" maxlength="5000"></textarea></label>
     ${_forumImagePickerHtml('forumNew')}
@@ -5136,7 +5142,7 @@ async function _forumFetchList(){
             <div style="font-weight:700;font-size:15px;line-height:1.35;margin-top:6px">${_forumLinkTickers(escHtml(t.judul),t.tickers)}</div>
             ${snippet?`<div class="forum-snippet">${_forumLinkTickers(escHtml(snippet),t.tickers)}</div>`:''}
             <div class="muted" style="font-size:12px;margin-top:8px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
-              <span>${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)}</span>
+              <span style="display:inline-flex;align-items:center;gap:6px">${_forumAvatar(t,20)}${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)}</span>
               <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span>
               <span class="forum-metric">${icon('message-square',{size:12})} ${t.reply_count}</span>
               ${t.total_upvotes>0?`<span class="forum-metric">${icon('thumbs-up',{size:12})} ${t.total_upvotes}</span>`:''}
@@ -5160,7 +5166,7 @@ async function renderForumThread(id){
   const t=d.thread, replies=d.replies||[];
   const repliesHtml=replies.length?replies.map(r=>`<div class="panel${r.is_best_answer?' forum-best':''}" style="background:var(--panel2)">
     <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
-      <div class="muted" style="font-size:12px">${escHtml(r.nama)}${_forumAdminBadge(r.is_admin)} · <span title="${_forumFmtDate(r.created_at)}">${_forumTimeAgo(r.created_at)}</span>${r.is_best_answer?` <span class="chip" style="font-size:9.5px;padding:1px 6px;color:var(--gold);border-color:var(--gold)66">${icon('award',{size:9})} Jawaban Terbaik</span>`:''}</div>
+      <div class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px">${_forumAvatar(r,20)}${escHtml(r.nama)}${_forumAdminBadge(r.is_admin)} · <span title="${_forumFmtDate(r.created_at)}">${_forumTimeAgo(r.created_at)}</span>${r.is_best_answer?` <span class="chip" style="font-size:9.5px;padding:1px 6px;color:var(--gold);border-color:var(--gold)66">${icon('award',{size:9})} Jawaban Terbaik</span>`:''}</div>
       ${_forumDeleteBtn('reply',r.id)}
     </div>
     <div style="margin-top:6px;white-space:pre-wrap">${_forumLinkTickers(escHtml(r.isi),r.tickers)}</div>
@@ -5174,14 +5180,14 @@ async function renderForumThread(id){
         <p class="eyebrow" style="margin:0">${_forumLinkTickers(escHtml(t.judul),t.tickers)}</p>
         <div style="display:flex;gap:6px;flex-wrap:wrap">${_forumReportBtn('thread',t.id)}${_forumDeleteBtn('thread',t.id)}</div>
       </div>
-      <div class="muted" style="font-size:12px;margin:6px 0 10px">${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)} · <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span> · ${_forumKategoriBadge(t.kategori)}</div>
+      <div class="muted" style="font-size:12px;margin:6px 0 10px;display:flex;align-items:center;gap:6px">${_forumAvatar(t,20)}${escHtml(t.nama)}${_forumAdminBadge(t.is_admin)} · <span title="${_forumFmtDate(t.created_at)}">${_forumTimeAgo(t.created_at)}</span> · ${_forumKategoriBadge(t.kategori)}</div>
       <div style="white-space:pre-wrap">${_forumLinkTickers(escHtml(t.isi),t.tickers)}</div>
       ${_forumImageHtml(t.images||t.image_data)}
     </section>
     <p class="muted" style="font-size:12px;margin:14px 0 8px">${replies.length} balasan</p>
     <div style="display:flex;flex-direction:column;gap:8px">${repliesHtml}</div>
     <div class="panel" style="margin-top:14px">
-      <label class="fld" style="margin-bottom:10px">Nama<input id="forumReplyNama" placeholder="Nama kamu" maxlength="50" value="${escHtml(rsGet('rs_forum_name'))}" style="width:100%;box-sizing:border-box"></label>
+      <p class="muted" style="font-size:12px">Membalas sebagai <b style="color:var(--text)">${escHtml((window.rsAccessUser||{}).name||'Akun')}</b>.</p>
       <label class="fld" style="margin-bottom:10px">Balasan<textarea id="forumReplyIsi" placeholder="Tulis balasanmu..." maxlength="5000"></textarea></label>
       ${_forumImagePickerHtml('forumReply')}
       <button class="btn" id="forumReplySubmit">Kirim Balasan</button>
@@ -5195,20 +5201,18 @@ async function renderForumThread(id){
 
 async function _forumSubmitThread(){
   const btn=$('#forumNewSubmit');
-  const nama=($('#forumNewNama').value||'').trim();
   const judul=($('#forumNewJudul').value||'').trim();
   const isi=($('#forumNewIsi').value||'').trim();
   const images=_forumSelectedImages('forumNew');
   const katEl=$('#forumNewKat')?$('#forumNewKat').querySelector('.forum-kat-pick.active'):null;
   const kategori=katEl?katEl.dataset.kat:'umum';
-  if(!nama||!judul||!isi){toast('Nama, judul, dan isi wajib diisi.','err');return}
+  if(!judul||!isi){toast('Judul dan isi wajib diisi.','err');return}
   setBtnLoading(btn,true);
   try{
     const resp=await fetch('/api/forum/threads',{method:'POST',
-      body:_forumFormData({nama,judul,isi,kategori,admin_code:rsGet('rs_forum_admin_code')},images)});
+      body:_forumFormData({judul,isi,kategori},images)});
     if(!resp.ok) throw new Error(await _respErr(resp,'Gagal mengirim.'));
     const created=await resp.json();
-    rsSet('rs_forum_name',nama);
     if(created&&created.id)_forumFollowThread(created.id,0);// baru, belum ada balasan -> baseline 0
     toast('Pertanyaan terkirim.','ok');
     $('#forumNewBox').innerHTML='';
@@ -5219,17 +5223,15 @@ async function _forumSubmitThread(){
 
 async function _forumSubmitReply(threadId){
   const btn=$('#forumReplySubmit');
-  const nama=($('#forumReplyNama').value||'').trim();
   const isi=($('#forumReplyIsi').value||'').trim();
   const images=_forumSelectedImages('forumReply');
-  if(!nama||!isi){toast('Nama dan isi balasan wajib diisi.','err');return}
+  if(!isi){toast('Isi balasan wajib diisi.','err');return}
   setBtnLoading(btn,true);
   try{
     const resp=await fetch(`/api/forum/threads/${threadId}/replies`,{method:'POST',
-      body:_forumFormData({nama,isi,admin_code:rsGet('rs_forum_admin_code')},images)});
+      body:_forumFormData({isi},images)});
     if(!resp.ok) throw new Error(await _respErr(resp,'Gagal mengirim.'));
     const created=await resp.json();
-    rsSet('rs_forum_name',nama);
     // Ikuti thread yang kita balas -- catat latest_reply_id sbg baseline
     // supaya balasan BERIKUTNYA (dari orang lain) memicu notifikasi, tapi
     // balasan kita sendiri barusan tidak.
@@ -5252,7 +5254,7 @@ $('#forumNewBtn').addEventListener('click',()=>{
     }));
   }
 });
-$('#forumAdminBtn').addEventListener('click',()=>{
+$('#forumAdminBtn')?.addEventListener('click',()=>{
   const box=$('#forumAdminBox');
   box.innerHTML=box.innerHTML?'':_forumAdminBoxHtml();
   if(box.innerHTML){

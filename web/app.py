@@ -29,12 +29,14 @@ import hashlib
 import hmac
 import json
 import uuid
+from urllib.parse import urlencode
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
 import redis
 import pickle
 import pandas as pd
+import httpx
 
 
 # socket_connect_timeout/socket_timeout WAJIB diisi: redis-py sinkron
@@ -63,7 +65,7 @@ if sys.platform == "win32":
 import pandas as pd
 import yfinance as yf
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -93,11 +95,12 @@ from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
 from core.volume_patterns import calculate_ad_line
 from core.charts.snr_chart import calculate_snr_levels
-from core.config import SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS, ACCESS_COOKIE_SECURE
+from core.config import (SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS, ACCESS_COOKIE_SECURE,
+                         GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)
 from core.access import (
     SESSION_DAYS, admin_is_configured, authenticate, ensure_access_tables,
     ensure_bootstrap_admin, get_session_user, list_users, register_user,
-    revoke_session, set_user_status,
+    revoke_session, set_user_status, update_profile, create_session_for_user, upsert_google_user,
 )
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
@@ -366,7 +369,8 @@ async def _access_payload(request: Request) -> dict:
 @app.get("/api/access/me")
 async def api_access_me(request: Request):
     user = _access_user(request)
-    return {"user": user, "admin_configured": admin_is_configured()}
+    return {"user": user, "admin_configured": admin_is_configured(),
+            "google_enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)}
 
 
 @app.post("/api/access/register")
@@ -408,6 +412,68 @@ async def api_access_logout(request: Request):
     revoke_session(request.cookies.get("rs_session"))
     response = JSONResponse({"ok": True})
     response.delete_cookie("rs_session", path="/", secure=ACCESS_COOKIE_SECURE, samesite="lax")
+    return response
+
+
+@app.post("/api/access/profile")
+async def api_access_profile(request: Request):
+    user = _access_user(request)
+    if not user:
+        raise HTTPException(401, "Silakan masuk terlebih dahulu.")
+    body = await _access_payload(request)
+    try:
+        updated = update_profile(user["id"], body.get("name", ""), body.get("avatar_url"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"user": updated}
+
+
+@app.get("/api/access/google/login")
+async def api_access_google_login():
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(503, "Login Google belum dikonfigurasi admin.")
+    state = uuid.uuid4().hex + uuid.uuid4().hex
+    params = urlencode({"client_id": GOOGLE_CLIENT_ID, "redirect_uri": GOOGLE_REDIRECT_URI,
+                        "response_type": "code", "scope": "openid email profile", "state": state,
+                        "prompt": "select_account"})
+    response = RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+    response.set_cookie("rs_google_state", state, httponly=True, secure=ACCESS_COOKIE_SECURE,
+                        samesite="lax", max_age=600, path="/")
+    return response
+
+
+@app.get("/api/access/google/callback")
+async def api_access_google_callback(request: Request):
+    state = request.query_params.get("state", "")
+    expected = request.cookies.get("rs_google_state", "")
+    if not state or not expected or not hmac.compare_digest(state, expected):
+        return RedirectResponse("/?google=state_error")
+    error = request.query_params.get("error")
+    code = request.query_params.get("code")
+    if error or not code:
+        return RedirectResponse("/?google=cancelled")
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            token_res = await client.post("https://oauth2.googleapis.com/token", data={
+                "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": GOOGLE_REDIRECT_URI, "grant_type": "authorization_code",
+            })
+            token_res.raise_for_status()
+            access_token = token_res.json().get("access_token")
+            info_res = await client.get("https://openidconnect.googleapis.com/v1/userinfo",
+                                        headers={"Authorization": f"Bearer {access_token}"})
+            info_res.raise_for_status()
+            info = info_res.json()
+        if not info.get("sub") or not info.get("email") or not info.get("email_verified"):
+            raise ValueError("Email Google belum terverifikasi.")
+        user = upsert_google_user(info["sub"], info["email"], info.get("name", ""), info.get("picture"))
+    except Exception:
+        return RedirectResponse("/?google=failed")
+    response = RedirectResponse("/?google=ok" if user["status"] == "approved" else "/?google=pending")
+    response.delete_cookie("rs_google_state", path="/", secure=ACCESS_COOKIE_SECURE, samesite="lax")
+    if user["status"] == "approved":
+        response.set_cookie("rs_session", create_session_for_user(user["id"]), httponly=True,
+                            secure=ACCESS_COOKIE_SECURE, samesite="lax", max_age=SESSION_DAYS * 86400, path="/")
     return response
 
 
@@ -927,14 +993,15 @@ async def api_forum_thread_detail(thread_id: int):
 async def api_forum_create_thread(request: Request):
     _forum_rate_limit(request)
     body = await _forum_request_body(request)
-    nama = _forum_text(body.get("nama"), FORUM_NAMA_MAX, "Nama")
+    user = _access_user(request)
+    if not user:
+        raise HTTPException(401, "Silakan masuk terlebih dahulu.")
     judul = _forum_text(body.get("judul"), FORUM_JUDUL_MAX, "Judul")
     isi = _forum_text(body.get("isi"), FORUM_ISI_MAX, "Isi")
     image_data = body.get("image_data") if body.get("_image_data_ready") else _forum_image_data(body.get("image_data", body.get("images")))
-    is_admin = _forum_admin_flag(body)
     kategori = _forum_kategori_flag(body.get("kategori"))
     from core.forum import create_thread
-    created = await asyncio.to_thread(create_thread, nama, judul, isi, is_admin, kategori, image_data)
+    created = await asyncio.to_thread(create_thread, user["name"], judul, isi, user["is_admin"], kategori, image_data, user["id"], user.get("avatar_url"))
     created["images"] = _forum_images_out(created.get("image_data"))
     return _py(created)
 
@@ -943,12 +1010,13 @@ async def api_forum_create_thread(request: Request):
 async def api_forum_create_reply(thread_id: int, request: Request):
     _forum_rate_limit(request)
     body = await _forum_request_body(request)
-    nama = _forum_text(body.get("nama"), FORUM_NAMA_MAX, "Nama")
+    user = _access_user(request)
+    if not user:
+        raise HTTPException(401, "Silakan masuk terlebih dahulu.")
     isi = _forum_text(body.get("isi"), FORUM_ISI_MAX, "Isi")
     image_data = body.get("image_data") if body.get("_image_data_ready") else _forum_image_data(body.get("image_data", body.get("images")))
-    is_admin = _forum_admin_flag(body)
     from core.forum import create_reply
-    reply = await asyncio.to_thread(create_reply, thread_id, nama, isi, is_admin, image_data)
+    reply = await asyncio.to_thread(create_reply, thread_id, user["name"], isi, user["is_admin"], image_data, user["id"], user.get("avatar_url"))
     if reply is None:
         raise HTTPException(404, "Thread tidak ditemukan.")
     reply["images"] = _forum_images_out(reply.get("image_data"))
@@ -958,9 +1026,7 @@ async def api_forum_create_reply(thread_id: int, request: Request):
 @app.delete("/api/forum/threads/{thread_id}")
 async def api_forum_delete_thread(thread_id: int, request: Request):
     _forum_rate_limit(request)
-    body = await request.json()
-    if not _forum_is_admin((body.get("admin_code") or "").strip()):
-        raise HTTPException(400, "Kode admin salah/kosong.")
+    _require_admin(request)
     from core.forum import delete_thread
     if not await asyncio.to_thread(delete_thread, thread_id):
         raise HTTPException(404, "Thread tidak ditemukan.")
@@ -970,9 +1036,7 @@ async def api_forum_delete_thread(thread_id: int, request: Request):
 @app.delete("/api/forum/replies/{reply_id}")
 async def api_forum_delete_reply(reply_id: int, request: Request):
     _forum_rate_limit(request)
-    body = await request.json()
-    if not _forum_is_admin((body.get("admin_code") or "").strip()):
-        raise HTTPException(400, "Kode admin salah/kosong.")
+    _require_admin(request)
     from core.forum import delete_reply
     if not await asyncio.to_thread(delete_reply, reply_id):
         raise HTTPException(404, "Balasan tidak ditemukan.")
@@ -992,9 +1056,7 @@ async def api_forum_upvote_reply(reply_id: int, request: Request):
 @app.post("/api/forum/replies/{reply_id}/best-answer")
 async def api_forum_best_answer(reply_id: int, request: Request):
     _forum_rate_limit(request)
-    body = await request.json()
-    if not _forum_is_admin((body.get("admin_code") or "").strip()):
-        raise HTTPException(400, "Kode admin salah/kosong.")
+    _require_admin(request)
     from core.forum import set_best_answer
     reply = await asyncio.to_thread(set_best_answer, reply_id)
     if reply is None:

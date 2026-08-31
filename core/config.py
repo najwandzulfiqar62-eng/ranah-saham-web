@@ -77,3 +77,10 @@ ACCESS_ADMIN_PASSWORD = os.environ.get("ACCESS_ADMIN_PASSWORD", "")
 # Cookie sesi harus secure di domain HTTPS produksi. Untuk pengembangan lokal
 # tanpa HTTPS saja, set ACCESS_COOKIE_SECURE=0 di .env lokal.
 ACCESS_COOKIE_SECURE = os.environ.get("ACCESS_COOKIE_SECURE", "1") != "0"
+
+# OAuth Google (opsional; tombol Google otomatis nonaktif bila kosong).
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.environ.get(
+    "GOOGLE_REDIRECT_URI", "https://ranahsaham.com/api/access/google/callback"
+).strip()

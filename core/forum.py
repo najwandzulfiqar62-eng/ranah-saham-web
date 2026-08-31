@@ -73,6 +73,10 @@ def _ensure_table():
             conn.execute("ALTER TABLE forum_thread ADD COLUMN report_count INTEGER NOT NULL DEFAULT 0")
         if "image_data" not in cols_t:
             conn.execute("ALTER TABLE forum_thread ADD COLUMN image_data TEXT")
+        if "author_user_id" not in cols_t:
+            conn.execute("ALTER TABLE forum_thread ADD COLUMN author_user_id INTEGER")
+        if "author_avatar_url" not in cols_t:
+            conn.execute("ALTER TABLE forum_thread ADD COLUMN author_avatar_url TEXT")
 
         cols_r = {r["name"] for r in conn.execute("PRAGMA table_info(forum_reply)").fetchall()}
         if "upvotes" not in cols_r:
@@ -83,6 +87,10 @@ def _ensure_table():
             conn.execute("ALTER TABLE forum_reply ADD COLUMN report_count INTEGER NOT NULL DEFAULT 0")
         if "image_data" not in cols_r:
             conn.execute("ALTER TABLE forum_reply ADD COLUMN image_data TEXT")
+        if "author_user_id" not in cols_r:
+            conn.execute("ALTER TABLE forum_reply ADD COLUMN author_user_id INTEGER")
+        if "author_avatar_url" not in cols_r:
+            conn.execute("ALTER TABLE forum_reply ADD COLUMN author_avatar_url TEXT")
     _ensured = True
 
 
@@ -93,6 +101,8 @@ def create_thread(
     is_admin: bool,
     kategori: str = "umum",
     image_data: str | None = None,
+    author_user_id: int | None = None,
+    author_avatar_url: str | None = None,
 ) -> dict:
     """Simpan thread baru, return baris yang baru dibuat (id, nama, judul,
     isi, is_admin, kategori, created_at) -- caller (web/app.py) sudah
@@ -102,8 +112,8 @@ def create_thread(
     _ensure_table()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO forum_thread (nama, judul, isi, is_admin, kategori, image_data) VALUES (?, ?, ?, ?, ?, ?)",
-            (nama, judul, isi, int(is_admin), kategori, image_data),
+            "INSERT INTO forum_thread (nama, judul, isi, is_admin, kategori, image_data, author_user_id, author_avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (nama, judul, isi, int(is_admin), kategori, image_data, author_user_id, author_avatar_url),
         )
         new_id = cur.lastrowid
         row = conn.execute("SELECT * FROM forum_thread WHERE id = ?", (new_id,)).fetchone()
@@ -116,6 +126,8 @@ def create_reply(
     isi: str,
     is_admin: bool,
     image_data: str | None = None,
+    author_user_id: int | None = None,
+    author_avatar_url: str | None = None,
 ) -> dict | None:
     """Simpan balasan baru. Returns None kalau thread_id tidak ada --
     caller mengangkat 404. Cek keberadaan thread DAN insert dalam SATU
@@ -127,8 +139,8 @@ def create_reply(
         if exists is None:
             return None
         cur = conn.execute(
-            "INSERT INTO forum_reply (thread_id, nama, isi, is_admin, image_data) VALUES (?, ?, ?, ?, ?)",
-            (thread_id, nama, isi, int(is_admin), image_data),
+            "INSERT INTO forum_reply (thread_id, nama, isi, is_admin, image_data, author_user_id, author_avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (thread_id, nama, isi, int(is_admin), image_data, author_user_id, author_avatar_url),
         )
         new_id = cur.lastrowid
         row = conn.execute("SELECT * FROM forum_reply WHERE id = ?", (new_id,)).fetchone()
