@@ -60,3 +60,18 @@ def test_access_requires_approved_account_and_admin_can_approve(client, clean_ac
     me = client.get("/api/access/me").json()["user"]
     assert me["email"] == "baru@example.com"
     assert me["status"] == "approved"
+
+
+def test_rejected_email_can_resubmit_with_new_proof(clean_access_db):
+    from core.access import list_users, register_user, set_user_status
+
+    register_user("Pemohon", "ulang@example.com", "password-pengguna-aman", "bukti-lama.jpg")
+    user = list_users("pending")[0]
+    set_user_status(user["id"], "rejected")
+
+    again = register_user("Pemohon Baru", "ulang@example.com", "password-baru-aman", "bukti-baru.jpg")
+    assert "Pendaftaran ulang" in again["message"]
+    pending = list_users("pending")
+    assert len(pending) == 1
+    assert pending[0]["email"] == "ulang@example.com"
+    assert pending[0]["has_proof"] is True

@@ -164,8 +164,24 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
     if not proof_filename:
         raise ValueError("Bukti anggota grup WhatsApp Ranah Invest wajib diunggah.")
     with get_db() as conn:
-        exists = conn.execute("SELECT 1 FROM access_user WHERE email = ?", (email,)).fetchone()
+        exists = conn.execute("SELECT id, status, is_admin, proof_filename FROM access_user WHERE email = ?", (email,)).fetchone()
         if exists:
+            # Penolakan bukan blokir permanen: pemohon boleh memperbaiki
+            # screenshot bukti lalu mengirim pendaftaran ulang dengan email
+            # yang sama. Akun admin tidak pernah boleh tersentuh jalur ini.
+            if exists["status"] == "rejected" and not exists["is_admin"]:
+                old_proof = exists["proof_filename"]
+                conn.execute(
+                    """UPDATE access_user
+                       SET name = ?, password_hash = ?, status = 'pending',
+                           created_at = ?, approved_at = NULL, proof_filename = ?
+                       WHERE id = ?""",
+                    (name, _hash_password(password), _now(), proof_filename, exists["id"]),
+                )
+                return {
+                    "message": "Pendaftaran ulang diterima. Bukti baru akan diperiksa admin.",
+                    "_old_proof_filename": old_proof,
+                }
             raise ValueError("Email ini sudah terdaftar. Silakan masuk atau tunggu persetujuan admin.")
         conn.execute(
             """INSERT INTO access_user (name, email, password_hash, status, is_admin, created_at, proof_filename)

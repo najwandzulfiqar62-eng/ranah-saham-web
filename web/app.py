@@ -481,6 +481,7 @@ async def api_access_register(request: Request):
     except ValueError as exc:
         _delete_access_proof(proof_filename)
         raise HTTPException(status_code=400, detail=str(exc))
+    _delete_access_proof(result.pop("_old_proof_filename", None))
     return result
 
 
