@@ -102,18 +102,33 @@ def ensure_access_tables() -> None:
 
 
 def ensure_bootstrap_admin() -> bool:
-    """Buat admin pertama sekali bila env deployment sudah dikonfigurasi."""
+    """Pastikan email admin dari environment selalu menjadi admin aktif.
+
+    Kasus penting: pemilik web bisa saja sudah lebih dulu mendaftarkan email
+    yang sama lewat formulir publik. Jangan biarkan baris `pending` itu
+    menghalangi bootstrap admin; konfigurasi server harus menjadi sumber
+    kebenaran untuk akun pemilik.
+    """
     ensure_access_tables()
     if not ACCESS_ADMIN_EMAIL or not ACCESS_ADMIN_PASSWORD:
         return False
     with get_db() as conn:
         row = conn.execute("SELECT id FROM access_user WHERE email = ?", (ACCESS_ADMIN_EMAIL,)).fetchone()
+        password_hash = _hash_password(ACCESS_ADMIN_PASSWORD)
         if row is None:
             conn.execute(
                 """INSERT INTO access_user
                    (name, email, password_hash, status, is_admin, created_at, approved_at)
                    VALUES (?, ?, ?, 'approved', 1, ?, ?)""",
-                ("Admin Ranah Saham", ACCESS_ADMIN_EMAIL, _hash_password(ACCESS_ADMIN_PASSWORD), _now(), _now()),
+                ("Admin Ranah Saham", ACCESS_ADMIN_EMAIL, password_hash, _now(), _now()),
+            )
+        else:
+            conn.execute(
+                """UPDATE access_user
+                   SET password_hash = ?, status = 'approved', is_admin = 1,
+                       approved_at = COALESCE(approved_at, ?)
+                   WHERE id = ?""",
+                (password_hash, _now(), row["id"]),
             )
     return True
 
