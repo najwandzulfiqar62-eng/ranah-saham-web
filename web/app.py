@@ -103,6 +103,7 @@ from core.access import (
     SESSION_DAYS, admin_is_configured, authenticate, ensure_access_tables,
     ensure_bootstrap_admin, get_session_user, list_users, register_user,
     revoke_session, set_user_status, update_profile, create_session_for_user, upsert_google_user,
+    revoke_user_approval, get_proof_filename, update_proof_filename,
 )
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
@@ -370,6 +371,8 @@ async def _access_payload(request: Request) -> dict:
 
 _PROFILE_UPLOAD_DIR = os.path.join(_STATIC, "profile_uploads")
 _PROFILE_AVATAR_MAX_BYTES = 2 * 1024 * 1024
+_ACCESS_PROOF_DIR = os.path.join(_BASE, "private_uploads", "access_proofs")
+_ACCESS_PROOF_MAX_BYTES = 4 * 1024 * 1024
 
 
 async def _save_profile_avatar(file, user_id: int) -> str | None:
@@ -414,11 +417,49 @@ def _delete_local_profile_avatar(url: str | None) -> None:
         pass
 
 
+async def _save_access_proof(file) -> str:
+    """Simpan bukti ke folder privat; file hanya disajikan lewat endpoint admin."""
+    if not file or not getattr(file, "filename", ""):
+        raise HTTPException(400, "Screenshot bukti anggota grup wajib diunggah.")
+    if (getattr(file, "content_type", "") or "").lower() not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(400, "Bukti harus berupa screenshot JPG, PNG, atau WEBP.")
+    raw = await file.read(_ACCESS_PROOF_MAX_BYTES + 1)
+    if not raw or len(raw) > _ACCESS_PROOF_MAX_BYTES:
+        raise HTTPException(400, "Ukuran bukti maksimal 4 MB.")
+    try:
+        image = Image.open(BytesIO(raw))
+        image.verify()
+        image = Image.open(BytesIO(raw)).convert("RGB")
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(400, "Berkas bukti bukan gambar yang valid.")
+    image.thumbnail((1800, 1800))
+    os.makedirs(_ACCESS_PROOF_DIR, exist_ok=True)
+    filename = f"proof_{uuid.uuid4().hex}.jpg"
+    image.save(os.path.join(_ACCESS_PROOF_DIR, filename), format="JPEG", quality=90, optimize=True)
+    return filename
+
+
+def _delete_access_proof(filename: str | None) -> None:
+    if not filename:
+        return
+    path = os.path.join(_ACCESS_PROOF_DIR, os.path.basename(filename))
+    try:
+        if os.path.commonpath([_ACCESS_PROOF_DIR, path]) == _ACCESS_PROOF_DIR:
+            os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
 @app.get("/api/access/me")
 async def api_access_me(request: Request):
     user = _access_user(request)
+    pending_proof = False
+    if not user:
+        candidate = get_session_user(request.cookies.get("rs_session"), include_pending=True)
+        pending_proof = bool(candidate and candidate["status"] == "pending" and candidate.get("has_google_login"))
     return {"user": user, "admin_configured": admin_is_configured(),
-            "google_enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)}
+            "google_enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
+            "pending_proof": pending_proof}
 
 
 @app.post("/api/access/register")
@@ -428,12 +469,37 @@ async def api_access_register(request: Request):
             status_code=503,
             detail="Akses belum siap: admin perlu dikonfigurasi dulu di server.",
         )
-    body = await _access_payload(request)
+    proof_filename = None
+    if (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        form = await request.form()
+        proof_filename = await _save_access_proof(form.get("proof"))
+        body = {"name": form.get("name", ""), "email": form.get("email", ""), "password": form.get("password", "")}
+    else:
+        body = await _access_payload(request)
     try:
-        result = register_user(body.get("name", ""), body.get("email", ""), body.get("password", ""))
+        result = register_user(body.get("name", ""), body.get("email", ""), body.get("password", ""), proof_filename)
     except ValueError as exc:
+        _delete_access_proof(proof_filename)
         raise HTTPException(status_code=400, detail=str(exc))
     return result
+
+
+@app.post("/api/access/proof")
+async def api_access_pending_proof(request: Request):
+    user = get_session_user(request.cookies.get("rs_session"), include_pending=True)
+    if not user or user["status"] != "pending" or not user.get("has_google_login"):
+        raise HTTPException(401, "Sesi upload bukti tidak tersedia. Masuk dengan Google lagi.")
+    if not (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        raise HTTPException(400, "Kirim screenshot bukti dalam formulir.")
+    form = await request.form()
+    filename = await _save_access_proof(form.get("proof"))
+    old_filename = get_proof_filename(user["id"])
+    updated = update_proof_filename(user["id"], filename)
+    if not updated:
+        _delete_access_proof(filename)
+        raise HTTPException(400, "Bukti hanya dapat diunggah saat akun masih menunggu persetujuan.")
+    _delete_access_proof(old_filename)
+    return {"message": "Bukti diterima. Tunggu persetujuan admin."}
 
 
 @app.post("/api/access/login")
@@ -497,6 +563,18 @@ async def api_access_admin_summary(request: Request):
     return {"pending_count": len(list_users("pending"))}
 
 
+@app.get("/api/access/admin/users/{user_id}/proof")
+async def api_access_admin_proof(user_id: int, request: Request):
+    _require_admin(request)
+    filename = get_proof_filename(user_id)
+    if not filename:
+        raise HTTPException(404, "Bukti belum diunggah.")
+    path = os.path.join(_ACCESS_PROOF_DIR, os.path.basename(filename))
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Berkas bukti tidak ditemukan.")
+    return FileResponse(path, media_type="image/jpeg", filename=f"bukti-anggota-{user_id}.jpg")
+
+
 @app.get("/api/access/google/login")
 async def api_access_google_login():
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -540,9 +618,10 @@ async def api_access_google_callback(request: Request):
         return RedirectResponse("/?google=failed")
     response = RedirectResponse("/?google=ok" if user["status"] == "approved" else "/?google=pending")
     response.delete_cookie("rs_google_state", path="/", secure=ACCESS_COOKIE_SECURE, samesite="lax")
-    if user["status"] == "approved":
-        response.set_cookie("rs_session", create_session_for_user(user["id"]), httponly=True,
-                            secure=ACCESS_COOKIE_SECURE, samesite="lax", max_age=SESSION_DAYS * 86400, path="/")
+    # Akun Google yang masih pending hanya memakai sesi ini untuk mengunggah
+    # bukti anggota; middleware tetap menolak seluruh endpoint bisnisnya.
+    response.set_cookie("rs_session", create_session_for_user(user["id"]), httponly=True,
+                        secure=ACCESS_COOKIE_SECURE, samesite="lax", max_age=SESSION_DAYS * 86400, path="/")
     return response
 
 
@@ -559,7 +638,10 @@ async def api_access_admin_users(request: Request):
 @app.post("/api/access/admin/users/{user_id}/approve")
 async def api_access_approve(user_id: int, request: Request):
     _require_admin(request)
-    user = set_user_status(user_id, "approved")
+    try:
+        user = set_user_status(user_id, "approved")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
     return {"user": user}
@@ -569,6 +651,15 @@ async def api_access_approve(user_id: int, request: Request):
 async def api_access_reject(user_id: int, request: Request):
     _require_admin(request)
     user = set_user_status(user_id, "rejected")
+    if not user:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    return {"user": user}
+
+
+@app.post("/api/access/admin/users/{user_id}/revoke")
+async def api_access_revoke(user_id: int, request: Request):
+    _require_admin(request)
+    user = revoke_user_approval(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
     return {"user": user}

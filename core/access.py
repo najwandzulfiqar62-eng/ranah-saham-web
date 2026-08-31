@@ -65,6 +65,8 @@ def _public(row) -> dict:
         "approved_at": row["approved_at"],
         "avatar_url": row["avatar_url"] if "avatar_url" in row.keys() else None,
         "bio": row["bio"] if "bio" in row.keys() else "",
+        "has_proof": bool(row["proof_filename"]) if "proof_filename" in row.keys() else False,
+        "has_google_login": bool(row["google_sub"]) if "google_sub" in row.keys() else False,
     }
 
 
@@ -105,6 +107,8 @@ def ensure_access_tables() -> None:
             conn.execute("ALTER TABLE access_user ADD COLUMN avatar_url TEXT")
         if "bio" not in cols:
             conn.execute("ALTER TABLE access_user ADD COLUMN bio TEXT NOT NULL DEFAULT ''")
+        if "proof_filename" not in cols:
+            conn.execute("ALTER TABLE access_user ADD COLUMN proof_filename TEXT")
         if "google_sub" not in cols:
             conn.execute("ALTER TABLE access_user ADD COLUMN google_sub TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_user_google_sub ON access_user(google_sub) WHERE google_sub IS NOT NULL")
@@ -147,7 +151,7 @@ def admin_is_configured() -> bool:
     return bool(ACCESS_ADMIN_EMAIL and ACCESS_ADMIN_PASSWORD)
 
 
-def register_user(name: str, email: str, password: str) -> dict:
+def register_user(name: str, email: str, password: str, proof_filename: str | None = None) -> dict:
     ensure_access_tables()
     name = " ".join((name or "").strip().split())
     email = (email or "").strip().lower()
@@ -157,14 +161,16 @@ def register_user(name: str, email: str, password: str) -> dict:
         raise ValueError("Alamat email tidak valid.")
     if not 10 <= len(password or "") <= 128:
         raise ValueError("Password minimal 10 karakter.")
+    if not proof_filename:
+        raise ValueError("Bukti anggota grup WhatsApp Ranah Invest wajib diunggah.")
     with get_db() as conn:
         exists = conn.execute("SELECT 1 FROM access_user WHERE email = ?", (email,)).fetchone()
         if exists:
             raise ValueError("Email ini sudah terdaftar. Silakan masuk atau tunggu persetujuan admin.")
         conn.execute(
-            """INSERT INTO access_user (name, email, password_hash, status, is_admin, created_at)
-               VALUES (?, ?, ?, 'pending', 0, ?)""",
-            (name, email, _hash_password(password), _now()),
+            """INSERT INTO access_user (name, email, password_hash, status, is_admin, created_at, proof_filename)
+               VALUES (?, ?, ?, 'pending', 0, ?, ?)""",
+            (name, email, _hash_password(password), _now(), proof_filename),
         )
     return {"message": "Pendaftaran diterima. Tunggu persetujuan admin sebelum masuk."}
 
@@ -190,7 +196,7 @@ def authenticate(email: str, password: str) -> tuple[dict | None, str | None]:
     return user, token
 
 
-def get_session_user(token: str | None) -> dict | None:
+def get_session_user(token: str | None, include_pending: bool = False) -> dict | None:
     if not token:
         return None
     ensure_access_tables()
@@ -204,7 +210,7 @@ def get_session_user(token: str | None) -> dict | None:
         if row is None:
             return None
         user = _public(row)
-        return user if user["status"] == "approved" else None
+        return user if include_pending or user["status"] == "approved" else None
 
 
 def revoke_session(token: str | None) -> None:
@@ -284,9 +290,40 @@ def set_user_status(user_id: int, status: str) -> dict | None:
     if status not in {"approved", "rejected"}:
         raise ValueError("Status pengguna tidak valid.")
     with get_db() as conn:
+        if status == "approved":
+            existing = conn.execute("SELECT proof_filename FROM access_user WHERE id = ?", (user_id,)).fetchone()
+            if not existing or not existing["proof_filename"]:
+                raise ValueError("Bukti anggota grup WhatsApp Ranah Invest belum diunggah.")
         conn.execute(
             "UPDATE access_user SET status = ?, approved_at = ? WHERE id = ? AND is_admin = 0",
             (status, _now() if status == "approved" else None, user_id),
         )
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
         return _public(row) if row else None
+
+
+def revoke_user_approval(user_id: int) -> dict | None:
+    """Cabut akses tanpa menghapus akun; akun kembali ke antrean approval."""
+    ensure_access_tables()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE access_user SET status = 'pending', approved_at = NULL WHERE id = ? AND is_admin = 0 AND status = 'approved'",
+            (user_id,),
+        )
+        row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
+        return _public(row) if row else None
+
+
+def get_proof_filename(user_id: int) -> str | None:
+    ensure_access_tables()
+    with get_db() as conn:
+        row = conn.execute("SELECT proof_filename FROM access_user WHERE id = ?", (user_id,)).fetchone()
+    return row["proof_filename"] if row and row["proof_filename"] else None
+
+
+def update_proof_filename(user_id: int, proof_filename: str) -> dict | None:
+    ensure_access_tables()
+    with get_db() as conn:
+        conn.execute("UPDATE access_user SET proof_filename = ? WHERE id = ? AND status = 'pending'", (proof_filename, user_id))
+        row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
+    return _public(row) if row else None
