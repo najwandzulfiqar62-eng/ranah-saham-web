@@ -105,6 +105,26 @@
   .brand i{display:inline-block;width:5px;height:5px;background:var(--gold);border-radius:1px;margin:0 6px;transform:translateY(-1px)}
   .brand sup{font-family:"JetBrains Mono";font-size:9px;font-weight:700;letter-spacing:.12em;color:var(--gold);
     border:1px solid var(--gold-dim);border-radius:3px;padding:1px 4px;margin-left:9px;top:-1px}
+  /* ===== AKSES AKUN GRATIS ===== */
+  /* Konten terminal tidak ditampilkan sebelum sesi server tervalidasi.
+     Ini pelengkap middleware server (yang benar-benar mengunci API), bukan
+     satu-satunya pengaman di browser. */
+  body.access-locked{overflow:hidden}
+  body.access-locked > *:not(#accessGate):not(#accessAdminPanel):not(script){display:none!important}
+  #accessGate{display:none;position:fixed;inset:0;z-index:100001;overflow:auto;background:
+    radial-gradient(circle at 18% 18%,rgba(199,154,42,.17),transparent 32%),
+    radial-gradient(circle at 82% 88%,rgba(47,181,126,.12),transparent 34%),var(--bg);padding:24px}
+  body.access-locked #accessGate{display:grid;place-items:center}
+  .access-card{width:min(100%,460px);background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:18px;padding:30px;box-shadow:var(--shadow-lg);position:relative;overflow:hidden}
+  .access-card:before{content:"";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,var(--gold),var(--bull));opacity:.9}
+  .access-brand{display:flex;align-items:center;gap:10px;font:700 18px "Space Grotesk",sans-serif;letter-spacing:.04em}
+  .access-brand img{width:35px;height:35px;object-fit:contain}.access-kicker{font:700 10px "JetBrains Mono",monospace;color:var(--gold);letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 7px}
+  .access-card h1{font:700 clamp(27px,5vw,35px) "Space Grotesk",sans-serif;line-height:1.08;margin:0 0 10px}.access-card p{margin:0;color:var(--muted);font-size:13px;line-height:1.65}
+  .access-tabs{display:flex;gap:6px;padding:5px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;margin:24px 0 16px}.access-tabs button{flex:1;border:0;background:transparent;color:var(--muted);padding:9px;border-radius:7px;font:600 13px Inter,sans-serif;cursor:pointer}.access-tabs button.active{color:var(--text);background:var(--elev);box-shadow:var(--shadow-xs)}
+  .access-form{display:grid;gap:12px}.access-form[hidden]{display:none}.access-form label{display:grid;gap:5px;color:var(--muted);font-size:12px;font-weight:600}.access-form input{width:100%;background:var(--elev);border:1px solid var(--line);border-radius:8px;padding:11px 12px;color:var(--text);font:14px Inter,sans-serif;outline:none}.access-form input:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-soft)}.access-submit{border:0;border-radius:8px;padding:12px 14px;background:linear-gradient(135deg,var(--gold),#9f7314);color:#fff;font:700 13px Inter,sans-serif;cursor:pointer;margin-top:3px}.access-submit:disabled{opacity:.6;cursor:wait}.access-note{margin-top:14px!important;font-size:11px!important}.access-msg{min-height:19px;margin-top:12px!important;font-size:12px!important}.access-msg.err{color:var(--bear)}.access-msg.ok{color:var(--bull)}
+  .access-account-btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:7px;padding:7px 9px;font:600 11px Inter,sans-serif;cursor:pointer;white-space:nowrap}.access-account-btn[hidden]{display:none}
+  #accessAdminPanel{display:none;position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.52);padding:20px;overflow:auto;align-items:center;justify-content:center}.access-admin-card{width:min(100%,620px);background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-lg);padding:22px}.access-admin-head{display:flex;align-items:start;justify-content:space-between;gap:14px;margin-bottom:16px}.access-admin-head h2{margin:0;font:700 21px "Space Grotesk",sans-serif}.access-admin-head p{margin:4px 0 0;color:var(--muted);font-size:12px}.access-close{border:0;background:transparent;color:var(--muted);font-size:25px;line-height:1;cursor:pointer}.access-user-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}.access-user-row b{display:block;font-size:13px}.access-user-row span{color:var(--muted);font-size:11px}.access-user-actions{display:flex;gap:7px}.access-user-actions button,.access-logout{border:1px solid var(--line);border-radius:7px;padding:7px 9px;background:var(--panel2);color:var(--text);font:600 11px Inter,sans-serif;cursor:pointer}.access-user-actions .approve{border-color:rgba(47,181,126,.55);color:var(--bull)}.access-user-actions .reject{border-color:rgba(214,90,74,.45);color:var(--bear)}.access-logout{margin-top:16px;color:var(--bear)}
+  @media(max-width:520px){#accessGate{padding:14px}.access-card{padding:24px 19px}.access-account-btn{font-size:0;padding:8px}.access-account-btn:after{content:"Akun";font-size:11px}}
   /* Nav digrup jadi ~6 menu dropdown (dulu 18 tab flat sebaris yang meluber
      & kepotong di layar biasa). overflow HARUS visible -- panel dropdown
      absolute di dalam .tabs, overflow-x:auto lama akan MEMOTONGNYA. */
@@ -1529,7 +1549,75 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 @media(prefers-reduced-motion:reduce){.reveal,.landing-support{opacity:1;transform:none;transition:none}.bento-card:hover{transform:none}}
 </style>
 </head>
-<body>
+<body class="access-locked">
+<div id="accessGate" aria-live="polite">
+  <section class="access-card" aria-label="Akses Ranah Saham">
+    <div class="access-brand"><img src="logo-mark.png" alt=""> RANAH SAHAM <sup>IDX</sup></div>
+    <div class="access-kicker">Akses komunitas gratis</div>
+    <h1>Masuk untuk membuka terminal.</h1>
+    <p>Ranah Saham tetap gratis. Pendaftaran baru perlu disetujui admin agar riset dan data komunitas lebih terjaga.</p>
+    <div class="access-tabs" role="tablist">
+      <button type="button" class="active" data-access-tab="login">Masuk</button>
+      <button type="button" data-access-tab="register">Daftar gratis</button>
+    </div>
+    <form class="access-form" id="accessLoginForm">
+      <label>Email<input name="email" type="email" autocomplete="email" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="access-submit" type="submit">Masuk ke Ranah Saham</button>
+    </form>
+    <form class="access-form" id="accessRegisterForm" hidden>
+      <label>Nama<input name="name" autocomplete="name" minlength="2" maxlength="60" required></label>
+      <label>Email<input name="email" type="email" autocomplete="email" required></label>
+      <label>Password <small>(minimal 10 karakter)</small><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <button class="access-submit" type="submit">Kirim permintaan akses</button>
+    </form>
+    <p class="access-msg" id="accessMessage"></p>
+    <p class="access-note">Akses ini gratis dan tanpa kartu kredit. Kamu hanya perlu menunggu persetujuan admin sekali.</p>
+  </section>
+</div>
+<div id="accessAdminPanel" role="dialog" aria-modal="true" aria-label="Panel akun"></div>
+<script>
+/* Akses dijaga server; skrip ini hanya mengatur pengalaman masuk/daftar. */
+(function(){
+  const gate=document.getElementById('accessGate'), panel=document.getElementById('accessAdminPanel');
+  const message=document.getElementById('accessMessage');
+  let currentUser=null;
+  function showMessage(text,type){message.textContent=text||'';message.className='access-msg '+(type||'')}
+  function jsonRequest(url,body){return fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}).then(async r=>{const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.detail||'Permintaan gagal.');return data})}
+  function refreshAccountButton(){const b=document.getElementById('accessAccountBtn');if(!b)return;b.hidden=!currentUser;b.textContent=currentUser?(currentUser.is_admin?'Admin':'Akun'):''}
+  function unlock(user){currentUser=user;window.rsAccessUser=user;document.body.classList.remove('access-locked');gate.setAttribute('aria-hidden','true');refreshAccountButton()}
+  window.rsAccessReady=fetch('/api/access/me',{credentials:'same-origin'}).then(async r=>{const data=await r.json().catch(()=>({}));if(data.user)unlock(data.user);return data.user||null}).catch(()=>null);
+  window.rsRefreshAccountButton=refreshAccountButton;
+  document.querySelectorAll('[data-access-tab]').forEach(btn=>btn.addEventListener('click',()=>{
+    const register=btn.dataset.accessTab==='register';
+    document.querySelectorAll('[data-access-tab]').forEach(x=>x.classList.toggle('active',x===btn));
+    document.getElementById('accessLoginForm').hidden=register;document.getElementById('accessRegisterForm').hidden=!register;showMessage('');
+  }));
+  document.getElementById('accessLoginForm').addEventListener('submit',async e=>{
+    e.preventDefault();const form=e.currentTarget,btn=form.querySelector('button');btn.disabled=true;showMessage('Memeriksa akun...');
+    try{await jsonRequest('/api/access/login',Object.fromEntries(new FormData(form)));location.reload()}catch(err){showMessage(err.message,'err');btn.disabled=false}
+  });
+  document.getElementById('accessRegisterForm').addEventListener('submit',async e=>{
+    e.preventDefault();const form=e.currentTarget,btn=form.querySelector('button');btn.disabled=true;showMessage('Mengirim permintaan akses...');
+    try{const res=await jsonRequest('/api/access/register',Object.fromEntries(new FormData(form)));showMessage(res.message,'ok');form.reset()}catch(err){showMessage(err.message,'err')}finally{btn.disabled=false}
+  });
+  window.openAccessPanel=async function(){
+    if(!currentUser)return;
+    panel.style.display='flex';panel.innerHTML='<section class="access-admin-card"><div class="access-admin-head"><div><h2>Akun</h2><p>'+currentUser.name+' · '+currentUser.email+'</p></div><button class="access-close" aria-label="Tutup">×</button></div><div id="accessAdminContent">Memuat…</div><button class="access-logout" type="button">Keluar dari akun</button></section>';
+    panel.querySelector('.access-close').onclick=()=>panel.style.display='none';
+    panel.querySelector('.access-logout').onclick=async()=>{await jsonRequest('/api/access/logout');location.reload()};
+    if(!currentUser.is_admin){panel.querySelector('#accessAdminContent').innerHTML='<p style="color:var(--muted);font-size:13px">Akunmu sudah aktif. Terima kasih sudah ikut menjaga komunitas Ranah Saham.</p>';return}
+    try{
+      const data=await fetch('/api/access/admin/users?status=pending',{credentials:'same-origin'}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.detail);return d});
+      const rows=data.users||[];const box=panel.querySelector('#accessAdminContent');
+      box.innerHTML='<p style="font-size:12px;color:var(--muted);margin:0 0 8px">Permintaan akses menunggu persetujuan ('+rows.length+')</p>'+(rows.length?rows.map(u=>'<div class="access-user-row"><div><b>'+escapeHtml(u.name)+'</b><span>'+escapeHtml(u.email)+'</span></div><div class="access-user-actions"><button class="approve" data-access-action="approve" data-id="'+u.id+'">Setujui</button><button class="reject" data-access-action="reject" data-id="'+u.id+'">Tolak</button></div></div>').join(''):'<p style="color:var(--muted);font-size:13px">Belum ada permintaan baru.</p>');
+      box.querySelectorAll('[data-access-action]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await jsonRequest('/api/access/admin/users/'+b.dataset.id+'/'+b.dataset.accessAction);window.openAccessPanel()}catch(err){showMessage(err.message,'err');b.disabled=false}});
+    }catch(err){panel.querySelector('#accessAdminContent').textContent=err.message||'Gagal memuat permintaan akses.'}
+  };
+  window.escapeHtml=function(v){const d=document.createElement('div');d.textContent=v||'';return d.innerHTML};
+  panel.addEventListener('click',e=>{if(e.target===panel)panel.style.display='none'});
+})();
+</script>
 <div id="splashScreen">
   <div class="splash-content">
     <div class="splash-logo">
@@ -1728,9 +1816,9 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     <div class="lf-glow"></div>
     <div class="lp-eyebrow" style="justify-content:center">Gratis Selamanya</div>
     <h2>Baca pasar <em>apa adanya.</em></h2>
-    <p>Tanpa klaim profit instan, tanpa langganan, tanpa akun. Buka terminal, cari saham, dan mulai meneliti dengan dasar yang bisa kamu telusuri sendiri.</p>
+    <p>Tanpa klaim profit instan dan tanpa langganan berbayar. Daftar gratis, tunggu persetujuan admin sekali, lalu mulai meneliti dengan dasar yang bisa kamu telusuri sendiri.</p>
     <button class="landing-btn-primary" onclick="enterDashboard()" style="font-size:16px;padding:16px 38px">Masuk Dashboard <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
-    <div class="lf-fine">Gratis · Tanpa kartu kredit · Tanpa login</div>
+    <div class="lf-fine">Gratis · Tanpa kartu kredit · Akses disetujui admin</div>
   </section>
 
   <div class="landing-foot">
@@ -1746,6 +1834,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   <div class="tabs" id="tabs"></div>
   <div class="kbd" id="openCmd">Cari saham <kbd>Ctrl K</kbd></div>
   <button class="notif-btn" id="notifBtn" title="Notifikasi" aria-label="Notifikasi"><span id="notifBell"></span><span class="notif-badge" id="notifBadge" hidden></span></button>
+  <button class="access-account-btn" id="accessAccountBtn" type="button" hidden onclick="openAccessPanel()">Akun</button>
   <button class="theme-btn" id="themeBtn" type="button" title="Aktifkan mode terang" aria-label="Aktifkan mode terang"></button>
   <button class="tour-btn" id="tourBtn" title="Tur singkat" aria-label="Tur singkat">?</button>
   <button class="hbg" id="hbg" aria-label="Menu" onclick="toggleMobMenu()">
@@ -2423,6 +2512,7 @@ function setTheme(theme){
 function toggleTheme(){setTheme(document.documentElement.dataset.theme==='light'?'dark':'light')}
 setTheme(document.documentElement.dataset.theme==='light'?'light':'dark');
 $('#themeBtn')?.addEventListener('click',toggleTheme);
+window.rsRefreshAccountButton?.();
 const POPULAR=['BBCA','BBRI','BMRI','TLKM','ASII','BBNI','UNVR','GOTO','ANTM','ADRO','ICBP','MDKA'];
 const loaded={};
 let chartObj=null, ihsgChartObj=null;

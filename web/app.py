@@ -93,7 +93,12 @@ from core.sector_rotation import calculate_beta
 from core.relative_strength import calculate_relative_strength
 from core.volume_patterns import calculate_ad_line
 from core.charts.snr_chart import calculate_snr_levels
-from core.config import SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS
+from core.config import SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS, ACCESS_COOKIE_SECURE
+from core.access import (
+    SESSION_DAYS, admin_is_configured, authenticate, ensure_access_tables,
+    ensure_bootstrap_admin, get_session_user, list_users, register_user,
+    revoke_session, set_user_status,
+)
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
 # tidak tersedia dari yfinance, jadi dipetakan manual untuk universe ini.
@@ -284,6 +289,11 @@ async def _lifespan(_app: "FastAPI"):
     membaca dari cache & TIDAK memicu fetch Yahoo dingin. TIDAK ADA
     proses/infra baru -- cuma 3 asyncio task dalam proses yang sama (bukan
     Celery/cron terpisah), cukup untuk skala aplikasi ini."""
+    ensure_access_tables()
+    if ensure_bootstrap_admin():
+        print("Akses akun: admin bootstrap siap.")
+    else:
+        print("PERINGATAN akses akun: ACCESS_ADMIN_EMAIL/PASSWORD belum diatur; pendaftaran tidak bisa disetujui.")
     tasks = [
         asyncio.create_task(_signal_auto_loop()),
         asyncio.create_task(_forum_push_loop()),
@@ -329,6 +339,104 @@ _STATIC = os.path.join(_BASE, "static")
 async def health():
     """Health check untuk Railway / load balancer."""
     return {"status": "ok"}
+
+
+def _access_user(request: Request) -> dict | None:
+    """Ambil user yang sudah divalidasi middleware, tanpa percaya klaim klien."""
+    return getattr(request.state, "access_user", None)
+
+
+def _require_admin(request: Request) -> dict:
+    user = _access_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Silakan masuk terlebih dahulu.")
+    if not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="Akses admin diperlukan.")
+    return user
+
+
+async def _access_payload(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Data formulir tidak valid.")
+    return body if isinstance(body, dict) else {}
+
+
+@app.get("/api/access/me")
+async def api_access_me(request: Request):
+    user = _access_user(request)
+    return {"user": user, "admin_configured": admin_is_configured()}
+
+
+@app.post("/api/access/register")
+async def api_access_register(request: Request):
+    if not admin_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Akses belum siap: admin perlu dikonfigurasi dulu di server.",
+        )
+    body = await _access_payload(request)
+    try:
+        result = register_user(body.get("name", ""), body.get("email", ""), body.get("password", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@app.post("/api/access/login")
+async def api_access_login(request: Request):
+    body = await _access_payload(request)
+    user, token_or_error = authenticate(body.get("email", ""), body.get("password", ""))
+    if user is None:
+        raise HTTPException(status_code=403, detail=token_or_error)
+    response = JSONResponse({"user": user})
+    response.set_cookie(
+        key="rs_session",
+        value=token_or_error,
+        httponly=True,
+        secure=ACCESS_COOKIE_SECURE,
+        samesite="lax",
+        max_age=SESSION_DAYS * 24 * 60 * 60,
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/access/logout")
+async def api_access_logout(request: Request):
+    revoke_session(request.cookies.get("rs_session"))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("rs_session", path="/", secure=ACCESS_COOKIE_SECURE, samesite="lax")
+    return response
+
+
+@app.get("/api/access/admin/users")
+async def api_access_admin_users(request: Request):
+    _require_admin(request)
+    status = request.query_params.get("status", "pending")
+    try:
+        return {"users": list_users(status)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/access/admin/users/{user_id}/approve")
+async def api_access_approve(user_id: int, request: Request):
+    _require_admin(request)
+    user = set_user_status(user_id, "approved")
+    if not user:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    return {"user": user}
+
+
+@app.post("/api/access/admin/users/{user_id}/reject")
+async def api_access_reject(user_id: int, request: Request):
+    _require_admin(request)
+    user = set_user_status(user_id, "rejected")
+    if not user:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    return {"user": user}
 
 # ---------- cache TTL sederhana (lindungi Yahoo Finance) ----------
 _CACHE_TTL = 300  # detik
@@ -516,6 +624,30 @@ async def rate_limit(request: Request, call_next):
         except Exception:
             # If Redis fails, fail open to avoid blocking service
             pass
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def access_gate(request: Request, call_next):
+    """Kunci semua data aplikasi di server, bukan sekadar overlay browser.
+
+    Aset statis tetap boleh dimuat agar formulir Masuk/Daftar bisa tampil,
+    tetapi SELURUH endpoint bisnis `/api/*` hanya bisa dipakai oleh sesi yang
+    sudah disetujui admin. Endpoint `/api/access/*` adalah satu-satunya jalur
+    publik untuk daftar dan masuk.
+    """
+    path = request.url.path
+    if path == "/health":
+        return await call_next(request)
+
+    user = get_session_user(request.cookies.get("rs_session"))
+    request.state.access_user = user
+
+    if path.startswith("/api/") and not path.startswith("/api/access/") and not user:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Akses akun diperlukan. Silakan masuk terlebih dahulu."},
+        )
     return await call_next(request)
 
 

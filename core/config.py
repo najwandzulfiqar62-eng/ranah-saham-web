@@ -68,3 +68,12 @@ YF_FETCH_TIMEOUT_SECONDS = 20
 # Kosong = fitur admin forum nonaktif total (fail-closed) -- forum tetap
 # jalan normal tanpa admin, cuma badge/hapus tidak pernah bisa didapat.
 FORUM_ADMIN_SECRET = os.environ.get("FORUM_ADMIN_SECRET", "")
+
+# ---- Akses aplikasi (akun gratis, approval admin) ----
+# Admin awal dibuat otomatis saat aplikasi menyala bila dua variabel ini diisi.
+# Jangan taruh nilainya di source control: isi di file .env pada server.
+ACCESS_ADMIN_EMAIL = os.environ.get("ACCESS_ADMIN_EMAIL", "").strip().lower()
+ACCESS_ADMIN_PASSWORD = os.environ.get("ACCESS_ADMIN_PASSWORD", "")
+# Cookie sesi harus secure di domain HTTPS produksi. Untuk pengembangan lokal
+# tanpa HTTPS saja, set ACCESS_COOKIE_SECURE=0 di .env lokal.
+ACCESS_COOKIE_SECURE = os.environ.get("ACCESS_COOKIE_SECURE", "1") != "0"

@@ -21,6 +21,11 @@ os.environ.setdefault("DATABASE_URL", os.path.join(tempfile.gettempdir(), "ranah
 # Kode admin forum tetap tersedia utk tes _forum_is_admin/endpoint admin --
 # TIDAK PERNAH nilai produksi sungguhan, cuma string tetap khusus pytest.
 os.environ.setdefault("FORUM_ADMIN_SECRET", "test-secret-for-pytest-only")
+# Admin akses khusus test. Cookie dibuat non-secure agar TestClient HTTP lokal
+# dapat mengirimkannya kembali seperti browser produksi lewat HTTPS.
+os.environ.setdefault("ACCESS_ADMIN_EMAIL", "admin-access-test@example.com")
+os.environ.setdefault("ACCESS_ADMIN_PASSWORD", "admin-access-test-password")
+os.environ.setdefault("ACCESS_COOKIE_SECURE", "0")
 
 import numpy as np
 import pandas as pd
