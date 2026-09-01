@@ -207,6 +207,8 @@
   /* header seksi grup di drawer (ikut struktur NAV_GROUPS yang sama dgn desktop) */
   .mob-sec{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--faint);
     text-transform:uppercase;padding:14px 14px 5px;flex-shrink:0}
+  .mob-theme{margin:4px 4px 6px!important;border:1px solid var(--gold-dim)!important;background:var(--gold-soft)!important;color:var(--text)!important}
+  .mob-theme .icon{color:var(--gold)!important}
 
   @media(max-width:768px){
     .tabs,.kbd,.tour-btn{display:none!important}
@@ -2646,6 +2648,8 @@ const ICONS={
   trophy:'<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
   search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   bell:'<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>',
+  moon:'<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.7 6.7 0 0 0 21 12.8Z"/>',
   download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
   sliders:'<line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/>',
   play:'<polygon points="6 3 20 12 6 21 6 3"/>',
@@ -2818,7 +2822,8 @@ function renderNav(){
     </div>`;
   }).join('');
   const mm=$('#mobMenu');
-  if(mm)mm.innerHTML=NAV_GROUPS.map(g=>{
+  const lightMode=document.documentElement.dataset.theme==='light';
+  if(mm)mm.innerHTML=`<button class="tab mob-theme" type="button" onclick="toggleTheme();renderNav()">${icon(lightMode?'moon':'sun',{size:15})} ${lightMode?'Aktifkan mode gelap':'Aktifkan mode terang'}</button><div class="mob-divider"></div>`+NAV_GROUPS.map(g=>{
     if(g.view)return `<button class="tab${g.view===_currentView?' active':''}" data-v="${g.view}">${g.label}</button>`;
     return `<div class="mob-sec">${g.label}</div>`+
       g.items.map(i=>`<button class="tab${i.v===_currentView?' active':''}" data-v="${i.v}">${icon(i.icon,{size:14})} ${i.l}</button>`).join('');
