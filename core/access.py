@@ -330,6 +330,26 @@ def revoke_user_approval(user_id: int) -> dict | None:
         return _public(row) if row else None
 
 
+def delete_access_history_user(user_id: int) -> dict | None:
+    """Hapus akun yang sudah diputuskan dari riwayat admin.
+
+    Antrean aktif sengaja tidak bisa dihapus lewat fungsi ini; admin harus
+    memilih Setujui atau Tolak dulu. Akun admin juga selalu dilindungi.
+    Nama file bukti dikembalikan agar lapisan web dapat ikut menghapus file
+    privatnya setelah baris database dihapus.
+    """
+    ensure_access_tables()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, is_admin, proof_filename FROM access_user WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None or row["is_admin"] or row["status"] == "pending":
+            return None
+        conn.execute("DELETE FROM access_session WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM access_user WHERE id = ?", (user_id,))
+    return {"proof_filename": row["proof_filename"]}
+
+
 def get_proof_filename(user_id: int) -> str | None:
     ensure_access_tables()
     with get_db() as conn:

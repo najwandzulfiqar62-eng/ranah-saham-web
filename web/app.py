@@ -103,7 +103,7 @@ from core.access import (
     SESSION_DAYS, admin_is_configured, authenticate, ensure_access_tables,
     ensure_bootstrap_admin, get_session_user, list_users, register_user,
     revoke_session, set_user_status, update_profile, create_session_for_user, upsert_google_user,
-    revoke_user_approval, get_proof_filename, update_proof_filename,
+    revoke_user_approval, delete_access_history_user, get_proof_filename, update_proof_filename,
 )
 
 # Peta sektor untuk universe likuid (akurat, IDX-IC). Data sektor penuh
@@ -664,6 +664,16 @@ async def api_access_revoke(user_id: int, request: Request):
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
     return {"user": user}
+
+
+@app.post("/api/access/admin/users/{user_id}/delete-history")
+async def api_access_delete_history(user_id: int, request: Request):
+    _require_admin(request)
+    deleted = delete_access_history_user(user_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="Riwayat pengguna tidak ditemukan.")
+    _delete_access_proof(deleted["proof_filename"])
+    return {"ok": True}
 
 # ---------- cache TTL sederhana (lindungi Yahoo Finance) ----------
 _CACHE_TTL = 300  # detik

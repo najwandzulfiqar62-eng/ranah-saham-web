@@ -75,3 +75,15 @@ def test_rejected_email_can_resubmit_with_new_proof(clean_access_db):
     assert len(pending) == 1
     assert pending[0]["email"] == "ulang@example.com"
     assert pending[0]["has_proof"] is True
+
+
+def test_admin_history_delete_removes_decided_account(clean_access_db):
+    from core.access import delete_access_history_user, list_users, register_user, set_user_status
+
+    register_user("Riwayat Hapus", "hapus@example.com", "password-pengguna-aman", "bukti-hapus.jpg")
+    user = list_users("pending")[0]
+    set_user_status(user["id"], "rejected")
+
+    deleted = delete_access_history_user(user["id"])
+    assert deleted == {"proof_filename": "bukti-hapus.jpg"}
+    assert not [u for u in list_users("all") if u["email"] == "hapus@example.com"]
