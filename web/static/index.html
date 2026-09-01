@@ -1620,7 +1620,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <button type="button" data-access-tab="register">Daftar gratis</button>
     </div>
     <form class="access-form" id="accessLoginForm">
-      <label>Email<input name="email" type="email" autocomplete="email" required></label>
+      <label>Email atau nomor HP WhatsApp<input name="login" type="text" autocomplete="username" placeholder="nama@email.com atau 0812xxxx" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="access-submit" type="submit">Masuk ke Ranah Saham</button>
       <button class="access-submit" id="googleLoginBtn" type="button" style="background:var(--panel2);color:var(--text);border:1px solid var(--line)">Lanjutkan dengan Google</button>
@@ -1628,6 +1628,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     <form class="access-form" id="accessRegisterForm" enctype="multipart/form-data" hidden>
       <label>Nama<input name="name" autocomplete="name" minlength="2" maxlength="60" required></label>
       <label>Email<input name="email" type="email" autocomplete="email" required></label>
+      <label>Nomor HP WhatsApp<input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="0812xxxx" required></label>
       <label>Password <small>(minimal 10 karakter)</small><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
       <label>Screenshot bukti anggota grup WhatsApp Ranah Invest <small>(JPG, PNG, atau WEBP · maks. 4 MB)</small><input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></label>
       <button class="access-submit" type="submit">Kirim permintaan akses</button>
@@ -1690,6 +1691,9 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       card.querySelector('.access-admin-head').after(tabs);tabs.after(accessSection);accessSection.append(content);accessSection.after(profileSection);profileSection.append(form);
       tabs.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.onclick=()=>{const profile=btn.dataset.adminTab==='profile';profileSection.hidden=!profile;accessSection.hidden=profile;tabs.querySelectorAll('[data-admin-tab]').forEach(item=>item.classList.toggle('active',item===btn))});
     }
+    const profileForm=panel.querySelector('#profileForm'),phoneLabel=document.createElement('label');
+    phoneLabel.innerHTML='Nomor HP WhatsApp <small>(dipakai juga untuk login)</small><input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="0812xxxx" value="'+escapeHtml(currentUser.phone||'')+'" required>';
+    profileForm.querySelector('[name=name]').closest('label').before(phoneLabel);
     panel.querySelector('[name=avatar]').onchange=e=>{const f=e.target.files&&e.target.files[0];if(!f)return;const preview=panel.querySelector('#profileAvatarPreview'),url=URL.createObjectURL(f);preview.outerHTML='<img class="profile-avatar-preview" id="profileAvatarPreview" src="'+url+'" alt="Preview foto profil">'};
     panel.querySelector('#profileForm').onsubmit=async e=>{e.preventDefault();const btn=e.currentTarget.querySelector('button[type=submit]');btn.disabled=true;try{const out=await formRequest('/api/access/profile',new FormData(e.currentTarget));currentUser=out.user;window.rsAccessUser=out.user;refreshAccountButton();showMessage('Pengaturan akun tersimpan.','ok')}catch(err){showMessage(err.message,'err')}finally{btn.disabled=false}};
     panel.querySelector('.access-logout').onclick=async()=>{await jsonRequest('/api/access/logout');location.reload()};
@@ -1699,6 +1703,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       const rows=(data.users||[]).filter(u=>!u.is_admin),pending=rows.filter(u=>u.status==='pending'),history=rows.filter(u=>u.status!=='pending'),box=panel.querySelector('#accessAdminContent');
       const row=u=>'<div class="access-user-row"><div><b>'+escapeHtml(u.name)+'</b><span>'+escapeHtml(u.email)+'</span>'+(u.has_proof?'<a class="access-proof-link" href="/api/access/admin/users/'+u.id+'/proof" target="_blank" rel="noopener">Lihat bukti WA</a>':'<i class="access-status rejected">Bukti belum ada</i>')+(u.status==='pending'?'':'<i class="access-status '+escapeHtml(u.status)+'">'+(u.status==='approved'?'Disetujui':'Ditolak')+'</i>')+'</div>'+(u.status==='pending'?'<div class="access-user-actions"><button class="approve" data-access-action="approve" data-id="'+u.id+'">Setujui</button><button class="reject" data-access-action="reject" data-id="'+u.id+'">Tolak</button></div>':u.status==='approved'?'<div class="access-user-actions"><button class="reject" data-access-action="revoke" data-id="'+u.id+'">Batalkan</button><button class="delete-history" data-access-action="delete-history" data-id="'+u.id+'">Hapus riwayat</button></div>':'<div class="access-user-actions"><button class="delete-history" data-access-action="delete-history" data-id="'+u.id+'">Hapus riwayat</button></div>')+'</div>';
       box.innerHTML='<p style="font-size:12px;color:var(--muted);margin:0 0 8px">Permintaan akses menunggu persetujuan ('+pending.length+')</p>'+(pending.length?pending.map(row).join(''):'<p style="color:var(--muted);font-size:13px">Belum ada permintaan baru.</p>')+'<p class="access-history-title">Riwayat permintaan akses</p>'+(history.length?history.map(row).join(''):'<p style="color:var(--muted);font-size:13px">Belum ada riwayat.</p>')+'<p class="access-history-info">Menyembunyikan riwayat hanya merapikan panel admin. Akun, akses anggota, dan bukti tetap aman.</p>';
+      box.querySelectorAll('.access-user-row').forEach(item=>{const action=item.querySelector('[data-id]'),u=action&&rows.find(x=>x.id===Number(action.dataset.id)),meta=item.querySelector('span');if(u&&u.phone&&meta)meta.textContent=u.email+' · '+u.phone});
       box.querySelectorAll('[data-access-action=delete-history]').forEach(b=>b.textContent='Sembunyikan riwayat');
       box.querySelectorAll('[data-access-action]').forEach(b=>b.onclick=async()=>{const action=b.dataset.accessAction;if(action==='delete-history'&&!window.confirm('Sembunyikan riwayat ini dari panel admin? Akun dan akses anggota tetap aktif.'))return;b.disabled=true;try{await jsonRequest('/api/access/admin/users/'+b.dataset.id+'/'+action);await refreshAdminNotice();window.openAccessPanel()}catch(err){showMessage(err.message,'err');b.disabled=false}});
     }catch(err){panel.querySelector('#accessAdminContent').textContent=err.message||'Gagal memuat permintaan akses.'}

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,18 @@ _SCRYPT_P = 1
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _normalize_phone(value: str | None) -> str:
+    """Normalisasi nomor WhatsApp Indonesia ke format +62xxxxxxxxxx."""
+    digits = re.sub(r"\D", "", value or "")
+    if digits.startswith("0"):
+        digits = "62" + digits[1:]
+    elif digits.startswith("8"):
+        digits = "62" + digits
+    if not digits.startswith("62") or not 10 <= len(digits) <= 15:
+        raise ValueError("Nomor WhatsApp tidak valid. Gunakan nomor Indonesia aktif, mis. 0812xxxx.")
+    return "+" + digits
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
@@ -59,6 +72,7 @@ def _public(row) -> dict:
         "id": int(row["id"]),
         "name": row["name"],
         "email": row["email"],
+        "phone": row["phone"] if "phone" in row.keys() else None,
         "status": row["status"],
         "is_admin": bool(row["is_admin"]),
         "created_at": row["created_at"],
@@ -114,7 +128,10 @@ def ensure_access_tables() -> None:
             conn.execute("ALTER TABLE access_user ADD COLUMN google_sub TEXT")
         if "history_hidden" not in cols:
             conn.execute("ALTER TABLE access_user ADD COLUMN history_hidden INTEGER NOT NULL DEFAULT 0")
+        if "phone" not in cols:
+            conn.execute("ALTER TABLE access_user ADD COLUMN phone TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_user_google_sub ON access_user(google_sub) WHERE google_sub IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_user_phone ON access_user(phone) WHERE phone IS NOT NULL")
     _ensured = True
 
 
@@ -154,10 +171,11 @@ def admin_is_configured() -> bool:
     return bool(ACCESS_ADMIN_EMAIL and ACCESS_ADMIN_PASSWORD)
 
 
-def register_user(name: str, email: str, password: str, proof_filename: str | None = None) -> dict:
+def register_user(name: str, email: str, password: str, proof_filename: str | None = None, phone: str | None = None) -> dict:
     ensure_access_tables()
     name = " ".join((name or "").strip().split())
     email = (email or "").strip().lower()
+    phone = _normalize_phone(phone)
     if not 2 <= len(name) <= 60:
         raise ValueError("Nama harus terdiri dari 2–60 karakter.")
     if len(email) > 254 or "@" not in email or email.startswith("@") or email.endswith("@"):
@@ -168,6 +186,9 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
         raise ValueError("Bukti anggota grup WhatsApp Ranah Invest wajib diunggah.")
     with get_db() as conn:
         exists = conn.execute("SELECT id, status, is_admin, proof_filename FROM access_user WHERE email = ?", (email,)).fetchone()
+        phone_owner = conn.execute("SELECT id FROM access_user WHERE phone = ?", (phone,)).fetchone()
+        if phone_owner and (not exists or phone_owner["id"] != exists["id"]):
+            raise ValueError("Nomor WhatsApp ini sudah terdaftar pada akun lain.")
         if exists:
             # Penolakan bukan blokir permanen: pemohon boleh memperbaiki
             # screenshot bukti lalu mengirim pendaftaran ulang dengan email
@@ -177,9 +198,9 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
                 conn.execute(
                     """UPDATE access_user
                        SET name = ?, password_hash = ?, status = 'pending',
-                           created_at = ?, approved_at = NULL, proof_filename = ?, history_hidden = 0
+                           created_at = ?, approved_at = NULL, proof_filename = ?, phone = ?, history_hidden = 0
                        WHERE id = ?""",
-                    (name, _hash_password(password), _now(), proof_filename, exists["id"]),
+                    (name, _hash_password(password), _now(), proof_filename, phone, exists["id"]),
                 )
                 return {
                     "message": "Pendaftaran ulang diterima. Bukti baru akan diperiksa admin.",
@@ -187,20 +208,25 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
                 }
             raise ValueError("Email ini sudah terdaftar. Silakan masuk atau tunggu persetujuan admin.")
         conn.execute(
-            """INSERT INTO access_user (name, email, password_hash, status, is_admin, created_at, proof_filename)
-               VALUES (?, ?, ?, 'pending', 0, ?, ?)""",
-            (name, email, _hash_password(password), _now(), proof_filename),
+            """INSERT INTO access_user (name, email, phone, password_hash, status, is_admin, created_at, proof_filename)
+               VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)""",
+            (name, email, phone, _hash_password(password), _now(), proof_filename),
         )
     return {"message": "Pendaftaran diterima. Tunggu persetujuan admin sebelum masuk."}
 
 
-def authenticate(email: str, password: str) -> tuple[dict | None, str | None]:
+def authenticate(identifier: str, password: str) -> tuple[dict | None, str | None]:
     ensure_access_tables()
-    email = (email or "").strip().lower()
+    identifier = (identifier or "").strip()
+    email = identifier.lower() if "@" in identifier else None
+    try:
+        phone = None if email else _normalize_phone(identifier)
+    except ValueError:
+        return None, "Email/nomor HP atau password tidak tepat."
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM access_user WHERE email = ?", (email,)).fetchone()
+        row = conn.execute("SELECT * FROM access_user WHERE email = ? OR phone = ?", (email, phone)).fetchone()
         if row is None or not verify_password(password or "", row["password_hash"]):
-            return None, "Email atau password tidak tepat."
+            return None, "Email/nomor HP atau password tidak tepat."
         user = _public(row)
         if user["status"] != "approved":
             return None, "Akunmu masih menunggu persetujuan admin."
@@ -240,7 +266,7 @@ def revoke_session(token: str | None) -> None:
         conn.execute("DELETE FROM access_session WHERE token_hash = ?", (hashlib.sha256(token.encode("utf-8")).hexdigest(),))
 
 
-def update_profile(user_id: int, name: str, bio: str | None = None, avatar_url: str | None = None) -> dict:
+def update_profile(user_id: int, name: str, bio: str | None = None, avatar_url: str | None = None, phone: str | None = None) -> dict:
     ensure_access_tables()
     name = " ".join((name or "").strip().split())
     if not 2 <= len(name) <= 60:
@@ -251,8 +277,12 @@ def update_profile(user_id: int, name: str, bio: str | None = None, avatar_url: 
     avatar_url = (avatar_url or "").strip() or None
     if avatar_url and (len(avatar_url) > 2048 or not avatar_url.startswith(("https://", "http://", "/profile_uploads/"))):
         raise ValueError("Lokasi foto profil tidak valid.")
+    phone = _normalize_phone(phone)
     with get_db() as conn:
-        conn.execute("UPDATE access_user SET name = ?, bio = ?, avatar_url = ? WHERE id = ?", (name, bio, avatar_url, user_id))
+        owner = conn.execute("SELECT id FROM access_user WHERE phone = ? AND id != ?", (phone, user_id)).fetchone()
+        if owner:
+            raise ValueError("Nomor WhatsApp ini sudah terdaftar pada akun lain.")
+        conn.execute("UPDATE access_user SET name = ?, bio = ?, avatar_url = ?, phone = ? WHERE id = ?", (name, bio, avatar_url, phone, user_id))
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
     return _public(row)
 

@@ -31,6 +31,7 @@ def test_access_requires_approved_account_and_admin_can_approve(client, clean_ac
     registered = client.post("/api/access/register", data={
         "name": "Pengguna Baru",
         "email": "baru@example.com",
+        "phone": "081234567890",
         "password": "password-pengguna-aman",
     }, files={"proof": ("bukti.png", proof_png, "image/png")})
     assert registered.status_code == 200
@@ -54,7 +55,7 @@ def test_access_requires_approved_account_and_admin_can_approve(client, clean_ac
     client.post("/api/access/logout")
 
     approved_login = client.post("/api/access/login", json={
-        "email": "baru@example.com", "password": "password-pengguna-aman",
+        "login": "081234567890", "password": "password-pengguna-aman",
     })
     assert approved_login.status_code == 200
     me = client.get("/api/access/me").json()["user"]
@@ -65,11 +66,11 @@ def test_access_requires_approved_account_and_admin_can_approve(client, clean_ac
 def test_rejected_email_can_resubmit_with_new_proof(clean_access_db):
     from core.access import list_users, register_user, set_user_status
 
-    register_user("Pemohon", "ulang@example.com", "password-pengguna-aman", "bukti-lama.jpg")
+    register_user("Pemohon", "ulang@example.com", "password-pengguna-aman", "bukti-lama.jpg", "081234567891")
     user = list_users("pending")[0]
     set_user_status(user["id"], "rejected")
 
-    again = register_user("Pemohon Baru", "ulang@example.com", "password-baru-aman", "bukti-baru.jpg")
+    again = register_user("Pemohon Baru", "ulang@example.com", "password-baru-aman", "bukti-baru.jpg", "081234567891")
     assert "Pendaftaran ulang" in again["message"]
     pending = list_users("pending")
     assert len(pending) == 1
@@ -80,7 +81,7 @@ def test_rejected_email_can_resubmit_with_new_proof(clean_access_db):
 def test_admin_history_delete_keeps_decided_account_active(clean_access_db):
     from core.access import delete_access_history_user, list_users, register_user, set_user_status
 
-    register_user("Riwayat Hapus", "hapus@example.com", "password-pengguna-aman", "bukti-hapus.jpg")
+    register_user("Riwayat Hapus", "hapus@example.com", "password-pengguna-aman", "bukti-hapus.jpg", "081234567892")
     user = list_users("pending")[0]
     set_user_status(user["id"], "rejected")
 

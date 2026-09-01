@@ -473,11 +473,11 @@ async def api_access_register(request: Request):
     if (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
         form = await request.form()
         proof_filename = await _save_access_proof(form.get("proof"))
-        body = {"name": form.get("name", ""), "email": form.get("email", ""), "password": form.get("password", "")}
+        body = {"name": form.get("name", ""), "email": form.get("email", ""), "phone": form.get("phone", ""), "password": form.get("password", "")}
     else:
         body = await _access_payload(request)
     try:
-        result = register_user(body.get("name", ""), body.get("email", ""), body.get("password", ""), proof_filename)
+        result = register_user(body.get("name", ""), body.get("email", ""), body.get("password", ""), proof_filename, body.get("phone", ""))
     except ValueError as exc:
         _delete_access_proof(proof_filename)
         raise HTTPException(status_code=400, detail=str(exc))
@@ -506,7 +506,7 @@ async def api_access_pending_proof(request: Request):
 @app.post("/api/access/login")
 async def api_access_login(request: Request):
     body = await _access_payload(request)
-    user, token_or_error = authenticate(body.get("email", ""), body.get("password", ""))
+    user, token_or_error = authenticate(body.get("login", body.get("email", "")), body.get("password", ""))
     if user is None:
         raise HTTPException(status_code=403, detail=token_or_error)
     response = JSONResponse({"user": user})
@@ -545,12 +545,12 @@ async def api_access_profile(request: Request):
             uploaded = await _save_profile_avatar(form.get("avatar"), user["id"])
             if uploaded:
                 avatar_url = uploaded
-        body = {"name": form.get("name", ""), "bio": form.get("bio", "")}
+        body = {"name": form.get("name", ""), "bio": form.get("bio", ""), "phone": form.get("phone", "")}
     else:
         body = await _access_payload(request)
         avatar_url = body.get("avatar_url", old_avatar)
     try:
-        updated = update_profile(user["id"], body.get("name", ""), body.get("bio", ""), avatar_url)
+        updated = update_profile(user["id"], body.get("name", ""), body.get("bio", ""), avatar_url, body.get("phone", ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     if old_avatar != updated.get("avatar_url"):
