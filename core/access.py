@@ -67,6 +67,7 @@ def _public(row) -> dict:
         "bio": row["bio"] if "bio" in row.keys() else "",
         "has_proof": bool(row["proof_filename"]) if "proof_filename" in row.keys() else False,
         "has_google_login": bool(row["google_sub"]) if "google_sub" in row.keys() else False,
+        "history_hidden": bool(row["history_hidden"]) if "history_hidden" in row.keys() else False,
     }
 
 
@@ -111,6 +112,8 @@ def ensure_access_tables() -> None:
             conn.execute("ALTER TABLE access_user ADD COLUMN proof_filename TEXT")
         if "google_sub" not in cols:
             conn.execute("ALTER TABLE access_user ADD COLUMN google_sub TEXT")
+        if "history_hidden" not in cols:
+            conn.execute("ALTER TABLE access_user ADD COLUMN history_hidden INTEGER NOT NULL DEFAULT 0")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_access_user_google_sub ON access_user(google_sub) WHERE google_sub IS NOT NULL")
     _ensured = True
 
@@ -174,7 +177,7 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
                 conn.execute(
                     """UPDATE access_user
                        SET name = ?, password_hash = ?, status = 'pending',
-                           created_at = ?, approved_at = NULL, proof_filename = ?
+                           created_at = ?, approved_at = NULL, proof_filename = ?, history_hidden = 0
                        WHERE id = ?""",
                     (name, _hash_password(password), _now(), proof_filename, exists["id"]),
                 )
@@ -293,8 +296,15 @@ def list_users(status: str = "pending") -> list[dict]:
         raise ValueError("Status pengguna tidak dikenal.")
     query = "SELECT * FROM access_user"
     params: tuple = ()
-    if status != "all":
+    if status == "all":
+        # Antrean selalu perlu terlihat; keputusan lama yang disembunyikan
+        # admin tidak perlu memenuhi panel riwayat lagi.
+        query += " WHERE status = 'pending' OR history_hidden = 0"
+    elif status == "pending":
         query += " WHERE status = ?"
+        params = (status,)
+    else:
+        query += " WHERE status = ? AND history_hidden = 0"
         params = (status,)
     query += " ORDER BY created_at DESC"
     with get_db() as conn:
@@ -311,7 +321,7 @@ def set_user_status(user_id: int, status: str) -> dict | None:
             if not existing or not existing["proof_filename"]:
                 raise ValueError("Bukti anggota grup WhatsApp Ranah Invest belum diunggah.")
         conn.execute(
-            "UPDATE access_user SET status = ?, approved_at = ? WHERE id = ? AND is_admin = 0",
+            "UPDATE access_user SET status = ?, approved_at = ?, history_hidden = 0 WHERE id = ? AND is_admin = 0",
             (status, _now() if status == "approved" else None, user_id),
         )
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
@@ -331,23 +341,21 @@ def revoke_user_approval(user_id: int) -> dict | None:
 
 
 def delete_access_history_user(user_id: int) -> dict | None:
-    """Hapus akun yang sudah diputuskan dari riwayat admin.
+    """Sembunyikan keputusan lama dari riwayat admin, tanpa menghapus akun.
 
     Antrean aktif sengaja tidak bisa dihapus lewat fungsi ini; admin harus
     memilih Setujui atau Tolak dulu. Akun admin juga selalu dilindungi.
-    Nama file bukti dikembalikan agar lapisan web dapat ikut menghapus file
-    privatnya setelah baris database dihapus.
+    Ini sengaja hanya mengatur penanda tampilan. Kredensial, sesi, dan bukti
+    anggota tetap utuh sehingga anggota yang sudah disetujui tetap dapat masuk.
     """
     ensure_access_tables()
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT status, is_admin, proof_filename FROM access_user WHERE id = ?", (user_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
         if row is None or row["is_admin"] or row["status"] == "pending":
             return None
-        conn.execute("DELETE FROM access_session WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM access_user WHERE id = ?", (user_id,))
-    return {"proof_filename": row["proof_filename"]}
+        conn.execute("UPDATE access_user SET history_hidden = 1 WHERE id = ?", (user_id,))
+        row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
+    return _public(row)
 
 
 def get_proof_filename(user_id: int) -> str | None:

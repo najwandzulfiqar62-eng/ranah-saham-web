@@ -669,11 +669,10 @@ async def api_access_revoke(user_id: int, request: Request):
 @app.post("/api/access/admin/users/{user_id}/delete-history")
 async def api_access_delete_history(user_id: int, request: Request):
     _require_admin(request)
-    deleted = delete_access_history_user(user_id)
-    if deleted is None:
+    user = delete_access_history_user(user_id)
+    if user is None:
         raise HTTPException(status_code=404, detail="Riwayat pengguna tidak ditemukan.")
-    _delete_access_proof(deleted["proof_filename"])
-    return {"ok": True}
+    return {"user": user}
 
 # ---------- cache TTL sederhana (lindungi Yahoo Finance) ----------
 _CACHE_TTL = 300  # detik
