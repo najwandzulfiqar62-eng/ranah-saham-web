@@ -831,12 +831,21 @@ html{scroll-behavior:smooth}
   .panel{padding:14px 14px}
 
 
-  /* header bersih: brand kiri, hbg kanan */
-  .nav{justify-content:space-between}
-  .brand{margin-right:0}
+  /* Header: jangan paksa semua kontrol melewati tepi layar. Di HP, IDX dan
+     toggle tema pindah ke menu; yang tersisa selalu muat dengan lega. */
+  .nav{justify-content:space-between;gap:8px;min-width:0;flex-wrap:nowrap}
+  .brand{margin-right:0;gap:7px;letter-spacing:.065em;font-size:12px;min-width:0}
+  .brand-mark{width:30px;height:30px}
+  .brand sup,.theme-btn{display:none!important}
+  .access-account-btn{font-size:0;padding:8px 9px;min-width:0;flex-shrink:0}
+  .access-account-btn:after{content:"Akun";font-size:11px}
+  .hbg{width:38px;height:38px}
 
-  /* market strip font lebih kecil & fit */
-  .mstrip .wrap{padding:6px 14px;gap:10px}
+  /* Market strip satu baris yang bisa digeser. Inline style markup lama
+     memakai flex-wrap, jadi !important mencegah status LIVE turun baris. */
+  .mstrip{overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+  .mstrip .wrap{width:max-content!important;min-width:100%;padding:8px 14px!important;gap:12px!important;flex-wrap:nowrap!important;white-space:nowrap;scrollbar-width:none}
+  .mstrip .wrap::-webkit-scrollbar{display:none}
   .mstrip .mi{font-size:10px}
   .mstrip .mv{font-size:12px}
 
