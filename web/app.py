@@ -6272,7 +6272,167 @@ _WA_SKENARIO = (
 )
 
 
-def _wa_fmt_plan(plan: dict, analisis: dict | None) -> str:
+async def _wa_report_data(kode: str) -> dict:
+    """Data laporan analisis untuk SATU emiten -- isi yang SAMA dengan PDF
+    Laporan Analisis, dirakit lewat build_report_data() yang sama.
+
+    Bedanya cuma satu: seluruh RENDER GRAFIK dilewati (PDF membuat 5 gambar
+    matplotlib; untuk balasan teks itu beban percuma). Karena datanya satu
+    sumber, bot tidak mungkin bercerita beda dari PDF-nya.
+    """
+    from core.insight import generate_insight, _derive_recommendation
+    from core.trading_plan import calculate_fixed_entry_levels_from_df
+    import datetime as _dt
+
+    kode = _norm_kode(kode)
+    try:
+        df = await _clean(kode + ".JK")
+    except Exception:
+        raise HTTPException(502, "Gagal mengambil data harga. Coba lagi sebentar.")
+    if df is None or len(df) < 50:
+        raise HTTPException(404, f"Data {kode} tidak cukup untuk analisis (butuh ≥50 hari).")
+    ai = calculate_ai_score_from_df(df)
+    if ai is None:
+        raise HTTPException(422, f"Gagal menganalisis {kode}.")
+
+    async def _aman(coro):
+        try:
+            return await coro
+        except Exception:
+            return None
+
+    df_ihsg, berita = await asyncio.gather(
+        _aman(_clean("^JKSE")), _aman(fetch_news(keyword=kode, limit=8)))
+
+    ai_ihsg = rs_data = None
+    if df_ihsg is not None and len(df_ihsg) >= 50:
+        try:
+            ai_ihsg = calculate_ai_score_from_df(df_ihsg)
+        except Exception:
+            pass
+        try:
+            rs_data = calculate_relative_strength(df, df_ihsg)
+        except Exception:
+            pass
+
+    def _coba(fn, *a):
+        try:
+            return fn(*a)
+        except Exception:
+            return None
+
+    vwap_fv = _coba(_vwap_fair_value, df)
+    fixed_entries = _coba(calculate_fixed_entry_levels_from_df, df,
+                          _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    smc = _coba(build_smc_summary, df)
+    rec_badge = _coba(_derive_recommendation, ai, ai_ihsg)
+
+    insight = {"teknikal": _narrate_technical(ai)}
+    try:
+        insight = await generate_insight(kode, ai, ai_ihsg, rs_data, berita)
+    except Exception:
+        pass
+
+    from core.report import build_report_data
+    return build_report_data(kode, kode, ai, insight=insight, ai_ihsg=ai_ihsg,
+                             rs_data=rs_data, news_items=berita, smc=smc,
+                             vwap_fv=vwap_fv, fixed_entries=fixed_entries,
+                             rec_badge=rec_badge)
+
+
+def _wa_fmt_emiten(rd: dict, blok_rencana: list[str]) -> str:
+    """Susun laporan emiten untuk WhatsApp, mengikuti URUTAN BAGIAN di PDF:
+    rekomendasi → snapshot → indikator → bull/bear → sintesis → rencana
+    trading → skenario → SMC → konteks IHSG → berita → manajemen risiko.
+
+    Tabel PDF diubah jadi daftar baris: kolom sejajar patah di layar HP.
+    """
+    baris = []
+    kepala = f"*{rd.get('ticker')}*"
+    if rd.get("recommendation"):
+        kepala += f" — {rd.get('signal') or ''} *{rd['recommendation']}*"
+    baris.append(kepala.strip())
+    if rd.get("score") is not None:
+        baris.append(f"Skor {rd['score']}/100 ({rd.get('rating') or '—'})")
+
+    badge = rd.get("rec_badge") or {}
+    if badge.get("label"):
+        kuat = f" ({badge['strength']})" if badge.get("strength") else ""
+        baris.append(f"Rekomendasi teknikal: *{badge['label']}*{kuat}")
+        if badge.get("reason"):
+            baris.append(f"_{badge['reason']}_")
+
+    if rd.get("ringkasan_eksekutif"):
+        baris += ["", "*Ringkasan*", rd["ringkasan_eksekutif"]]
+
+    if rd.get("snapshot"):
+        baris += ["", "*Snapshot pasar*"]
+        baris += [f"• {label}: {nilai}" for label, nilai in rd["snapshot"]]
+
+    if rd.get("indikator_status"):
+        baris += ["", "*Indikator*"]
+        for nama, status, detail in rd["indikator_status"]:
+            ekor = f" — {detail}" if detail else ""
+            baris.append(f"• {nama}: *{status}*{ekor}")
+
+    if rd.get("bull_case"):
+        baris += ["", "*Argumen bullish*"] + [f"• {x}" for x in rd["bull_case"]]
+    if rd.get("bear_case"):
+        baris += ["", "*Argumen bearish*"] + [f"• {x}" for x in rd["bear_case"]]
+    if rd.get("sintesis"):
+        baris += ["", "*Sintesis*", rd["sintesis"]]
+
+    baris += [""] + blok_rencana
+
+    if rd.get("skenario"):
+        baris += ["", "*Skenario teknikal*"]
+        for s in rd["skenario"]:
+            baris.append(f"• *{s.get('nama')}* ({s.get('arah')})")
+            baris.append(f"   Pemicu: {s.get('kondisi')}")
+            baris.append(f"   Arah: {s.get('target')}")
+
+    smc = rd.get("smc") or {}
+    if smc:
+        baris += ["", "*Smart Money Concepts*"]
+        if smc.get("narasi"):
+            baris.append(smc["narasi"])
+        baris.append(f"• Struktur: {smc.get('n_bos', 0)} BOS / {smc.get('n_choch', 0)} CHoCH")
+        if smc.get("last_struktur"):
+            baris.append(f"• Terakhir: {smc['last_struktur']}")
+        baris.append(f"• Order block: {smc.get('ob_bullish', 0)} bullish / {smc.get('ob_bearish', 0)} bearish")
+        baris.append(f"• Fair value gap belum terisi: {smc.get('fvg_unfilled', 0)}")
+        baris.append(f"• Liquidity pool: {smc.get('liq_high', 0)} di atas / "
+                     f"{smc.get('liq_low', 0)} di bawah, {smc.get('liq_unswept', 0)} belum tersapu")
+        baris.append("_SMC bersifat deskriptif (struktur & area minat), bukan sinyal pasti arah._")
+
+    konteks = rd.get("konteks_ihsg") or rd.get("rs_text")
+    if konteks:
+        baris += ["", "*Konteks pasar (IHSG)*", konteks]
+        if rd.get("rs_text") and rd.get("konteks_ihsg") and rd["rs_text"] not in konteks:
+            baris.append(rd["rs_text"])
+
+    berita = rd.get("berita") or []
+    baris += ["", "*Berita & sentimen*"]
+    if not berita:
+        baris.append("_Tidak ditemukan berita terkini yang menyebut emiten ini._")
+    for b in berita[:5]:
+        judul = (b.get("title") or "").strip()
+        if not judul:
+            continue
+        baris.append(f"• {judul}")
+        if b.get("link"):
+            baris.append(f"  {b['link']}")
+
+    if rd.get("risiko"):
+        baris += ["", "*Manajemen risiko*", rd["risiko"]]
+
+    baris += ["", "_Laporan otomatis dari analisis teknikal rule-based, isinya sama "
+                  "dengan PDF Laporan Analisis di ranahsaham.com. Bukan ajakan "
+                  "membeli/menjual — DYOR._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_plan(plan: dict, analisis: dict | None, dengan_kepala: bool = True) -> str:
     """Rencana trading satu emiten untuk WhatsApp.
 
     SELURUH angkanya datang dari calculate_advanced_plan_from_df() -- fungsi
@@ -6291,28 +6451,38 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None) -> str:
     conf = plan.get("confidence")
     a = analisis or {}
 
-    kepala = f"*{kode}*"
-    if a.get("recommendation"):
-        kepala += f" — {a.get('signal') or ''} *{a['recommendation']}*"
-    baris = [kepala.strip()]
+    baris = []
+    if dengan_kepala:
+        kepala = f"*{kode}*"
+        if a.get("recommendation"):
+            kepala += f" — {a.get('signal') or ''} *{a['recommendation']}*"
+        baris.append(kepala.strip())
 
-    sub = _rp(plan.get("current_price"))
-    if ubah is not None:
-        sub += f" ({'+' if ubah >= 0 else ''}{ubah:.2f}%)"
-    if a.get("score") is not None:
-        sub += f" · skor {a['score']:.0f}/100"
-    if a.get("grade"):
-        sub += f" · grade {a['grade']}"
-    baris += [sub, ""]
+        sub = _rp(plan.get("current_price"))
+        if ubah is not None:
+            sub += f" ({'+' if ubah >= 0 else ''}{ubah:.2f}%)"
+        if a.get("score") is not None:
+            sub += f" · skor {a['score']:.0f}/100"
+        if a.get("grade"):
+            sub += f" · grade {a['grade']}"
+        baris += [sub, ""]
+
+        baris += [
+            "*Kondisi*",
+            f"• Tren: {plan.get('trend') or '—'}",
+            f"• RSI {plan.get('rsi')} — {plan.get('rsi_status') or '—'}",
+            f"• Volume {float(plan.get('vol_ratio') or 0):.1f}x — {plan.get('vol_status') or '—'}",
+            f"• ATR(14): {_rp(plan.get('atr'))}",
+            f"• Breakout: {plan.get('breakout_status') or '—'}",
+            "",
+        ]
+    else:
+        # Dipakai di dalam laporan lengkap: snapshot & indikator sudah
+        # disebut di bagian atas, jangan diulang. Status breakout tetap
+        # dibawa karena tidak ada di bagian mana pun sebelumnya.
+        baris.append(f"_Status breakout: {plan.get('breakout_status') or '—'}_")
 
     baris += [
-        "*Kondisi*",
-        f"• Tren: {plan.get('trend') or '—'}",
-        f"• RSI {plan.get('rsi')} — {plan.get('rsi_status') or '—'}",
-        f"• Volume {float(plan.get('vol_ratio') or 0):.1f}x — {plan.get('vol_status') or '—'}",
-        f"• ATR(14): {_rp(plan.get('atr'))}",
-        f"• Breakout: {plan.get('breakout_status') or '—'}",
-        "",
         f"*Rencana masuk* — modal {_rp(plan.get('account_size'))}, risiko "
         f"{plan.get('target_risk_pct')}% per transaksi",
     ]
@@ -6355,10 +6525,13 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None) -> str:
         "• TP2 → jual 35%, SL geser ke +1,5%",
         "• TP3 → jual 25% / trailing stop",
         "• Hormati SL, jangan average down di luar skenario Deep",
-        "",
-        "_Angka dari perhitungan yang sama dengan halaman Rencana Trading di "
-        "ranahsaham.com. Bukan ajakan membeli/menjual._",
     ]
+    if dengan_kepala:
+        # Saat blok ini disisipkan ke laporan lengkap, penutupnya dilewati --
+        # laporan sudah punya disclaimer sendiri di akhir, dan dua penutup
+        # di tengah dokumen malah memutus alurnya.
+        baris += ["", "_Angka dari perhitungan yang sama dengan halaman Rencana Trading di "
+                      "ranahsaham.com. Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
 
@@ -6583,11 +6756,14 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
                     {"kind": "document", "jenis": "laporan", "kode": kode_laporan,
                      "filename": f"Laporan_{kode_laporan}.pdf",
                      "mimetype": "application/pdf"})
-        # Rencana trading + grafik harga yang SAMA dengan halaman Analisis.
-        teks_plan = _wa_fmt_plan(await plan(kode), await _analyze_payload(kode))
-        return teks_plan, {"kind": "image", "jenis": "chart", "kode": kode,
-                           "filename": f"{kode}.png",
-                           "caption": f"*{kode}* — grafik harga & indikator"}
+        # Isi SAMA dengan PDF Laporan Analisis (termasuk SMC & berita), plus
+        # rencana entry, plus grafik yang sama dengan halaman Analisis.
+        rd, rencana = await asyncio.gather(_wa_report_data(kode), plan(kode))
+        blok = _wa_fmt_plan(rencana, None, dengan_kepala=False).split("\n")
+        return _wa_fmt_emiten(rd, blok), {
+            "kind": "image", "jenis": "chart", "kode": kode,
+            "filename": f"{kode}.png",
+            "caption": f"*{kode}* — grafik harga & indikator"}
     except HTTPException as e:
         return f"Maaf, {e.detail}", None
     except X15FetchError as e:

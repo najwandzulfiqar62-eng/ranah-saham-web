@@ -95,11 +95,12 @@ def test_anggota_approved_dilayani(client, wa_bersih, monkeypatch):
                 "confidence": 70, "sr": {}, "scenarios": {}, "account_size": 100_000_000,
                 "target_risk_pct": 3.0}
 
-    async def _analisis_palsu(kode):
-        return {"kode": kode, "recommendation": "BUY", "signal": "📈", "score": 78.0}
+    async def _rd_palsu(kode):
+        return {"ticker": kode, "score": 78, "rating": "BAGUS", "recommendation": "BUY",
+                "signal": "📈", "snapshot": [("Harga Terakhir", "Rp9.000")]}
 
     monkeypatch.setattr(app_module, "plan", _plan_palsu)
-    monkeypatch.setattr(app_module, "_analyze_payload", _analisis_palsu)
+    monkeypatch.setattr(app_module, "_wa_report_data", _rd_palsu)
     balasan = _kirim(client, "bbca").json()["reply"]
     assert "daftar" not in balasan.lower()
     assert "BBCA" in balasan and "Rp9.000" in balasan
@@ -221,12 +222,12 @@ def test_kode_emiten_membalas_rencana_trading_lengkap(client, wa_bersih, monkeyp
             "max_risk_amount": 3_000_000,
         }
 
-    async def _analisis_palsu(kode):
-        return {"kode": kode, "recommendation": "BUY", "signal": "📈", "score": 68.0,
-                "grade": "B"}
+    async def _rd_palsu(kode):
+        return {"ticker": kode, "score": 68, "rating": "BAGUS", "recommendation": "BUY",
+                "signal": "📈"}
 
     monkeypatch.setattr(app_module, "plan", _plan_palsu)
-    monkeypatch.setattr(app_module, "_analyze_payload", _analisis_palsu)
+    monkeypatch.setattr(app_module, "_wa_report_data", _rd_palsu)
     monkeypatch.setattr(app_module, "_load_ticker_directory",
                         lambda: [{"kode": "DSSA", "nama": "Dian Swastatika"}])
     _daftarkan_approved()
@@ -340,6 +341,70 @@ def test_kode_emiten_menyertakan_grafik_dan_laporan_pdf(client, wa_bersih, monke
     assert lap["media"]["kind"] == "document"
     assert lap["media"]["filename"] == "Laporan_CYBR.pdf"
     assert lap["media"]["mimetype"] == "application/pdf"
+
+
+def test_balasan_emiten_mengikuti_isi_pdf_laporan(client, wa_bersih, monkeypatch):
+    """Permintaan user: isi balasan emiten mengikuti PDF Laporan Analisis --
+    termasuk SMC dan berita. Datanya dirakit build_report_data() yang SAMA
+    dipakai PDF, jadi tes ini memakai bentuk keluarannya yang sebenarnya."""
+    import web.app as app_module
+
+    async def _rd_palsu(kode):
+        return {
+            "ticker": kode, "score": 30, "rating": "CUKUP", "recommendation": "WATCH",
+            "signal": "👀",
+            "rec_badge": {"label": "SELL", "strength": "moderat",
+                          "reason": "Teknikal melemah (skor 30/100)."},
+            "ringkasan_eksekutif": "Gambaran teknikal saat ini seimbang/sideways.",
+            "snapshot": [("Harga Terakhir", "Rp535"), ("RSI (14)", "25.0"),
+                         ("VWAP Fair Value", "Rp565 (Discount, -5.4% vs VWAP)")],
+            "indikator_status": [("Tren MA (5 vs 20)", "BEARISH", "MA5 < MA20"),
+                                 ("RSI", "OVERSOLD", "25.0")],
+            "bull_case": ["Momentum 5 hari positif (+0.9%)."],
+            "bear_case": ["MA5 di bawah MA20 — momentum jangka pendek melemah."],
+            "sintesis": "Gambaran relatif campur/netral.",
+            "skenario": [{"nama": "BULLISH", "arah": "Seimbang",
+                          "kondisi": "Break & tahan di atas MA20 (555)",
+                          "target": "Menuju MA50 (572)"}],
+            "smc": {"narasi": "Struktur pasar terakhir: Break of Structure (bearish).",
+                    "n_bos": 7, "n_choch": 6, "last_struktur": "BOS bearish di Rp530",
+                    "ob_bullish": 2, "ob_bearish": 3, "fvg_unfilled": 0,
+                    "liq_high": 5, "liq_low": 0, "liq_unswept": 5},
+            "konteks_ihsg": "Saham ini jauh lebih lemah dibanding IHSG.",
+            "rs_text": "Saham -5.3% vs IHSG +4.5%.",
+            "berita": [{"title": "CYBR menang tender proyek", "link": "https://contoh.id/a"}],
+            "risiko": "Manajemen risiko bukan opsional. Batasi 1–2% per ide trading.",
+        }
+
+    async def _plan_palsu(kode):
+        return {"ticker_symbol": kode, "current_price": 535, "breakout_status": "Belum breakout",
+                "sr": {}, "scenarios": {"normal": {"entry": 535, "sl": 518, "risk_pct": 3.1,
+                                                   "position_size": 176000, "position_value": 94160000,
+                                                   "tp": {"tp1": 552, "tp2": 569, "tp3": 585,
+                                                          "rr1": 1.0, "rr2": 2.0, "rr3": 3.0}}},
+                "account_size": 100_000_000, "target_risk_pct": 3.0, "confidence": 40}
+
+    monkeypatch.setattr(app_module, "_wa_report_data", _rd_palsu)
+    monkeypatch.setattr(app_module, "plan", _plan_palsu)
+    monkeypatch.setattr(app_module, "_load_ticker_directory",
+                        lambda: [{"kode": "CYBR", "nama": "Cyber Network"}])
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "cybr").json()["reply"]
+    # Bagian-bagian yang ada di PDF harus ada juga di sini.
+    assert "Skor 30/100 (CUKUP)" in hasil
+    assert "Rekomendasi teknikal: *SELL* (moderat)" in hasil
+    assert "Harga Terakhir: Rp535" in hasil and "VWAP Fair Value" in hasil
+    assert "Tren MA (5 vs 20): *BEARISH* — MA5 < MA20" in hasil
+    assert "Argumen bullish" in hasil and "Argumen bearish" in hasil
+    assert "Smart Money Concepts" in hasil
+    assert "7 BOS / 6 CHoCH" in hasil and "2 bullish / 3 bearish" in hasil
+    assert "Konteks pasar (IHSG)" in hasil
+    assert "CYBR menang tender proyek" in hasil and "https://contoh.id/a" in hasil
+    assert "Manajemen risiko" in hasil
+    # Rencana entry tetap ikut, tanpa mengulang judul emiten dua kali.
+    assert "Rencana masuk" in hasil and "Entry Rp535" in hasil
+    assert hasil.count("*CYBR*") == 1
 
 
 def test_endpoint_media_juga_gagal_tertutup(client, wa_bersih, monkeypatch):
