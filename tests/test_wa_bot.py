@@ -285,6 +285,27 @@ def test_kepemilikan_menyertakan_akumulasi_berulang_sebulan(client, wa_bersih, m
     assert "SEPI" not in blok, "satu sesi (walau 2 pelapor) bukan pola berulang"
 
 
+def test_daftar_ditampilkan_lengkap_tanpa_dipotong(client, wa_bersih, monkeypatch):
+    """Permintaan user: "gausah make yg lainnya saya mau nya lengkap".
+    Daftar TIDAK boleh dipangkas ke N teratas lalu ditutup "...dan sekian
+    lainnya" -- semua baris harus ikut terkirim."""
+    import web.app as app_module
+
+    async def _minervini_palsu():
+        return {"items": [{"ticker": f"SH{i:02d}", "skor": 90 - i, "harga": 1000 + i,
+                           "criteria_met": 7, "rs_score": 80} for i in range(18)],
+                "universe": 178}
+
+    monkeypatch.setattr(app_module, "screenerpro", _minervini_palsu)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "screener").json()["reply"]
+    for i in range(18):
+        assert f"SH{i:02d}" in hasil, f"saham ke-{i} hilang dari daftar"
+    assert "lainnya" not in hasil
+    assert "18 saham" in hasil
+
+
 def test_kepemilikan_bisa_melacak_satu_emiten(client, wa_bersih, monkeypatch):
     import web.app as app_module
 

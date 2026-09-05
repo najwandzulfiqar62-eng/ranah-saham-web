@@ -6032,16 +6032,14 @@ async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
 def _wa_fmt_akumulasi(rows: list[dict], hari: int = _WA_AKUM_HARI) -> list[str]:
     if not rows:
         return [f"_Tidak ada saham yang dibeli berulang dalam {hari} hari terakhir._"]
-    baris = [f"*Akumulasi berulang ({hari} hari)*"]
-    for r in rows[:8]:
+    baris = [f"*Akumulasi berulang ({hari} hari)* — {len(rows)} saham"]
+    for r in rows:
         nama = r["nama"]
         pelapor = ("—" if not nama else nama[0] if len(nama) == 1
                    else f"{len(nama)} pemegang berbeda")
         baris.append(f"• *{r['kode']}* — {r['jumlah_hari']} hari · {pelapor}")
         if r["pct_awal"] is not None and r["pct_akhir"] is not None:
             baris.append(f"   {r['pct_awal']:.2f}% → *{r['pct_akhir']:.2f}%*")
-    if len(rows) > 8:
-        baris.append(f"_...dan {len(rows) - 8} saham lainnya di ranahsaham.com_")
     return baris
 
 
@@ -6053,8 +6051,8 @@ def _wa_fmt_pemegang_kode(payload: dict) -> str:
         return (f"*Kepemilikan {kode}*\n\n_Tidak ada filing X-15 dalam 90 hari terakhir._\n\n"
                 "Hanya pemegang ≥5% dan insider yang wajib lapor — sepi di sini berarti "
                 "tidak ada perubahan yang dilaporkan, bukan berarti tidak ada pemiliknya.")
-    baris = [f"*Kepemilikan {kode}* — pemegang ≥5% & insider", ""]
-    for h in holders[:8]:
+    baris = [f"*Kepemilikan {kode}* — {len(holders)} pelapor (≥5% & insider)", ""]
+    for h in holders:
         label = h.get("nama_tampil") or "(tidak diketahui)"
         peran = " (insider)" if h.get("is_insider") else ""
         baris.append(f"• *{label}*{peran}")
@@ -6067,8 +6065,6 @@ def _wa_fmt_pemegang_kode(payload: dict) -> str:
             rinci += f" · {h['tanggal']}"
         if rinci:
             baris.append(rinci)
-    if len(holders) > 8:
-        baris.append(f"\n_...dan {len(holders) - 8} pelapor lainnya di ranahsaham.com_")
     baris += ["", "_Dari filing X-15/POJK 4-2024 resmi IDX, 90 hari terakhir. "
                   "Persentase hak suara, bukan jumlah lembar. Pemegang di bawah 5% "
                   "tidak wajib lapor sehingga tidak muncul di sini._"]
@@ -6086,10 +6082,10 @@ async def _wa_x15_lines() -> list[str]:
         lines = ["*Kepemilikan ≥5% (X-15) hari ini:*"]
         if not akumulasi and not distribusi:
             lines.append("_Tidak ada filing akumulasi/distribusi ≥5% hari ini._")
-        for it in akumulasi[:10]:
+        for it in akumulasi:
             nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
             lines.append(f"• {it['kode']} — {nama} naik {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% (+{it['perubahan']:.2f}%)")
-        for it in distribusi[:10]:
+        for it in distribusi:
             nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
             lines.append(f"• {it['kode']} — {nama} turun {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% ({it['perubahan']:.2f}%)")
         return lines
@@ -6363,7 +6359,7 @@ def _wa_fmt_sinyal(rep: dict) -> str:
                   "Coba *screener* untuk kandidat saringan Minervini hari ini."]
         return "\n".join(baris)
 
-    for s in aktif[:5]:
+    for s in aktif:
         skor = s.get("confidence_score") or s.get("ai_score")
         arah = " (SELL)" if s.get("direction") == "SELL" else ""
         judul = f"*{s.get('kode')}*{arah} — {_status_wa(s.get('status'))}"
@@ -6381,9 +6377,6 @@ def _wa_fmt_sinyal(rep: dict) -> str:
             jejak += f" · {s['pattern']}"
         baris.append(f"   _{jejak}_")
 
-    sisa = len(aktif) - 5
-    if sisa > 0:
-        baris.append(f"\n_...dan {sisa} sinyal berjalan lainnya di ranahsaham.com_")
     baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
               "_Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
@@ -6406,14 +6399,12 @@ def _wa_fmt_screener(payload: dict) -> str:
     items = (payload or {}).get("items") or []
     if not items:
         return "*Saringan breakout hari ini*\n\n_Tidak ada saham yang lolos saringan hari ini._"
-    baris = ["*Saringan breakout hari ini*", ""]
-    for it in items[:10]:
+    baris = [f"*Saringan breakout hari ini* ({len(items)} saham)", ""]
+    for it in items:
         harga = it.get("price")
         harga_txt = "" if harga is None else f" · {_rp(harga)}"
         sinyal = f" · {it['signal']}" if it.get("signal") else ""
         baris.append(f"• *{it.get('ticker')}*{harga_txt}{sinyal}")
-    if len(items) > 10:
-        baris.append(f"_...dan {len(items) - 10} lainnya di ranahsaham.com_")
     baris += ["", "_Hasil saringan otomatis, bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
@@ -6431,8 +6422,8 @@ def _wa_fmt_minervini(payload) -> str:
         return ("*Saringan Minervini*\n\n_Tidak ada saham yang lolos trend template "
                 "hari ini._\n\nSaringan ini memang ketat — hari tanpa hasil itu wajar, "
                 "bukan tanda datanya rusak.")
-    baris = ["*Saringan Minervini — trend template*", ""]
-    for it in items[:10]:
+    baris = [f"*Saringan Minervini — trend template* ({len(items)} saham)", ""]
+    for it in items:
         baris.append(f"• *{it.get('ticker')}* · skor {it.get('skor')} · {_rp(it.get('harga'))}")
         rinci = f"   {it.get('criteria_met')}/8 kriteria"
         if it.get("rs_score") is not None:
@@ -6442,8 +6433,6 @@ def _wa_fmt_minervini(payload) -> str:
         if it.get("vol_ratio") is not None:
             rinci += f" · vol {it['vol_ratio']}x"
         baris.append(rinci)
-    if len(items) > 10:
-        baris.append(f"\n_...dan {len(items) - 10} lainnya di ranahsaham.com_")
     baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
               "_Hasil saringan otomatis, bukan ajakan membeli/menjual._"]
     return "\n".join(baris)

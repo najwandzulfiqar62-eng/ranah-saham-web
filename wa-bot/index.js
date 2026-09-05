@@ -26,6 +26,45 @@ let sock = null;
 let isConnected = false;
 let lastQrPng = null; // Buffer PNG QR terbaru, null kalau sudah login/belum ada
 
+// Daftar lengkap (semua saham akumulasi berulang, semua filing hari itu) bisa
+// melampaui batas satu pesan WhatsApp. Dipotong per BARIS, bukan per karakter,
+// supaya tidak ada baris data yang terbelah di tengah -- lebih baik beberapa
+// pesan berurutan daripada daftar yang diam-diam terpenggal.
+const BATAS_PESAN = 3500;
+
+function pecahPesan(teks, batas = BATAS_PESAN) {
+  if (teks.length <= batas) return [teks];
+  const bagian = [];
+  let buffer = "";
+  for (const baris of teks.split("\n")) {
+    // Satu baris tunggal yang lebih panjang dari batas: kirim apa adanya,
+    // biar WhatsApp yang mengurus daripada memotongnya sembarangan.
+    if (baris.length >= batas) {
+      if (buffer) { bagian.push(buffer); buffer = ""; }
+      bagian.push(baris);
+      continue;
+    }
+    if ((buffer + "\n" + baris).length > batas) {
+      bagian.push(buffer);
+      buffer = baris;
+    } else {
+      buffer = buffer ? buffer + "\n" + baris : baris;
+    }
+  }
+  if (buffer) bagian.push(buffer);
+  return bagian;
+}
+
+async function kirimTeks(jid, teks, quoted) {
+  const bagian = pecahPesan(teks);
+  for (let i = 0; i < bagian.length; i++) {
+    const isi = bagian.length > 1 ? `${bagian[i]}\n\n_(${i + 1}/${bagian.length})_` : bagian[i];
+    // Hanya pesan pertama yang mengutip, sisanya lanjutan.
+    await sock.sendMessage(jid, { text: isi }, i === 0 && quoted ? { quoted } : undefined);
+    if (i < bagian.length - 1) await new Promise((r) => setTimeout(r, 900));
+  }
+}
+
 if (!SECRET) {
   console.warn(
     "[wa-bot] PERINGATAN: WA_BOT_SECRET kosong -- endpoint HTTP TIDAK terproteksi. " +
@@ -109,7 +148,7 @@ async function startSock() {
         }
         const { reply } = await res.json();
         // reply null = memang bukan perintah; obrolan biasa tidak disahut.
-        if (reply) await sock.sendMessage(GROUP_JID, { text: reply }, { quoted: msg });
+        if (reply) await kirimTeks(GROUP_JID, reply, msg);
       } catch (e) {
         console.error("[wa-bot] Gagal memproses pesan:", e);
       }
@@ -172,7 +211,9 @@ app.post("/send", async (req, res) => {
     return res.status(503).json({ error: "belum terhubung ke WhatsApp" });
   }
   try {
-    await sock.sendMessage(GROUP_JID, { text });
+    // Lewat kirimTeks juga: digest harian ikut memuat daftar lengkap, jadi
+    // ia bisa melampaui batas satu pesan persis seperti balasan perintah.
+    await kirimTeks(GROUP_JID, text);
     res.json({ ok: true });
   } catch (e) {
     res.status(502).json({ error: `gagal mengirim pesan: ${e.message}` });
