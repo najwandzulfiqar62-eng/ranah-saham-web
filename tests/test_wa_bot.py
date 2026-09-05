@@ -188,7 +188,14 @@ def test_sinyal_menyaring_yang_masih_berjalan_dan_mengurut_confidence(client, wa
 
     hasil = _kirim(client, "sinyal").json()["reply"]
     assert "SUDAH" not in hasil, "sinyal yang sudah tutup tidak bisa ditindaklanjuti"
-    assert "2 sinyal berjalan" in hasil
+    assert "2 sinyal aktif" in hasil
+    # Pertanyaan nyata anggota grup ("yg berjalan sm yg belum entry?") harus
+    # terjawab oleh daftarnya sendiri, bukan perlu ditanyakan ke admin.
+    assert "*Menunggu entry* (1)" in hasil
+    assert "*Sedang berjalan* (1)" in hasil
+    assert hasil.index("Menunggu entry") < hasil.index("Sedang berjalan")
+    assert "sudah TP1" in hasil                       # progres TP disebut
+    assert "TETAP di daftar selama posisinya belum ditutup" in hasil
     assert hasil.index("UNGGUL") < hasil.index("BIASA"), "harus urut confidence"
     # TP LENGKAP, bukan cuma TP1, dan level yang sudah tercapai ditandai.
     assert "Rp750" in hasil                        # SL
@@ -473,7 +480,7 @@ def test_sinyal_dibatasi_20_terbaik(client, wa_bersih, monkeypatch):
     _daftarkan_approved()
 
     hasil = _kirim(client, "sinyal").json()["reply"]
-    assert "20 teratas dari 30 sinyal berjalan" in hasil
+    assert "20 teratas dari 30 sinyal aktif" in hasil
     assert "SG00" in hasil and "SG19" in hasil     # confidence tertinggi ikut
     assert "SG20" not in hasil and "SG29" not in hasil  # yang terlemah dipotong
 

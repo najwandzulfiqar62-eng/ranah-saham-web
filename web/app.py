@@ -6594,44 +6594,64 @@ def _wa_fmt_sinyal(rep: dict) -> str:
     stats = rep.get("stats") or {}
     judul = "*Rekomendasi sinyal terbaik*"
     if total_aktif > len(aktif):
-        judul += f" — {len(aktif)} teratas dari {total_aktif} sinyal berjalan"
+        judul += f" — {len(aktif)} teratas dari {total_aktif} sinyal aktif"
     elif total_aktif:
-        judul += f" — {total_aktif} sinyal berjalan"
+        judul += f" — {total_aktif} sinyal aktif"
     baris = [judul]
     if stats.get("win_rate") is not None:
         baris.append(f"_Win rate tercatat {stats['win_rate']:.1f}% dari "
                      f"{rep.get('n_total', 0)} sinyal._")
-    baris.append("")
 
     if not aktif:
-        baris += ["_Tidak ada sinyal yang sedang berjalan saat ini._", "",
+        baris += ["", "_Tidak ada sinyal aktif saat ini._", "",
                   "Coba *screener* untuk kandidat saringan Minervini hari ini."]
         return "\n".join(baris)
 
-    for s in aktif:
+    def _kartu(s: dict) -> list[str]:
         skor = s.get("confidence_score") or s.get("ai_score")
         arah = " (SELL)" if s.get("direction") == "SELL" else ""
-        judul = f"*{s.get('kode')}*{arah} — {_status_wa(s.get('status'))}"
+        kepala = f"*{s.get('kode')}*{arah}"
         if skor is not None:
-            judul += f" · confidence {float(skor):.0f}"
-        baris.append(judul)
-        baris.append(f"   Entry {_rp(s.get('entry_price'))} · SL {_rp(s.get('sl_price'))}")
+            kepala += f" · confidence {float(skor):.0f}"
+        tercapai = s.get("tp_level_hit") or 0
+        if tercapai:
+            kepala += f" · sudah TP{tercapai}"
+        isi = [kepala,
+               f"   Entry {_rp(s.get('entry_price'))} · SL {_rp(s.get('sl_price'))}"]
         # TP LENGKAP (TP1/TP2/TP3), bukan cuma TP1: level yang sudah tercapai
         # ditandai supaya kelihatan posisinya sedang di tangga yang mana.
-        tercapai = s.get("tp_level_hit") or 0
         tp = []
         for n, harga in ((1, s.get("tp_price")), (2, s.get("tp2_price")), (3, s.get("tp3_price"))):
             if harga is None:
                 continue
             tp.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
         if tp:
-            baris.append("   " + " · ".join(tp))
+            isi.append("   " + " · ".join(tp))
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
             jejak += f" · {s['pattern']}"
-        baris.append(f"   _{jejak}_")
+        isi.append(f"   _{jejak}_")
+        return isi
 
-    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
+    # Dipisah per kategori. Pertanyaan nyata dari anggota grup: "berarti yg
+    # sedang berjalan sm yg belum entry? atau yg udh kena TP1 jg bisa masuk
+    # kesitu?" -- kalau daftarnya perlu ditanyakan dulu artinya daftarnya
+    # belum menjawab sendiri. Sekarang statusnya jadi judul bagian, bukan
+    # label kecil yang mudah terlewat.
+    for nama_blok, status, catatan in (
+            ("Menunggu entry", "PENDING_ENTRY", "harga belum menyentuh area entry"),
+            ("Sedang berjalan", "OPEN", "sudah entry, posisi masih terbuka")):
+        kelompok = [s for s in aktif if s.get("status") == status]
+        if not kelompok:
+            continue
+        baris += ["", f"*{nama_blok}* ({len(kelompok)}) — _{catatan}_", ""]
+        for s in kelompok:
+            baris += _kartu(s)
+
+    baris += ["", "_Sinyal yang sudah kena TP1/TP2 TETAP di daftar selama posisinya "
+                  "belum ditutup — TP berikutnya masih berlaku. Yang sudah tutup "
+                  "(TP akhir/SL/kadaluarsa) tidak ditampilkan._",
+              "", "Ketik kode emitennya untuk rencana entry lengkap.",
               "_Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
