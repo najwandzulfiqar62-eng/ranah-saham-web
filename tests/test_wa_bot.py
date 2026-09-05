@@ -101,6 +101,35 @@ def test_anggota_approved_dilayani(client, wa_bersih, monkeypatch):
     assert "bukan ajakan" in balasan.lower()
 
 
+def test_pengirim_ber_lid_tetap_dikenali_lewat_kandidat_nomor(client, wa_bersih):
+    """WhatsApp modern mengirim identitas peserta grup sebagai LID acak
+    ("12345@lid"), bukan nomor telepon. Kalau hanya field itu yang dipakai,
+    anggota yang sah tidak akan pernah cocok dengan akunnya -- dan karena
+    ajakan mendaftar dijeda 6 jam, gejalanya jadi "bot diam saja"."""
+    _daftarkan_approved("081234567890")
+
+    res = client.post("/api/wa/command", json={
+        "from": "199887766554433@lid",
+        "candidates": ["199887766554433@lid", "6281234567890@s.whatsapp.net"],
+        "text": "bantuan",
+    }, headers={"Authorization": f"Bearer {SECRET}"})
+
+    balasan = res.json()["reply"]
+    assert balasan is not None and "daftar" not in balasan.lower()
+    assert "Bot Ranah Saham" in balasan
+
+
+def test_lid_tanpa_nomor_asli_tetap_diarahkan_mendaftar(client, wa_bersih):
+    """Kalau memang tidak ada satu pun kandidat yang berupa nomor telepon,
+    jangan diam-diam melayani siapa pun -- tetap perlakukan sebagai tamu."""
+    _daftarkan_approved("081234567890")
+
+    res = client.post("/api/wa/command", json={
+        "from": "199887766554433@lid", "candidates": ["199887766554433@lid"], "text": "bantuan",
+    }, headers={"Authorization": f"Bearer {SECRET}"})
+    assert "daftar" in res.json()["reply"].lower()
+
+
 def test_screener_dan_sinyal_dibaca_dari_bentuk_data_yang_sebenarnya(client, wa_bersih, monkeypatch):
     """Formatter gampang membusuk diam-diam kalau bentuk payload berubah:
     /api/screener memberi {"items": [{ticker, price, signal}]} -- BUKAN

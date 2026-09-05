@@ -6185,16 +6185,40 @@ def _wa_fmt_screener(payload: dict) -> str:
     return "\n".join(baris)
 
 
-async def _wa_handle_command(jid: str, teks: str) -> str | None:
-    """Balasan untuk satu pesan grup, atau None kalau memang tidak perlu
-    dibalas (bukan perintah -- obrolan biasa TIDAK boleh disahut)."""
+async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
+    """Cocokkan pengirim dengan akun ter-approve, mencoba SEMUA identitas yang
+    dikirim wa-bot.
+
+    WhatsApp modern mengidentifikasi peserta grup dengan LID acak
+    ("12345@lid") yang bukan nomor telepon, dan letak nomor aslinya berbeda
+    antar versi Baileys. Karena itu di sini dicoba satu per satu, bukan
+    mengandalkan satu field saja. Nilai kedua yang dikembalikan adalah
+    ringkasan untuk log -- tanpa ini, penolakan tidak meninggalkan jejak sama
+    sekali dan penyebabnya cuma bisa ditebak.
+    """
     from core.access import get_approved_user_by_phone
 
+    dicoba = []
+    for jid in kandidat:
+        nomor = _wa_phone_from_jid(jid)
+        if not nomor or nomor in dicoba:
+            continue
+        dicoba.append(nomor)
+        user = await asyncio.to_thread(get_approved_user_by_phone, nomor)
+        if user:
+            return user, nomor
+    return None, ", ".join(dicoba) or "(tanpa identitas)"
+
+
+async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = None) -> str | None:
+    """Balasan untuk satu pesan grup, atau None kalau memang tidak perlu
+    dibalas (bukan perintah -- obrolan biasa TIDAK boleh disahut)."""
     pesan = (teks or "").strip()
     if not pesan or len(pesan) > 40:  # obrolan panjang jelas bukan perintah
         return None
     kunci = pesan.lower().strip("?!. ")
-    nomor = _wa_phone_from_jid(jid)
+    identitas = [j for j in (kandidat or []) if j] or [jid]
+    nomor = _wa_phone_from_jid(identitas[0])
 
     kode_valid = {t["kode"] for t in _load_ticker_directory()}
     kode = _norm_kode(pesan)
@@ -6202,7 +6226,11 @@ async def _wa_handle_command(jid: str, teks: str) -> str | None:
     if kunci not in {"sinyal", "screener", "kepemilikan", "x15", "bantuan", "help", "menu"} and not adalah_kode:
         return None
 
-    user = await asyncio.to_thread(get_approved_user_by_phone, nomor)
+    user, jejak = await _wa_cari_anggota(identitas)
+    if not user:
+        print(f"⚠️ wa-command: '{pesan}' ditolak, nomor tidak cocok akun ter-approve mana pun ({jejak})")
+    else:
+        print(f"ℹ️ wa-command: '{pesan}' dari {user['name']} ({jejak})")
     if not user:
         # Diundang sekali saja per beberapa jam -- jangan menceramahi orang
         # yang cuma kebetulan menyebut kode saham dalam obrolan.
@@ -6248,7 +6276,8 @@ async def api_wa_command(request: Request):
     if not hmac.compare_digest(kirim, f"Bearer {WA_BOT_SECRET}"):
         raise HTTPException(401, "Tidak berwenang.")
     body = await request.json()
-    balasan = await _wa_handle_command(str(body.get("from") or ""), str(body.get("text") or ""))
+    kandidat = [str(x) for x in (body.get("candidates") or []) if x]
+    balasan = await _wa_handle_command(str(body.get("from") or ""), str(body.get("text") or ""), kandidat)
     return {"reply": balasan}
 
 

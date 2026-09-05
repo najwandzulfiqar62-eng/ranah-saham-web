@@ -84,12 +84,24 @@ async function startSock() {
           || msg.message?.extendedTextMessage?.text
           || "";
         if (!isi.trim()) continue;
-        const pengirim = msg.key.participant || msg.key.remoteJid;
+
+        // WhatsApp modern sering mengidentifikasi peserta grup dengan LID
+        // acak ("12345@lid"), BUKAN nomor teleponnya -- kalau cuma
+        // `participant` yang dikirim, penanya tidak akan pernah cocok dengan
+        // akun mana pun. Baileys menaruh nomor aslinya di field yang
+        // berbeda-beda antar versi, jadi semua kandidat dikirim dan Python
+        // yang memutuskan mana yang cocok.
+        const kandidat = [
+          msg.key.participantPn, msg.key.senderPn, msg.participantPn,
+          msg.key.participantAlt, msg.key.participant, msg.participant,
+        ].filter((v) => typeof v === "string" && v);
+        const pengirim = kandidat[0] || msg.key.remoteJid;
+        console.log(`[wa-bot] pesan grup dari ${kandidat.join(" | ") || "?"}: ${JSON.stringify(isi.slice(0, 60))}`);
 
         const res = await fetch(`${APP_BASE_URL}/api/wa/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${SECRET}` },
-          body: JSON.stringify({ from: pengirim, text: isi }),
+          body: JSON.stringify({ from: pengirim, candidates: kandidat, text: isi }),
         });
         if (!res.ok) {
           console.warn(`[wa-bot] /api/wa/command menjawab ${res.status}`);
