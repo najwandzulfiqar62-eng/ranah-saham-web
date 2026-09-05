@@ -310,6 +310,52 @@ def test_daftar_ditampilkan_lengkap_tanpa_dipotong(client, wa_bersih, monkeypatc
     assert "18 saham" in hasil
 
 
+def test_kode_emiten_menyertakan_grafik_dan_laporan_pdf(client, wa_bersih, monkeypatch):
+    """Balasan kode emiten ikut membawa grafik; `laporan KODE` membawa PDF.
+    Berkasnya TIDAK dikirim di JSON perintah -- hanya petunjuk supaya wa-bot
+    mengambilnya dari /api/wa/media."""
+    import web.app as app_module
+
+    async def _plan_palsu(kode):
+        return {"ticker_symbol": kode, "current_price": 535, "daily_change_pct": -0.93,
+                "confidence": 40, "sr": {}, "scenarios": {}, "account_size": 100_000_000,
+                "target_risk_pct": 3.0}
+
+    async def _analisis_palsu(kode):
+        return {"kode": kode, "recommendation": "WATCH", "signal": "👀", "score": 30.0}
+
+    monkeypatch.setattr(app_module, "plan", _plan_palsu)
+    monkeypatch.setattr(app_module, "_analyze_payload", _analisis_palsu)
+    monkeypatch.setattr(app_module, "_load_ticker_directory",
+                        lambda: [{"kode": "CYBR", "nama": "Cyber Network"}])
+    _daftarkan_approved()
+
+    data = _kirim(client, "cybr").json()
+    assert data["media"]["kind"] == "image"
+    assert data["media"]["jenis"] == "chart" and data["media"]["kode"] == "CYBR"
+    assert "CYBR" in data["reply"]
+
+    app_module._wa_last_reply.clear()
+    lap = _kirim(client, "laporan cybr").json()
+    assert lap["media"]["kind"] == "document"
+    assert lap["media"]["filename"] == "Laporan_CYBR.pdf"
+    assert lap["media"]["mimetype"] == "application/pdf"
+
+
+def test_endpoint_media_juga_gagal_tertutup(client, wa_bersih, monkeypatch):
+    """Jalur /api/wa/ dikecualikan dari access_gate, jadi endpoint media pun
+    WAJIB menolak tanpa secret yang benar -- kalau tidak, grafik & laporan
+    bisa diambil siapa saja tanpa akun."""
+    import web.app as app_module
+
+    assert client.get("/api/wa/media?jenis=chart&kode=BBCA").status_code == 401
+    assert client.get("/api/wa/media?jenis=chart&kode=BBCA",
+                      headers={"Authorization": "Bearer salah"}).status_code == 401
+    monkeypatch.setattr(app_module, "WA_BOT_SECRET", "")
+    assert client.get("/api/wa/media?jenis=chart&kode=BBCA",
+                      headers={"Authorization": "Bearer "}).status_code == 503
+
+
 def test_sinyal_dibatasi_20_terbaik(client, wa_bersih, monkeypatch):
     """Daftar lain tampil utuh, tapi sinyal berjalan bisa puluhan dan tiap
     barisnya memuat entry/TP/SL. Dibatasi 20 TERATAS -- dan karena sudah

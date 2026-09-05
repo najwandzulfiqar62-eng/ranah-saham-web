@@ -146,9 +146,36 @@ async function startSock() {
           console.warn(`[wa-bot] /api/wa/command menjawab ${res.status}`);
           continue;
         }
-        const { reply } = await res.json();
+        const { reply, media } = await res.json();
         // reply null = memang bukan perintah; obrolan biasa tidak disahut.
-        if (reply) await kirimTeks(GROUP_JID, reply, msg);
+        if (!reply && !media) continue;
+
+        // Berkasnya TIDAK ikut di JSON perintah (base64 ratusan KB akan
+        // membengkakkan tiap balasan) -- diambil terpisah saat dibutuhkan.
+        // Gagal ambil grafik JANGAN membatalkan balasan teksnya: analisisnya
+        // tetap berguna walau gambarnya tidak jadi terkirim.
+        if (media) {
+          try {
+            const url = `${APP_BASE_URL}/api/wa/media?jenis=${encodeURIComponent(media.jenis)}`
+              + `&kode=${encodeURIComponent(media.kode)}`;
+            const berkas = await fetch(url, { headers: { Authorization: `Bearer ${SECRET}` } });
+            if (!berkas.ok) throw new Error(`status ${berkas.status}`);
+            const buf = Buffer.from(await berkas.arrayBuffer());
+            if (media.kind === "image") {
+              await sock.sendMessage(GROUP_JID, { image: buf, caption: media.caption || "" }, { quoted: msg });
+            } else {
+              await sock.sendMessage(GROUP_JID, {
+                document: buf,
+                mimetype: media.mimetype || "application/octet-stream",
+                fileName: media.filename || "lampiran",
+                caption: media.caption || "",
+              }, { quoted: msg });
+            }
+          } catch (e) {
+            console.warn(`[wa-bot] Gagal mengirim ${media.jenis}: ${e.message}`);
+          }
+        }
+        if (reply) await kirimTeks(GROUP_JID, reply, media ? undefined : msg);
       } catch (e) {
         console.error("[wa-bot] Gagal memproses pesan:", e);
       }

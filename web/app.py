@@ -5983,7 +5983,14 @@ async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
     Perhitungannya di-cache: satu perintah WhatsApp tidak boleh memicu 31
     penarikan data IDX sekaligus di server yang juga melayani website.
     """
-    cached = _cache_get(f"wa_akumulasi:{hari}")
+    # Kunci cache DIBERI VERSI. Bug nyata yang terjadi: bentuk hasil fungsi
+    # ini berubah (dulu satu rentang % per saham, kini rincian per pemegang),
+    # tapi kuncinya tetap sama -- sesudah deploy, entri LAMA di Redis masih
+    # terbaca dan formatter baru jatuh pada KeyError 'pemegang', yang muncul
+    # ke user sebagai "datanya sedang tidak bisa diambil". Naikkan versinya
+    # setiap kali struktur di bawah ini berubah.
+    kunci = f"wa_akumulasi:v2:{hari}"
+    cached = _cache_get(kunci)
     if cached is not None:
         return cached
 
@@ -6042,7 +6049,7 @@ async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
             "terbaru": urut[0],
         })
     hasil.sort(key=lambda r: (-r["jumlah_hari"], r["terbaru"]))
-    _cache_set(f"wa_akumulasi:{hari}", hasil, ttl=1800)
+    _cache_set(kunci, hasil, ttl=1800)
     return hasil
 
 
@@ -6230,8 +6237,9 @@ def _wa_phone_from_jid(jid: str) -> str:
 _WA_BANTUAN = (
     "*Bot Ranah Saham*\n\n"
     "Ketik salah satu:\n"
-    "• *KODE EMITEN* (mis. `BBCA`) — rencana trading lengkap: verdict, "
-    "4 skenario entry, SL/TP, ukuran posisi\n"
+    "• *KODE EMITEN* (mis. `BBCA`) — grafik + rencana trading lengkap: "
+    "verdict, 4 skenario entry, SL/TP, ukuran posisi\n"
+    "• *laporan KODE* — PDF laporan analisis lengkap\n"
     "• *sinyal* — rekomendasi sinyal terbaik yang sedang berjalan\n"
     "• *screener* — saringan Minervini (trend template 8 kriteria)\n"
     "• *breakout* — saringan breakout volume\n"
@@ -6495,9 +6503,12 @@ async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
     return None, ", ".join(dicoba) or "(tanpa identitas)"
 
 
-async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = None) -> str | None:
-    """Balasan untuk satu pesan grup, atau None kalau memang tidak perlu
-    dibalas (bukan perintah -- obrolan biasa TIDAK boleh disahut)."""
+async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = None
+                             ) -> tuple[str | None, dict | None]:
+    """(teks balasan, media) untuk satu pesan grup. Teks None = memang tidak
+    perlu dibalas (bukan perintah -- obrolan biasa TIDAK boleh disahut).
+    Media berisi petunjuk berkas yang harus diambil wa-bot dari
+    /api/wa/media, bukan berkasnya sendiri."""
     pesan = (teks or "").strip()
     if not pesan or len(pesan) > 40:  # obrolan panjang jelas bukan perintah
         return None
@@ -6518,10 +6529,18 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid:
             kode_lacak = calon
 
-    if not kode_lacak and not adalah_kode and kunci not in {
+    # "laporan BBCA" -> PDF laporan analisis lengkap (sama dengan tombol
+    # Unduh Laporan di web).
+    kode_laporan = ""
+    if len(kata) == 2 and kata[0] in {"laporan", "report", "pdf"}:
+        calon = _norm_kode(kata[1])
+        if calon in kode_valid:
+            kode_laporan = calon
+
+    if not kode_lacak and not kode_laporan and not adalah_kode and kunci not in {
             "sinyal", "screener", "minervini", "breakout", "kepemilikan",
             "x15", "bantuan", "help", "menu"}:
-        return None
+        return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
     if not user:
@@ -6532,60 +6551,90 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         # Diundang sekali saja per beberapa jam -- jangan menceramahi orang
         # yang cuma kebetulan menyebut kode saham dalam obrolan.
         if not _wa_boleh_jawab(nomor, _wa_last_invite, _WA_INVITE_COOLDOWN_SECONDS):
-            return None
+            return None, None
         return ("Halo! Bot ini melayani anggota yang akunnya sudah disetujui admin.\n\n"
                 "Daftar dulu di ranahsaham.com pakai *nomor WhatsApp ini*, "
-                "lalu tunggu persetujuan admin ya.")
+                "lalu tunggu persetujuan admin ya.", None)
 
     if not _wa_boleh_jawab(nomor, _wa_last_reply, _WA_CMD_COOLDOWN_SECONDS):
-        return None
+        return None, None
 
     try:
         if kunci in {"bantuan", "help", "menu"}:
-            return _WA_BANTUAN
+            return _WA_BANTUAN, None
         if kunci == "sinyal":
             # Laporan PENUH (bukan /ringkas): rekomendasi butuh entry/TP/SL
             # dan confidence per sinyal, yang sengaja dibuang versi ringkas.
             from core.signal_history import get_signal_report
-            return _wa_fmt_sinyal(await asyncio.to_thread(get_signal_report))
+            return _wa_fmt_sinyal(await asyncio.to_thread(get_signal_report)), None
         if kunci in {"screener", "minervini"}:
-            return _wa_fmt_minervini(await screenerpro())
+            return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
-            return _wa_fmt_screener(await screener())
+            return _wa_fmt_screener(await screener()), None
         if kode_lacak:
-            return _wa_fmt_pemegang_kode(await api_pemegang_saham(kode_lacak))
+            return _wa_fmt_pemegang_kode(await api_pemegang_saham(kode_lacak)), None
         if kunci in {"kepemilikan", "x15"}:
             baris = await _wa_x15_lines()
             baris += [""] + _wa_fmt_akumulasi(await _wa_akumulasi_berulang())
             baris += ["", "Ketik `kepemilikan KODE` untuk melacak satu emiten."]
-            return "\n".join(baris)
-        return _wa_fmt_plan(await plan(kode), await _analyze_payload(kode))
+            return "\n".join(baris), None
+        if kode_laporan:
+            return (f"*Laporan analisis {kode_laporan}* — versi lengkap dengan grafik.",
+                    {"kind": "document", "jenis": "laporan", "kode": kode_laporan,
+                     "filename": f"Laporan_{kode_laporan}.pdf",
+                     "mimetype": "application/pdf"})
+        # Rencana trading + grafik harga yang SAMA dengan halaman Analisis.
+        teks_plan = _wa_fmt_plan(await plan(kode), await _analyze_payload(kode))
+        return teks_plan, {"kind": "image", "jenis": "chart", "kode": kode,
+                           "filename": f"{kode}.png",
+                           "caption": f"*{kode}* — grafik harga & indikator"}
     except HTTPException as e:
-        return f"Maaf, {e.detail}"
+        return f"Maaf, {e.detail}", None
     except X15FetchError as e:
-        return f"Maaf, data kepemilikan sedang tidak terjangkau ({e})."
+        return f"Maaf, data kepemilikan sedang tidak terjangkau ({e}).", None
     except Exception as e:
         print(f"⚠️ wa-command '{pesan}' gagal: {type(e).__name__}: {e}")
-        return "Maaf, datanya sedang tidak bisa diambil. Coba lagi sebentar lagi."
+        return "Maaf, datanya sedang tidak bisa diambil. Coba lagi sebentar lagi.", None
+
+
+def _wa_pastikan_bot(request: Request) -> None:
+    """Jalur /api/wa/ dikecualikan dari access_gate karena pemanggilnya mesin,
+    bukan browser bersesi -- karena itu ia WAJIB gagal-tertutup: tanpa
+    WA_BOT_SECRET terisi, seluruh jalur ini menolak semua orang."""
+    if not WA_BOT_SECRET:
+        raise HTTPException(503, "Bot WhatsApp tidak dikonfigurasi.")
+    if not hmac.compare_digest(request.headers.get("authorization") or "",
+                               f"Bearer {WA_BOT_SECRET}"):
+        raise HTTPException(401, "Tidak berwenang.")
 
 
 @app.post("/api/wa/command")
 async def api_wa_command(request: Request):
-    """Dipanggil HANYA oleh sidecar wa-bot (Bearer WA_BOT_SECRET).
-
-    Jalur ini dikecualikan dari access_gate karena pemanggilnya mesin, bukan
-    browser bersesi -- karena itu ia WAJIB gagal-tertutup: tanpa
-    WA_BOT_SECRET terisi, endpoint ini menolak semua orang.
-    """
-    if not WA_BOT_SECRET:
-        raise HTTPException(503, "Bot WhatsApp tidak dikonfigurasi.")
-    kirim = (request.headers.get("authorization") or "")
-    if not hmac.compare_digest(kirim, f"Bearer {WA_BOT_SECRET}"):
-        raise HTTPException(401, "Tidak berwenang.")
+    """Dipanggil HANYA oleh sidecar wa-bot (Bearer WA_BOT_SECRET)."""
+    _wa_pastikan_bot(request)
     body = await request.json()
     kandidat = [str(x) for x in (body.get("candidates") or []) if x]
-    balasan = await _wa_handle_command(str(body.get("from") or ""), str(body.get("text") or ""), kandidat)
-    return {"reply": balasan}
+    balasan, media = await _wa_handle_command(
+        str(body.get("from") or ""), str(body.get("text") or ""), kandidat)
+    return {"reply": balasan, "media": media}
+
+
+@app.get("/api/wa/media")
+async def api_wa_media(request: Request, jenis: str, kode: str):
+    """Grafik/laporan untuk dikirim bot ke grup.
+
+    Sengaja TIDAK mengirim berkasnya lewat JSON perintah (base64 ratusan KB
+    membengkakkan setiap balasan); wa-bot mengambilnya di sini saat butuh,
+    memakai secret yang sama. Isinya dibuat oleh endpoint yang SAMA dipakai
+    website (chart/report), jadi grafik di WhatsApp identik dengan di web.
+    """
+    _wa_pastikan_bot(request)
+    kode = _norm_kode(kode)
+    if jenis == "chart":
+        return await chart(kode)
+    if jenis == "laporan":
+        return await report(kode)
+    raise HTTPException(400, "Jenis media tidak dikenal.")
 
 
 @app.get("/api/admin/whatsapp/status")
