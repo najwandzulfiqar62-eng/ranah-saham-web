@@ -6318,7 +6318,8 @@ _WA_BANTUAN = (
     "• *breakout* — saringan breakout volume\n"
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
     "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
-    "• *news* — berita pasar terbaru (*news KODE* untuk satu emiten)\n\n"
+    "• *news* — berita pasar terbaru (*news KODE* untuk satu emiten)\n"
+    "• *ihsg* — analisis pasar/indeks\n\n"
     "_Bukan ajakan membeli/menjual._"
 )
 
@@ -6344,6 +6345,65 @@ _WA_SKENARIO = (
     ("deep", "Deep", "entry kedua / rata-rata bawah"),
     ("breakout", "Breakout", "tunggu tembus resistance"),
 )
+
+
+def _wa_fmt_ihsg(d: dict) -> str:
+    """Analisis IHSG untuk WhatsApp -- isinya dari /api/ihsg, endpoint yang
+    SAMA dipakai kartu IHSG di web."""
+    baris = ["*IHSG — analisis pasar*"]
+    harga, ubah = d.get("current_price"), d.get("daily_change")
+    if harga is not None:
+        judul = f"{float(harga):,.2f}".replace(",", ".")
+        if ubah is not None:
+            judul += f" ({'+' if ubah >= 0 else ''}{ubah:.2f}%)"
+        baris.append(judul)
+    if d.get("prediction"):
+        aksi = f" · {d['action']}" if d.get("action") else ""
+        yakin = f" · keyakinan {d['confidence']}%" if d.get("confidence") is not None else ""
+        baris.append(f"Prediksi: *{d['prediction']}*{aksi}{yakin}")
+    if d.get("target_move"):
+        baris.append(f"Perkiraan gerak: {d['target_move']}")
+
+    skor = []
+    if d.get("bullish_score") is not None:
+        skor.append(f"bullish {d['bullish_score']}")
+    if d.get("bearish_score") is not None:
+        skor.append(f"bearish {d['bearish_score']}")
+    if skor:
+        baris += ["", "*Skor konfluensi*", "• " + " · ".join(skor)]
+
+    teknikal = [
+        ("RSI", d.get("rsi")),
+        ("MACD", d.get("macd_signal")),
+        ("Tren MA", d.get("ma_trend")),
+        ("Posisi BB", d.get("bb_position")),
+        ("Volume", d.get("volume_trend")),
+        ("Fibonacci", d.get("fib_position")),
+    ]
+    isi = [f"• {nama}: {nilai}" for nama, nilai in teknikal if nilai is not None]
+    if isi:
+        baris += ["", "*Indikator*"] + isi
+    if d.get("bandar"):
+        b = d["bandar"]
+        baris.append(f"• Bandar: {b.get('label')} ({b.get('sinyal')})")
+
+    if d.get("entry_zone") or d.get("stop_loss"):
+        baris += ["", "*Level*"]
+        if d.get("entry_zone"):
+            baris.append(f"• Area entry: {d['entry_zone']}")
+        if d.get("stop_loss"):
+            baris.append(f"• Stop loss: {d['stop_loss']}")
+    naik, turun = d.get("potensi_naik_pct"), d.get("risiko_turun_pct")
+    if naik is not None or turun is not None:
+        baris.append(f"• Potensi naik {naik}% · risiko turun {turun}%")
+
+    bt = d.get("backtest") or {}
+    if bt.get("win_rate") is not None:
+        dasar = f" (dasar {bt['base_rate']}%)" if bt.get("base_rate") is not None else ""
+        baris += ["", f"_Backtest pola serupa: {bt['win_rate']}% benar{dasar}._"]
+
+    baris += ["", "_Analisis otomatis atas indeks, bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
 
 
 def _wa_fmt_berita(items: list[dict] | None, kode: str = "") -> str:
@@ -6872,7 +6932,8 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
 
     if (not kode_lacak and not kode_laporan and not minta_berita and not adalah_kode
             and kunci not in {"sinyal", "screener", "minervini", "breakout",
-                              "kepemilikan", "x15", "bantuan", "help", "menu"}):
+                              "kepemilikan", "x15", "ihsg", "pasar",
+                              "bantuan", "help", "menu"}):
         return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -6908,6 +6969,8 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
+        if kunci in {"ihsg", "pasar"}:
+            return _wa_fmt_ihsg(await ihsg()), None
         if minta_berita:
             berita = await fetch_news(keyword=kode_berita or None, limit=15)
             return _wa_fmt_berita(berita, kode_berita), None

@@ -452,6 +452,36 @@ def test_balasan_emiten_mengikuti_isi_pdf_laporan(client, wa_bersih, monkeypatch
     assert hasil.count("*CYBR*") == 1
 
 
+def test_perintah_ihsg_memakai_analisis_yang_sama_dengan_web(client, wa_bersih, monkeypatch):
+    """Bentuk payload mengikuti /api/ihsg yang sebenarnya, supaya bot &
+    kartu IHSG di web tidak bisa bercerita beda."""
+    import web.app as app_module
+
+    async def _ihsg_palsu():
+        return {"prediction": "SIDEWAYS", "action": "WAIT", "confidence": 62,
+                "target_move": "+0.3% s/d -0.4%", "current_price": 7812.35,
+                "daily_change": 0.41, "bullish_score": 4, "bearish_score": 3,
+                "rsi": 71.9, "macd_signal": "bullish", "ma_trend": "MA5 > MA20",
+                "bb_position": "atas", "volume_trend": "menurun",
+                "fib_position": "0.618", "entry_zone": "7.750–7.780",
+                "stop_loss": "7.690", "potensi_naik_pct": 2.4,
+                "risiko_turun_pct": 1.8,
+                "bandar": {"label": "Akumulasi", "sinyal": "positif"},
+                "backtest": {"win_rate": 58.0, "base_rate": 51.0}}
+
+    monkeypatch.setattr(app_module, "ihsg", _ihsg_palsu)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "ihsg").json()["reply"]
+    assert "IHSG — analisis pasar" in hasil
+    assert "7.812,35" in hasil.replace(",", ",") or "7.812" in hasil
+    assert "*SIDEWAYS*" in hasil and "WAIT" in hasil and "62%" in hasil
+    assert "RSI: 71.9" in hasil and "MA5 > MA20" in hasil
+    assert "Akumulasi" in hasil
+    assert "7.750–7.780" in hasil and "7.690" in hasil
+    assert "58.0% benar" in hasil and "dasar 51.0%" in hasil
+
+
 def test_perintah_news_dan_news_per_emiten(client, wa_bersih, monkeypatch):
     import datetime as dt
 
