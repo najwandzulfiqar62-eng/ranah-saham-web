@@ -7007,7 +7007,10 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
         if kunci in {"ihsg", "pasar"}:
-            return _wa_fmt_ihsg(await ihsg()), None
+            return _wa_fmt_ihsg(await ihsg()), {
+                "kind": "image", "jenis": "chart_ihsg", "kode": "IHSG",
+                "filename": "IHSG.png",
+                "caption": "*IHSG* — harga, Fibonacci & SMC, RSI, MACD, volume"}
         if minta_berita:
             berita = await fetch_news(keyword=kode_berita or None, limit=15)
             return _wa_fmt_berita(berita, kode_berita), None
@@ -7077,6 +7080,20 @@ async def api_wa_media(request: Request, jenis: str, kode: str):
         return await chart(kode)
     if jenis == "laporan":
         return await report(kode)
+    if jenis == "chart_ihsg":
+        # Chart 4-panel IHSG (harga+Fibonacci+SMC, RSI, MACD, volume) --
+        # generator yang sama dipakai laporan IHSG, bukan gambar baru.
+        from core.ihsg.ihsg_chart import generate_ihsg_advanced_chart
+        try:
+            df = await _clean("^JKSE", period="1y")
+        except Exception:
+            raise HTTPException(502, "Gagal mengambil data IHSG.")
+        if df is None or len(df) < 50:
+            raise HTTPException(404, "Data IHSG tidak cukup.")
+        path = await asyncio.to_thread(generate_ihsg_advanced_chart, df)
+        if not path or not os.path.exists(path):
+            raise HTTPException(500, "Gagal membuat chart IHSG.")
+        return FileResponse(path, media_type="image/png", filename="IHSG.png")
     raise HTTPException(400, "Jenis media tidak dikenal.")
 
 

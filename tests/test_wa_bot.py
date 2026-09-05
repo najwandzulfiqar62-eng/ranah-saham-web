@@ -479,7 +479,11 @@ def test_perintah_ihsg_memakai_analisis_yang_sama_dengan_web(client, wa_bersih, 
     monkeypatch.setattr(app_module, "ihsg", _ihsg_palsu)
     _daftarkan_approved()
 
-    hasil = _kirim(client, "ihsg").json()["reply"]
+    jawaban = _kirim(client, "ihsg").json()
+    hasil = jawaban["reply"]
+    # IHSG ikut membawa chart 4-panel, seperti balasan kode emiten.
+    assert jawaban["media"]["jenis"] == "chart_ihsg"
+    assert jawaban["media"]["kind"] == "image"
     assert "IHSG — analisis pasar" in hasil
     assert "7.812,35" in hasil.replace(",", ",") or "7.812" in hasil
     assert "*SIDEWAYS*" in hasil and "WAIT" in hasil and "62%" in hasil

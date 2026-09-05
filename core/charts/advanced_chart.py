@@ -113,7 +113,10 @@ def generate_advanced_chart(df: pd.DataFrame, ticker_symbol: str, output_path: s
             ax1.scatter(idx, price, color='#ff0000', s=200, marker='v', zorder=5, edgecolors='white', linewidth=2)
 
         ax1.set_ylabel('Price (Rp)', color='white')
-        ax1.tick_params(colors='white')
+        # Label sumbu-X hanya di panel PALING BAWAH. Tanpa ini panel atas
+        # menampilkan NOMOR BARIS (0..250) sementara panel bawah memakai
+        # tanggal -- terlihat seperti dua sumbu berbeda pada satu gambar.
+        ax1.tick_params(colors='white', labelbottom=False)
         ax1.grid(True, alpha=0.2)
         ax1.legend(loc='upper left', facecolor='#1a1a2e', labelcolor='white')
 
@@ -131,7 +134,7 @@ def generate_advanced_chart(df: pd.DataFrame, ticker_symbol: str, output_path: s
 
         ax2.plot(range(len(vol_ma20)), vol_ma20, color='#ffd93d', linewidth=1.5, label='Volume MA20')
         ax2.set_ylabel('Volume', color='white')
-        ax2.tick_params(colors='white')
+        ax2.tick_params(colors='white', labelbottom=False)
         ax2.grid(True, alpha=0.2)
 
         # ===== 3. STOCHASTIC RSI SUBPLOT =====
@@ -145,7 +148,7 @@ def generate_advanced_chart(df: pd.DataFrame, ticker_symbol: str, output_path: s
         ax3.fill_between(range(len(stoch_k)), 20, 80, color='#4d4d4d', alpha=0.2)
         ax3.set_ylabel('Stoch RSI', color='white')
         ax3.set_ylim(0, 100)
-        ax3.tick_params(colors='white')
+        ax3.tick_params(colors='white', labelbottom=False)
         ax3.grid(True, alpha=0.2)
         ax3.legend(loc='upper left', facecolor='#1a1a2e', labelcolor='white')
 
