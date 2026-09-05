@@ -684,6 +684,16 @@
 .b-line.on{background:rgba(47,181,126,.4)}
 .berulang-range{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);font-family:'JetBrains Mono',monospace}
 .berulang-range .end{color:var(--bull);font-weight:700}
+/* Satu baris per pemegang -- persentase milik orang berbeda tidak boleh
+   disandingkan jadi satu rentang (dulu "12,00% → 5,05%" untuk dua orang
+   berbeda, terbaca seolah kepemilikannya anjlok). */
+.berulang-holder-row{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:11px;min-width:0}
+.bh-nama{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.bh-days{font-size:9px;color:var(--faint);white-space:nowrap;flex-shrink:0}
+.bh-pct{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint);white-space:nowrap;flex-shrink:0}
+.bh-pct b{color:var(--bull)}
+.bh-arrow{color:var(--line);padding:0 1px}
+@media(max-width:420px){.berulang-holder-row{flex-wrap:wrap;gap:4px}.bh-nama{flex:1 0 100%}}
 /* ── Mobile overrides (selaras dengan breakpoint utama 768px) ── */
 @media(max-width:768px){.x15-dash-grid{grid-template-columns:1fr;gap:8px}.x15-panel{padding:12px 13px}}
 @media(max-width:768px){.x15-top-kep{display:none}.x15-col-kep{display:none}}
@@ -6708,11 +6718,19 @@ async function loadBerulang(){
   sessions.forEach((sess,idx)=>{
     (sess.akumulasi||[]).forEach(item=>{
       const key=item.kode;
-      if(!map[key])map[key]={item,daysSet:new Set(),pctByDay:{},namesSet:new Set()};
+      if(!map[key])map[key]={item,daysSet:new Set(),pctByDay:{},byHolder:{}};
       map[key].daysSet.add(idx);
       map[key].pctByDay[idx]=item.pct_setelah;
       map[key].item=item;
-      if(item.nama&&item.nama!=='null')map[key].namesSet.add(item.nama);
+      // Rincian PER PEMEGANG. Tanpa ini, satu rentang % dipakai untuk seluruh
+      // saham, sehingga saham yang dibeli dua orang berbeda tampil seperti
+      // "12,00% → 5,05%" -- membandingkan porsi milik ORANG YANG BERBEDA dan
+      // terbaca seolah kepemilikannya anjlok, padahal keduanya menambah.
+      const who=(item.nama&&item.nama!=='null')?item.nama:(item.perusahaan||'(pelapor tidak disebutkan)');
+      if(!map[key].byHolder[who])map[key].byHolder[who]={days:new Set(),before:{},after:{}};
+      map[key].byHolder[who].days.add(idx);
+      map[key].byHolder[who].before[idx]=item.pct_sebelum;
+      map[key].byHolder[who].after[idx]=item.pct_setelah;
     });
   });
   const repeats=Object.values(map)
@@ -6732,30 +6750,41 @@ async function loadBerulang(){
   const cards=repeats.slice(0,8).map(r=>{
     const item=r.item;
     const dayCount=r.days.length;
-    const earliest=Math.max(...r.days);
-    const latest=Math.min(...r.days);
-    const pctStart=(r.pctByDay[earliest]||0).toFixed(2);
-    const pctEnd=(r.pctByDay[latest]||0).toFixed(2);
-    const namesArr=[...r.namesSet];
-    // Kalau lebih dari satu pelapor berbeda ikut membeli sahamnya, JANGAN
-    // klaim seolah satu orang yang sama terus beli -- sebut jumlahnya
-    // secara jujur ("3 insider berbeda"), bukan cuma nama yang terakhir
-    // kebetulan tercatat.
-    const holderLabel=namesArr.length===0?'—':namesArr.length===1?namesArr[0]:`${namesArr.length} ${subjekLabel} berbeda`;
+    // Satu baris per pemegang: nama + pergerakan porsinya SENDIRI (sebelum
+    // filing terlamanya → sesudah filing terbarunya) + berapa hari ia aktif.
+    // Dulu kepala kartu cuma menyebut "N pemegang berbeda" dengan SATU
+    // rentang % untuk seluruh saham -- rentang itu bisa membandingkan porsi
+    // dua ORANG BERBEDA (mis. HEAL "12,00% → 5,05%"), terbaca seolah
+    // kepemilikannya anjlok padahal keduanya justru menambah.
+    const holderRows=Object.entries(r.byHolder||{}).map(([nama,h])=>{
+      const days=[...h.days].sort((a,b)=>a-b); // indeks kecil = paling baru
+      return{nama,days:days.length,awal:h.before[days[days.length-1]],akhir:h.after[days[0]]};
+    }).sort((a,b)=>b.days-a.days||a.nama.localeCompare(b.nama));
+    const holderLabel=holderRows.length>1?`${holderRows.length} ${subjekLabel}`:'';
     // Build dot-line: N dots (index 0=today, N-1=oldest)
     const dots=[...Array(N).keys()].map(i=>{
       const on=r.days.includes(i);
       const line=i<N-1?`<div class="b-line${r.days.includes(i)&&r.days.includes(i+1)?' on':''}"></div>`:'';
       return`<div class="b-dot${on?' on':''}"></div>${line}`;
     }).join('');
+    const holderHtml=holderRows.map(h=>{
+      const awal=(h.awal==null?null:Number(h.awal)), akhir=(h.akhir==null?null:Number(h.akhir));
+      const gerak=(awal==null||akhir==null)?'':
+        `<span class="bh-pct">${awal.toFixed(2)}% <span class="bh-arrow">→</span> <b>${akhir.toFixed(2)}%</b></span>`;
+      return`<div class="berulang-holder-row">
+        <span class="bh-nama" title="${escapeHtml(h.nama)}">${escapeHtml(h.nama)}</span>
+        <span class="bh-days">${h.days} hari</span>
+        ${gerak}
+      </div>`;
+    }).join('');
     return`<div class="berulang-card">
       <div class="berulang-hdr">
         <span class="berulang-ticker" onclick="loadHolders('${item.kode}')">${item.kode}</span>
         <span class="berulang-days">${dayCount} hari</span>
-        <span class="berulang-holder" title="${namesArr.join(', ')}">${holderLabel}</span>
+        <span class="berulang-holder">${holderLabel}</span>
       </div>
       <div class="berulang-tl">${dots}</div>
-      <div class="berulang-range"><span>${pctStart}%</span><span style="font-size:9px;color:var(--line);align-self:center;padding:0 4px">→</span><span class="end">${pctEnd}%</span></div>
+      ${holderHtml}
     </div>`;
   }).join('');
 

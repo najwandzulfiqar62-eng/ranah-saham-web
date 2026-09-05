@@ -6004,24 +6004,41 @@ async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
                  if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
         akumulasi, _, _ = _split_x15_items(layak)
         for it in akumulasi:
-            data = per_kode.setdefault(it["kode"], {"hari": set(), "pct": {}, "nama": set()})
+            data = per_kode.setdefault(it["kode"], {"hari": set(), "pemegang": {}})
             data["hari"].add(indeks)
-            data["pct"][indeks] = it.get("pct_setelah")
-            nama = it.get("nama") or it.get("perusahaan")
-            if nama and nama != "null":
-                data["nama"].add(nama)
+            nama = it.get("nama") or it.get("perusahaan") or ""
+            if not nama or nama == "null":
+                nama = "(pelapor tidak disebutkan)"
+            p = data["pemegang"].setdefault(nama, {"hari": set(), "awal": {}, "akhir": {}})
+            p["hari"].add(indeks)
+            p["awal"][indeks] = it.get("pct_sebelum")
+            p["akhir"][indeks] = it.get("pct_setelah")
 
     hasil = []
     for kode, d in per_kode.items():
         if len(d["hari"]) < 2:
             continue
-        urut = sorted(d["hari"])           # indeks kecil = paling baru
+        # Rentang % dihitung PER PEMEGANG, tidak pernah dicampur.
+        # Sebelumnya satu rentang dipakai untuk seluruh kode, sehingga saham
+        # yang dibeli dua orang berbeda tampil seperti "12,00% → 5,05%" --
+        # membandingkan porsi milik ORANG YANG BERBEDA dan terbaca seolah
+        # kepemilikannya anjlok. Awal = posisi SEBELUM filing terlama orang
+        # itu, akhir = posisi SESUDAH filing terbarunya.
+        pemegang = []
+        for nama, p in d["pemegang"].items():
+            urut_p = sorted(p["hari"])      # indeks kecil = paling baru
+            pemegang.append({
+                "nama": nama,
+                "jumlah_hari": len(urut_p),
+                "pct_awal": p["awal"].get(urut_p[-1]),
+                "pct_akhir": p["akhir"].get(urut_p[0]),
+            })
+        pemegang.sort(key=lambda x: (-x["jumlah_hari"], x["nama"]))
+        urut = sorted(d["hari"])
         hasil.append({
             "kode": kode,
             "jumlah_hari": len(urut),
-            "pct_awal": d["pct"].get(urut[-1]),
-            "pct_akhir": d["pct"].get(urut[0]),
-            "nama": sorted(d["nama"]),
+            "pemegang": pemegang,
             "terbaru": urut[0],
         })
     hasil.sort(key=lambda r: (-r["jumlah_hari"], r["terbaru"]))
@@ -6034,12 +6051,16 @@ def _wa_fmt_akumulasi(rows: list[dict], hari: int = _WA_AKUM_HARI) -> list[str]:
         return [f"_Tidak ada saham yang dibeli berulang dalam {hari} hari terakhir._"]
     baris = [f"*Akumulasi berulang ({hari} hari)* — {len(rows)} saham"]
     for r in rows:
-        nama = r["nama"]
-        pelapor = ("—" if not nama else nama[0] if len(nama) == 1
-                   else f"{len(nama)} pemegang berbeda")
-        baris.append(f"• *{r['kode']}* — {r['jumlah_hari']} hari · {pelapor}")
-        if r["pct_awal"] is not None and r["pct_akhir"] is not None:
-            baris.append(f"   {r['pct_awal']:.2f}% → *{r['pct_akhir']:.2f}%*")
+        baris.append("")
+        baris.append(f"*{r['kode']}* — {r['jumlah_hari']} hari")
+        # Tiap pemegang punya barisnya sendiri: persentase milik orang berbeda
+        # TIDAK BOLEH disandingkan jadi satu rentang (lihat _wa_akumulasi_berulang).
+        for p in r["pemegang"]:
+            gerak = ""
+            if p["pct_awal"] is not None and p["pct_akhir"] is not None:
+                gerak = f": {p['pct_awal']:.2f}% → *{p['pct_akhir']:.2f}%*"
+            hari_p = f" ({p['jumlah_hari']} hari)" if r["jumlah_hari"] > 1 else ""
+            baris.append(f"  • {p['nama']}{hari_p}{gerak}")
     return baris
 
 
@@ -6346,9 +6367,20 @@ def _wa_fmt_sinyal(rep: dict) -> str:
     semua = rep.get("signals") or []
     aktif = [s for s in semua if s.get("status") in ("OPEN", "PENDING_ENTRY")]
     aktif.sort(key=lambda s: (s.get("confidence_score") or s.get("ai_score") or 0), reverse=True)
+    # Daftar lain sengaja tampil utuh, TAPI sinyal berjalan bisa puluhan dan
+    # tiap barisnya memuat entry/TP/SL -- dibatasi 20 teratas supaya masih
+    # terbaca di layar HP. Karena sudah terurut confidence, yang terpotong
+    # memang yang paling lemah, bukan sembarang.
+    total_aktif = len(aktif)
+    aktif = aktif[:20]
 
     stats = rep.get("stats") or {}
-    baris = ["*Rekomendasi sinyal terbaik*"]
+    judul = "*Rekomendasi sinyal terbaik*"
+    if total_aktif > len(aktif):
+        judul += f" — {len(aktif)} teratas dari {total_aktif} sinyal berjalan"
+    elif total_aktif:
+        judul += f" — {total_aktif} sinyal berjalan"
+    baris = [judul]
     if stats.get("win_rate") is not None:
         baris.append(f"_Win rate tercatat {stats['win_rate']:.1f}% dari "
                      f"{rep.get('n_total', 0)} sinyal._")

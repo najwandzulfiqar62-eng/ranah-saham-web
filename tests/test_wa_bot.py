@@ -186,6 +186,7 @@ def test_sinyal_menyaring_yang_masih_berjalan_dan_mengurut_confidence(client, wa
 
     hasil = _kirim(client, "sinyal").json()["reply"]
     assert "SUDAH" not in hasil, "sinyal yang sudah tutup tidak bisa ditindaklanjuti"
+    assert "2 sinyal berjalan" in hasil
     assert hasil.index("UNGGUL") < hasil.index("BIASA"), "harus urut confidence"
     assert "Rp880" in hasil and "Rp750" in hasil  # TP & SL ikut ditampilkan
     assert "46.8" in hasil or "46,8" in hasil
@@ -280,8 +281,11 @@ def test_kepemilikan_menyertakan_akumulasi_berulang_sebulan(client, wa_bersih, m
     # khusus bagian polanya, jadi pesannya dipotong dulu.
     blok = hasil.split("Akumulasi berulang", 1)[1]
     assert "MICE" in blok and "2 hari" in blok
-    assert "2 pemegang berbeda" in blok  # Budi & Sari, bukan nama terakhir saja
-    assert "5.40% → *6.10%*" in blok     # sesi terlama -> terbaru, bukan sebaliknya
+    # Tiap pemegang punya barisnya sendiri, dengan pergerakan porsinya SENDIRI.
+    assert "Budi" in blok and "Sari" in blok
+    assert "5.40% → *6.10%*" in blok, "porsi Budi: sebelum filing terlamanya -> sesudah terbarunya"
+    assert "5.00% → *5.40%*" in blok, "porsi Sari dihitung terpisah, tidak dicampur"
+    assert "2 pemegang berbeda" not in blok, "nama pemegang harus disebut, bukan cuma jumlahnya"
     assert "SEPI" not in blok, "satu sesi (walau 2 pelapor) bukan pola berulang"
 
 
@@ -304,6 +308,27 @@ def test_daftar_ditampilkan_lengkap_tanpa_dipotong(client, wa_bersih, monkeypatc
         assert f"SH{i:02d}" in hasil, f"saham ke-{i} hilang dari daftar"
     assert "lainnya" not in hasil
     assert "18 saham" in hasil
+
+
+def test_sinyal_dibatasi_20_terbaik(client, wa_bersih, monkeypatch):
+    """Daftar lain tampil utuh, tapi sinyal berjalan bisa puluhan dan tiap
+    barisnya memuat entry/TP/SL. Dibatasi 20 TERATAS -- dan karena sudah
+    terurut confidence, yang terpotong memang yang paling lemah."""
+    import core.signal_history as sh
+
+    def _report_palsu():
+        return {"stats": {"win_rate": 50.0}, "n_total": 30, "n_open": 30,
+                "signals": [{"kode": f"SG{i:02d}", "status": "OPEN", "entry_price": 100 + i,
+                             "tp_price": 120, "sl_price": 90, "confidence_score": 100 - i,
+                             "source": "TOP_PICK"} for i in range(30)]}
+
+    monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+    assert "20 teratas dari 30 sinyal berjalan" in hasil
+    assert "SG00" in hasil and "SG19" in hasil     # confidence tertinggi ikut
+    assert "SG20" not in hasil and "SG29" not in hasil  # yang terlemah dipotong
 
 
 def test_kepemilikan_bisa_melacak_satu_emiten(client, wa_bersih, monkeypatch):
