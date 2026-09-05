@@ -6466,7 +6466,9 @@ _WA_BANTUAN = (
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
     "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
     "• *news* — berita pasar terbaru (*news KODE* untuk satu emiten)\n"
-    "• *ihsg* — analisis pasar/indeks\n\n"
+    "• *ihsg* — analisis pasar/indeks\n"
+    "• *nyangkut KODE HARGA* — posisi merugi: kondisi pasar, level average "
+    "down yang masuk akal, dan syaratnya\n\n"
     "_Bukan ajakan membeli/menjual._"
 )
 
@@ -6584,6 +6586,77 @@ def _wa_fmt_berita(items: list[dict] | None, kode: str = "") -> str:
             baris.append(f"  {b['link']}")
     baris += ["", "_Judul dikumpulkan otomatis dari media publik. "
                   "Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_nyangkut(kode: str, avg: float, d: dict, pasar: dict | None) -> str:
+    """Panduan untuk posisi yang sedang merugi -- termasuk sesudah kena SL.
+
+    Pertanyaan user: "kalau emiten masuk sinyal lagi trus kena SL baiknya
+    gimana, apakah jangan panik, bisa avg down masih aman atau engga, dan
+    memang diharuskan avg down?" -- lalu: "kalau market crash harus gimana,
+    harus dianalisa IHSG-nya juga dong".
+
+    Jawaban jujurnya TIDAK boleh sekadar "ya, average down saja". Bagian
+    Manajemen Risiko aplikasi ini sendiri berbunyi: hindari menambah posisi
+    hanya karena harga turun tanpa konfirmasi pembalikan. Dokumentasi
+    /api/averagedown juga menegaskan daftar levelnya "BUKAN rekomendasi harus
+    average down". Jadi yang diberikan: seberapa rugi posisinya, apa kata
+    teknikal & PASAR hari ini, dan KALAU tetap mau menambah -- level mana yang
+    masuk akal beserta syarat yang harus dipenuhi lebih dulu.
+    """
+    harga = d.get("current_price")
+    baris = [f"*{kode}* — posisi nyangkut"]
+    if harga is not None and avg:
+        baris.append(f"Harga {_rp(harga)} · rata-ratamu {_rp(avg)} "
+                     f"({(harga / avg - 1) * 100:+.1f}%)")
+    if d.get("recommendation"):
+        baris.append(f"Teknikal hari ini: *{d['recommendation']}*")
+    if d.get("fair_value_verdict"):
+        baris.append(f"Terhadap estimasi wajar: {d['fair_value_verdict']}")
+
+    # KONTEKS PASAR. Menambah posisi saat indeksnya sendiri sedang rontok itu
+    # keputusan yang berbeda dari menambah saat pasar tenang -- menyebut
+    # levelnya saja tanpa menyebut ini akan menyesatkan.
+    pasar_rawan = False
+    if pasar:
+        arah = pasar.get("prediction") or "-"
+        aksi = f" · {pasar['action']}" if pasar.get("action") else ""
+        baris += ["", f"*Kondisi pasar (IHSG)*: {arah}{aksi}"]
+        bear = (pasar.get("bearish_score") or 0) > (pasar.get("bullish_score") or 0)
+        turun = (pasar.get("daily_change") or 0) <= -1.0
+        pasar_rawan = bear or turun
+        if pasar_rawan:
+            baris.append("_IHSG sedang tidak mendukung. Menambah posisi saat "
+                         "indeksnya sendiri melemah artinya melawan arus — "
+                         "hampir semua saham ikut turun, sebagus apa pun "
+                         "emitennya. Tunggu pasarnya stabil dulu._")
+
+    baris += ["", "*Jangan buru-buru menambah.*",
+              "_Aturan risiko aplikasi ini sendiri: jangan menambah posisi hanya "
+              "karena harga turun, tanpa tanda pembalikan. Average down TIDAK "
+              "wajib — menambah di saham yang trennya masih rusak justru cara "
+              "kerugian kecil berubah jadi besar._"]
+
+    saran = d.get("suggestions") or []
+    if saran:
+        baris += ["", "*Kalau tetap mau menambah, level yang masuk akal:*"]
+        for it in saran:
+            rata_baru = it.get("new_avg_price")
+            ekor = f" → rata-rata jadi {_rp(rata_baru)}" if rata_baru else ""
+            baris.append(f"• {it.get('label')}: {_rp(it.get('price'))}{ekor}")
+        baris.append("_Level dari support & batas bawah estimasi wajar, bukan tebakan._")
+    else:
+        baris += ["", "_Tidak ada level support di bawah harga sekarang yang bisa "
+                      "dipakai sebagai area menambah._"]
+
+    syarat = ["• Ada tanda pembalikan, bukan cuma harga yang turun",
+              "• Tambahannya tidak membuat satu saham mendominasi portofolio",
+              "• Kamu masih sanggup memasang SL baru di bawah level itu"]
+    if pasar_rawan:
+        syarat.insert(0, "• IHSG berhenti melemah dulu — ini syarat pertama")
+    baris += ["", "*Syarat sebelum menambah:*"] + syarat
+    baris += ["", "_Bukan ajakan membeli/menjual — keputusan tetap di kamu._"]
     return "\n".join(baris)
 
 
@@ -7151,6 +7224,17 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid:
             kode_laporan = calon
 
+    # "nyangkut KODE HARGA" -> panduan posisi merugi + level average down.
+    kode_nyangkut, avg_nyangkut = "", 0.0
+    if len(kata) == 3 and kata[0] in {"nyangkut", "avgdown", "average"}:
+        calon = _norm_kode(kata[1])
+        try:
+            harga_avg = float(kata[2].replace(".", "").replace(",", "."))
+        except ValueError:
+            harga_avg = 0.0
+        if calon in kode_valid and harga_avg > 0:
+            kode_nyangkut, avg_nyangkut = calon, harga_avg
+
     # "news"/"berita" sendirian = berita pasar; dengan kode = berita emiten itu.
     minta_berita = kunci in {"news", "berita"}
     kode_berita = ""
@@ -7159,7 +7243,8 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid:
             kode_berita, minta_berita = calon, True
 
-    if (not kode_lacak and not kode_laporan and not minta_berita and not adalah_kode
+    if (not kode_lacak and not kode_laporan and not minta_berita and not kode_nyangkut
+            and not adalah_kode
             and kunci not in {"sinyal", "screener", "minervini", "breakout",
                               "kepemilikan", "x15", "ihsg", "pasar",
                               "bantuan", "help", "menu"}):
@@ -7198,6 +7283,18 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
+        if kode_nyangkut:
+            # Konteks pasar ikut diambil: menambah posisi saat IHSG rontok
+            # itu keputusan yang berbeda. Kalau gagal, panduannya tetap
+            # dikirim tanpa bagian pasar -- lebih baik kurang satu bagian
+            # daripada user tidak dapat jawaban sama sekali.
+            data, pasar = await asyncio.gather(
+                averagedown(kode_nyangkut, avg_price=avg_nyangkut, lots=1, add_lots=1),
+                ihsg(), return_exceptions=True)
+            if isinstance(data, Exception):
+                raise data
+            return _wa_fmt_nyangkut(kode_nyangkut, avg_nyangkut, data,
+                                    None if isinstance(pasar, Exception) else pasar), None
         if kunci in {"ihsg", "pasar"}:
             return _wa_fmt_ihsg(await ihsg()), {
                 "kind": "image", "jenis": "chart_ihsg", "kode": "IHSG",

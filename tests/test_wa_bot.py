@@ -755,3 +755,46 @@ def test_digest_harian_hanya_mengabarkan_yang_sudah_menyentuh_area_masuk(monkeyp
     assert "Kesempatan masuk lagi hari ini* (1)" in teks
     assert "SIAP" in teks and "Rp548" in teks and "SL Rp515" in teks
     assert "JAUH" not in teks, "yang harganya masih jauh tidak boleh diramaikan"
+
+
+def test_nyangkut_tidak_menyuruh_average_down_dan_menimbang_pasar(client, wa_bersih, monkeypatch):
+    """Pertanyaan user: kena SL baiknya gimana, boleh avg down? Lalu:
+    "kalau market crash harus gimana, harus dianalisa IHSG-nya juga".
+
+    Jawaban jujurnya tidak boleh sekadar "ya, average down saja" -- aturan
+    risiko aplikasi ini sendiri melarang menambah hanya karena harga turun.
+    Dan saat IHSG sendiri melemah, itu harus disebut sebagai syarat pertama.
+    """
+    import web.app as app_module
+
+    async def _avgdown_palsu(kode, avg_price, lots, add_lots=0, target_price=None):
+        return {"current_price": 450, "recommendation": "WATCH",
+                "fair_value_verdict": "Discount",
+                "suggestions": [
+                    {"label": "Support Terdekat (S1)", "price": 430, "new_avg_price": 465},
+                    {"label": "Support Lebih Dalam (S2)", "price": 405, "new_avg_price": 452},
+                ]}
+
+    async def _ihsg_lemah():
+        return {"prediction": "BEARISH", "action": "WAIT", "bullish_score": 2,
+                "bearish_score": 5, "daily_change": -1.8}
+
+    monkeypatch.setattr(app_module, "averagedown", _avgdown_palsu)
+    monkeypatch.setattr(app_module, "ihsg", _ihsg_lemah)
+    monkeypatch.setattr(app_module, "_load_ticker_directory",
+                        lambda: [{"kode": "GIAA", "nama": "Garuda Indonesia"}])
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "nyangkut giaa 500").json()["reply"]
+    assert "GIAA" in hasil and "Rp450" in hasil and "Rp500" in hasil
+    assert "-10.0%" in hasil                       # posisi ruginya dihitung
+    # Tidak boleh menyuruh average down.
+    assert "Jangan buru-buru menambah" in hasil
+    assert "TIDAK wajib" in hasil
+    # Level tetap diberikan, tapi sebagai "kalau tetap mau".
+    assert "Kalau tetap mau menambah" in hasil
+    assert "Rp405" in hasil and "rata-rata jadi Rp452" in hasil
+    # Pasar lemah -> jadi syarat PERTAMA, bukan catatan kaki.
+    assert "Kondisi pasar (IHSG)" in hasil and "BEARISH" in hasil
+    assert "melawan arus" in hasil
+    assert hasil.index("IHSG berhenti melemah dulu") < hasil.index("Ada tanda pembalikan")
