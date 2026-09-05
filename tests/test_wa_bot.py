@@ -204,6 +204,36 @@ def test_sinyal_menyaring_yang_masih_berjalan_dan_mengurut_confidence(client, wa
     assert "46.8" in hasil or "46,8" in hasil
 
 
+def test_sinyal_menyebut_puncak_sejak_muncul(client, wa_bersih, monkeypatch):
+    """Keluhan berulang: "ERAA TAPG CSMI GIAA harusnya udah profit puluhan
+    bahkan ratusan persen jika entry dari awal muncul sinyal". Selama
+    angkanya tidak dipajang itu cuma terasa; dipajang, bisa diperiksa."""
+    import web.app as app_module
+    import core.signal_history as sh
+
+    def _report_palsu():
+        return {"stats": {"win_rate": 50.0}, "n_total": 1, "n_open": 1,
+                "signals": [{"kode": "ERAA", "status": "OPEN", "entry_price": 400,
+                             "tp_price": 440, "sl_price": 380, "confidence_score": 70,
+                             "source": "TOP_PICK",
+                             "entry_filled_at": "2026-07-01 09:00:00"}]}
+
+    async def _puncak_palsu(signals):
+        for s in signals:
+            s.update({"mulai_dilacak": "2026-07-01", "hari_sejak_sinyal": 45,
+                      "puncak_return_pct": 132.5, "puncak_date": "2026-08-20",
+                      "sejak_sinyal_return_pct": 87.25})
+
+    monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _puncak_palsu)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+    assert "Sejak 2026-07-01 (45 hari bursa)" in hasil
+    assert "sekarang +87.2%" in hasil or "sekarang +87.3%" in hasil
+    assert "*puncak +132.5%*" in hasil and "2026-08-20" in hasil
+
+
 def test_kode_emiten_membalas_rencana_trading_lengkap(client, wa_bersih, monkeypatch):
     """Balasan kode emiten = rencana trading (4 skenario + SL/TP + ukuran
     posisi), memakai angka dari /api/plan yang SAMA dipakai web."""

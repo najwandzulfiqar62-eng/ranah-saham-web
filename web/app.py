@@ -3616,6 +3616,8 @@ async def signals():
             sig["floating_price"] = round(price, 2)
             sig["floating_return_pct"] = round(floating_pct, 2)
 
+    await _tempel_puncak_sejak_sinyal(report.get("signals", []))
+
     # "Jarak ke entry" utk PENDING_ENTRY (migrasi ke-16) -- sama semangat
     # dgn floating P&L di atas, tapi maknanya beda: ini BUKAN untung/rugi
     # (belum ada posisi), murni "harga sekarang segini, entry yang
@@ -3655,6 +3657,77 @@ async def signals():
     _attach_corp_action_warnings(report.get("signals", []))
 
     return _py(report)
+
+
+async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
+    """Tempel "sejak sinyal muncul" ke tiap sinyal: puncak tertinggi yang
+    pernah dicapai dan posisi harga sekarang.
+
+    Alasannya keluhan yang berulang: "banyak banget saham yg kena sl malah
+    naik jauh banget ... ERAA TAPG CSMI GIAA harusnya udah profit puluhan
+    bahkan ratusan persen jika entry dari awal muncul sinyal". Selama
+    angkanya tidak pernah dipajang, itu cuma terasa; sesudah dipajang, bisa
+    diperiksa -- termasuk saat hasilnya TIDAK seindah dugaan.
+
+    Sengaja dihitung untuk SEMUA status, bukan cuma yang berjalan: justru
+    pada sinyal yang sudah ditutup SL angka inilah yang paling penting.
+    Datanya diunduh SATU KALI per kode (batch) lalu di-cache 1 jam --
+    laporan Audit Sinyal tidak boleh menembak Yahoo puluhan kali tiap dibuka.
+    """
+    if not signals:
+        return
+    dipakai = [s for s in signals
+               if s.get("entry_price") and (s.get("entry_filled_at") or s.get("recorded_at"))]
+    if not dipakai:
+        return
+
+    kunci = "sinyal_puncak:v1"
+    peta = _cache_get(kunci)
+    if peta is None:
+        awal = min((s.get("entry_filled_at") or s.get("recorded_at"))[:10] for s in dipakai)
+        kode_unik = sorted({s["kode"] for s in dipakai})
+        try:
+            data = await async_download_many([k + ".JK" for k in kode_unik],
+                                             start=awal, interval="1d")
+        except Exception as e:
+            print(f"⚠️ puncak-sinyal: gagal unduh riwayat: {type(e).__name__}: {e}")
+            return
+        peta = {}
+        for k in kode_unik:
+            df = data.get(k + ".JK")
+            if df is None or len(df) == 0:
+                continue
+            try:
+                df = fix_yf_columns(df)
+                peta[k] = [(str(idx)[:10], float(h), float(c))
+                           for idx, h, c in zip(df.index, df["High"], df["Close"])
+                           if pd.notna(h) and pd.notna(c)]
+            except Exception:
+                continue
+        _cache_set(kunci, peta, ttl=3600)
+
+    from core.signal_history import is_price_scale_anomaly
+    for s in dipakai:
+        bar = peta.get(s["kode"])
+        if not bar:
+            continue
+        mulai = (s.get("entry_filled_at") or s.get("recorded_at"))[:10]
+        sesudah = [b for b in bar if b[0] >= mulai]
+        if not sesudah:
+            continue
+        entry = float(s["entry_price"])
+        # Split/reverse-split bikin harga lama & baru beda skala -- persentase
+        # dari dua skala berbeda BUKAN untung/rugi (guard yang sama dipakai
+        # floating P&L dan audit).
+        if is_price_scale_anomaly(entry, sesudah[-1][2]):
+            continue
+        tgl_puncak, harga_puncak, _ = max(sesudah, key=lambda b: b[1])
+        s["mulai_dilacak"] = mulai
+        s["puncak_price"] = round(harga_puncak, 2)
+        s["puncak_date"] = tgl_puncak
+        s["puncak_return_pct"] = round((harga_puncak / entry - 1) * 100, 2)
+        s["sejak_sinyal_return_pct"] = round((sesudah[-1][2] / entry - 1) * 100, 2)
+        s["hari_sejak_sinyal"] = len(sesudah)
 
 
 @app.get("/api/signals/ringkas")
@@ -6627,6 +6700,24 @@ def _wa_fmt_sinyal(rep: dict) -> str:
             tp.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
         if tp:
             isi.append("   " + " · ".join(tp))
+        # "Sejak sinyal muncul": tanggalnya, sudah berapa persen sekarang,
+        # dan PUNCAK tertinggi yang pernah dicapai. Yang terakhir itu yang
+        # menjawab "harusnya udah profit puluhan persen kalau entry dari awal"
+        # dengan angka, bukan perasaan.
+        if s.get("mulai_dilacak"):
+            jejak_waktu = f"   Sejak {s['mulai_dilacak']}"
+            if s.get("hari_sejak_sinyal"):
+                jejak_waktu += f" ({s['hari_sejak_sinyal']} hari bursa)"
+            isi.append(jejak_waktu)
+        sekarang, puncak = s.get("sejak_sinyal_return_pct"), s.get("puncak_return_pct")
+        if sekarang is not None or puncak is not None:
+            bagian = []
+            if sekarang is not None:
+                bagian.append(f"sekarang {sekarang:+.1f}%")
+            if puncak is not None:
+                tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
+                bagian.append(f"*puncak {puncak:+.1f}%*{tgl}")
+            isi.append("   " + " · ".join(bagian))
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
             jejak += f" · {s['pattern']}"
@@ -6808,7 +6899,11 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             # Laporan PENUH (bukan /ringkas): rekomendasi butuh entry/TP/SL
             # dan confidence per sinyal, yang sengaja dibuang versi ringkas.
             from core.signal_history import get_signal_report
-            return _wa_fmt_sinyal(await asyncio.to_thread(get_signal_report)), None
+            laporan = await asyncio.to_thread(get_signal_report)
+            # Data "sejak sinyal muncul" ditempel dgn fungsi yang SAMA dipakai
+            # /api/signals, supaya bot & web menyebut angka puncak yang sama.
+            await _tempel_puncak_sejak_sinyal(laporan.get("signals", []))
+            return _wa_fmt_sinyal(laporan), None
         if kunci in {"screener", "minervini"}:
             return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
