@@ -6244,7 +6244,8 @@ _WA_BANTUAN = (
     "• *screener* — saringan Minervini (trend template 8 kriteria)\n"
     "• *breakout* — saringan breakout volume\n"
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
-    "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n\n"
+    "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
+    "• *news* — berita pasar terbaru (*news KODE* untuk satu emiten)\n\n"
     "_Bukan ajakan membeli/menjual._"
 )
 
@@ -6270,6 +6271,40 @@ _WA_SKENARIO = (
     ("deep", "Deep", "entry kedua / rata-rata bawah"),
     ("breakout", "Breakout", "tunggu tembus resistance"),
 )
+
+
+def _wa_fmt_berita(items: list[dict] | None, kode: str = "") -> str:
+    """Daftar berita untuk WhatsApp. Sumber & tautannya ikut disebut supaya
+    pembaca bisa memverifikasi sendiri, bukan cuma percaya judulnya."""
+    items = items or []
+    judul_blok = f"*Berita {kode}*" if kode else "*Berita pasar terbaru*"
+    if not items:
+        kosong = (f"_Tidak ditemukan berita terkini yang menyebut {kode}._" if kode
+                  else "_Sumber berita sedang tidak dapat diakses. Coba lagi sebentar._")
+        return f"{judul_blok}\n\n{kosong}"
+
+    baris = [f"{judul_blok} — {len(items)} berita", ""]
+    for b in items:
+        tajuk = (b.get("title") or "").strip()
+        if not tajuk:
+            continue
+        baris.append(f"• {tajuk}")
+        jejak = []
+        if b.get("source"):
+            jejak.append(str(b["source"]))
+        waktu = b.get("_parsed_date")
+        if waktu is not None:
+            try:
+                jejak.append(waktu.strftime("%d %b %H:%M"))
+            except Exception:
+                pass
+        if jejak:
+            baris.append(f"  _{' · '.join(jejak)}_")
+        if b.get("link"):
+            baris.append(f"  {b['link']}")
+    baris += ["", "_Judul dikumpulkan otomatis dari media publik. "
+                  "Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
 
 
 async def _wa_report_data(kode: str) -> dict:
@@ -6710,9 +6745,17 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid:
             kode_laporan = calon
 
-    if not kode_lacak and not kode_laporan and not adalah_kode and kunci not in {
-            "sinyal", "screener", "minervini", "breakout", "kepemilikan",
-            "x15", "bantuan", "help", "menu"}:
+    # "news"/"berita" sendirian = berita pasar; dengan kode = berita emiten itu.
+    minta_berita = kunci in {"news", "berita"}
+    kode_berita = ""
+    if len(kata) == 2 and kata[0] in {"news", "berita"}:
+        calon = _norm_kode(kata[1])
+        if calon in kode_valid:
+            kode_berita, minta_berita = calon, True
+
+    if (not kode_lacak and not kode_laporan and not minta_berita and not adalah_kode
+            and kunci not in {"sinyal", "screener", "minervini", "breakout",
+                              "kepemilikan", "x15", "bantuan", "help", "menu"}):
         return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -6744,6 +6787,9 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
+        if minta_berita:
+            berita = await fetch_news(keyword=kode_berita or None, limit=15)
+            return _wa_fmt_berita(berita, kode_berita), None
         if kode_lacak:
             return _wa_fmt_pemegang_kode(await api_pemegang_saham(kode_lacak)), None
         if kunci in {"kepemilikan", "x15"}:

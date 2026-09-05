@@ -407,6 +407,34 @@ def test_balasan_emiten_mengikuti_isi_pdf_laporan(client, wa_bersih, monkeypatch
     assert hasil.count("*CYBR*") == 1
 
 
+def test_perintah_news_dan_news_per_emiten(client, wa_bersih, monkeypatch):
+    import datetime as dt
+
+    import web.app as app_module
+
+    dipanggil = {}
+
+    async def _news_palsu(keyword=None, limit=15):
+        dipanggil["keyword"] = keyword
+        return [{"title": "IHSG ditutup menguat", "link": "https://contoh.id/x",
+                 "source": "Kontan", "_parsed_date": dt.datetime(2026, 9, 6, 9, 30)}]
+
+    monkeypatch.setattr(app_module, "fetch_news", _news_palsu)
+    monkeypatch.setattr(app_module, "_load_ticker_directory",
+                        lambda: [{"kode": "BBCA", "nama": "Bank Central Asia"}])
+    _daftarkan_approved()
+
+    umum = _kirim(client, "news").json()["reply"]
+    assert dipanggil["keyword"] is None, "tanpa kode = berita pasar, bukan disaring"
+    assert "IHSG ditutup menguat" in umum
+    assert "Kontan" in umum and "https://contoh.id/x" in umum
+
+    app_module._wa_last_reply.clear()
+    per_emiten = _kirim(client, "news bbca").json()["reply"]
+    assert dipanggil["keyword"] == "BBCA"
+    assert "*Berita BBCA*" in per_emiten
+
+
 def test_endpoint_media_juga_gagal_tertutup(client, wa_bersih, monkeypatch):
     """Jalur /api/wa/ dikecualikan dari access_gate, jadi endpoint media pun
     WAJIB menolak tanpa secret yang benar -- kalau tidak, grafik & laporan
