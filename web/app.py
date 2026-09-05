@@ -5967,6 +5967,114 @@ async def api_insider(hari: int = 0):
 # (kirim HTTP ke wa-bot, simpan cursor) ada di core/whatsapp_notify.py;
 # helper X-15 (_fetch_x15_today, _split_x15_items) reuse yang sudah dipakai
 # /api/x15, TIDAK ada logic baru yang menduplikasi itu.
+_WA_AKUM_HARI = 31  # sama dengan panel Akumulasi Berulang di web (index.html)
+
+
+async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
+    """Saham yang dibeli pemegang ≥5% di 2+ sesi berbeda dalam sebulan.
+
+    Aturannya SENGAJA meniru panel "Akumulasi Berulang" di web (index.html):
+    dikelompokkan per KODE (bukan per individu pelapor), karena "saham X
+    terus dibeli pemegang besar -- walau oleh orang berbeda tiap sesi" tetap
+    sinyal minat yang sah; hari yang sama dengan beberapa pelapor dihitung
+    SATU hari. Kalau aturan di web berubah, fungsi ini harus ikut berubah --
+    bot dan web tidak boleh bercerita beda soal saham yang sama.
+
+    Perhitungannya di-cache: satu perintah WhatsApp tidak boleh memicu 31
+    penarikan data IDX sekaligus di server yang juga melayani website.
+    """
+    cached = _cache_get(f"wa_akumulasi:{hari}")
+    if cached is not None:
+        return cached
+
+    sesi: list[list] = []
+    # Ditembak per kelompok kecil, bukan 31 sekaligus -- data mentah per hari
+    # sudah di-cache (_fetch_x15_today), jadi ini cuma mahal saat cache dingin.
+    for awal in range(0, hari, 6):
+        kelompok = await asyncio.gather(
+            *[_fetch_x15_today(days_back=i) for i in range(awal, min(awal + 6, hari))],
+            return_exceptions=True,
+        )
+        for hasil in kelompok:
+            sesi.append([] if isinstance(hasil, Exception) else hasil)
+
+    per_kode: dict[str, dict] = {}
+    for indeks, item_hari in enumerate(sesi):
+        layak = [x for x in item_hari
+                 if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+        akumulasi, _, _ = _split_x15_items(layak)
+        for it in akumulasi:
+            data = per_kode.setdefault(it["kode"], {"hari": set(), "pct": {}, "nama": set()})
+            data["hari"].add(indeks)
+            data["pct"][indeks] = it.get("pct_setelah")
+            nama = it.get("nama") or it.get("perusahaan")
+            if nama and nama != "null":
+                data["nama"].add(nama)
+
+    hasil = []
+    for kode, d in per_kode.items():
+        if len(d["hari"]) < 2:
+            continue
+        urut = sorted(d["hari"])           # indeks kecil = paling baru
+        hasil.append({
+            "kode": kode,
+            "jumlah_hari": len(urut),
+            "pct_awal": d["pct"].get(urut[-1]),
+            "pct_akhir": d["pct"].get(urut[0]),
+            "nama": sorted(d["nama"]),
+            "terbaru": urut[0],
+        })
+    hasil.sort(key=lambda r: (-r["jumlah_hari"], r["terbaru"]))
+    _cache_set(f"wa_akumulasi:{hari}", hasil, ttl=1800)
+    return hasil
+
+
+def _wa_fmt_akumulasi(rows: list[dict], hari: int = _WA_AKUM_HARI) -> list[str]:
+    if not rows:
+        return [f"_Tidak ada saham yang dibeli berulang dalam {hari} hari terakhir._"]
+    baris = [f"*Akumulasi berulang ({hari} hari)*"]
+    for r in rows[:8]:
+        nama = r["nama"]
+        pelapor = ("—" if not nama else nama[0] if len(nama) == 1
+                   else f"{len(nama)} pemegang berbeda")
+        baris.append(f"• *{r['kode']}* — {r['jumlah_hari']} hari · {pelapor}")
+        if r["pct_awal"] is not None and r["pct_akhir"] is not None:
+            baris.append(f"   {r['pct_awal']:.2f}% → *{r['pct_akhir']:.2f}%*")
+    if len(rows) > 8:
+        baris.append(f"_...dan {len(rows) - 8} saham lainnya di ranahsaham.com_")
+    return baris
+
+
+def _wa_fmt_pemegang_kode(payload: dict) -> str:
+    """Pelacakan kepemilikan untuk SATU emiten (perintah `kepemilikan BBCA`)."""
+    kode = payload.get("kode")
+    holders = payload.get("holders") or []
+    if not holders:
+        return (f"*Kepemilikan {kode}*\n\n_Tidak ada filing X-15 dalam 90 hari terakhir._\n\n"
+                "Hanya pemegang ≥5% dan insider yang wajib lapor — sepi di sini berarti "
+                "tidak ada perubahan yang dilaporkan, bukan berarti tidak ada pemiliknya.")
+    baris = [f"*Kepemilikan {kode}* — pemegang ≥5% & insider", ""]
+    for h in holders[:8]:
+        label = h.get("nama_tampil") or "(tidak diketahui)"
+        peran = " (insider)" if h.get("is_insider") else ""
+        baris.append(f"• *{label}*{peran}")
+        sebelum, sesudah = h.get("pct_sebelum"), h.get("pct_setelah")
+        ubah = h.get("perubahan")
+        rinci = f"   {sebelum:.2f}% → *{sesudah:.2f}%*" if sebelum is not None and sesudah is not None else ""
+        if ubah is not None:
+            rinci += f" ({'+' if ubah >= 0 else ''}{ubah:.2f}%)"
+        if h.get("tanggal"):
+            rinci += f" · {h['tanggal']}"
+        if rinci:
+            baris.append(rinci)
+    if len(holders) > 8:
+        baris.append(f"\n_...dan {len(holders) - 8} pelapor lainnya di ranahsaham.com_")
+    baris += ["", "_Dari filing X-15/POJK 4-2024 resmi IDX, 90 hari terakhir. "
+                  "Persentase hak suara, bukan jumlah lembar. Pemegang di bawah 5% "
+                  "tidak wajib lapor sehingga tidak muncul di sini._"]
+    return "\n".join(baris)
+
+
 async def _wa_x15_lines() -> list[str]:
     """Blok "kepemilikan ≥5%" dalam format WhatsApp. Dipakai BERSAMA oleh
     digest harian dan perintah `kepemilikan` di grup -- satu sumber teks,
@@ -6105,54 +6213,179 @@ def _wa_phone_from_jid(jid: str) -> str:
 _WA_BANTUAN = (
     "*Bot Ranah Saham*\n\n"
     "Ketik salah satu:\n"
-    "• *KODE EMITEN* (mis. `BBCA`) — analisis teknikal ringkas\n"
-    "• *sinyal* — ringkasan Audit Sinyal terbaru\n"
-    "• *screener* — saham lolos saringan breakout hari ini\n"
-    "• *kepemilikan* — filing kepemilikan ≥5% (X-15) hari ini\n\n"
+    "• *KODE EMITEN* (mis. `BBCA`) — rencana trading lengkap: verdict, "
+    "4 skenario entry, SL/TP, ukuran posisi\n"
+    "• *sinyal* — rekomendasi sinyal terbaik yang sedang berjalan\n"
+    "• *screener* — saringan Minervini (trend template 8 kriteria)\n"
+    "• *breakout* — saringan breakout volume\n"
+    "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
+    "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n\n"
     "_Bukan ajakan membeli/menjual._"
 )
 
 
-def _wa_fmt_analisis(d: dict) -> str:
-    def angka(v, koma=2, akhiran=""):
-        return "—" if v is None else f"{v:,.{koma}f}".replace(",", ".") + akhiran
+def _rp(x) -> str:
+    """Rp dengan pemisah ribuan gaya Indonesia."""
+    if x is None:
+        return "—"
+    return "Rp" + f"{float(x):,.0f}".replace(",", ".")
 
-    baris = [f"*{d.get('kode')}* — {d.get('rating') or '—'}", ""]
-    harga = d.get("price")
-    ch1 = d.get("change_1d")
-    tanda = "" if ch1 is None else ("+" if ch1 >= 0 else "")
-    baris.append(f"Harga: Rp{angka(harga, 0)} ({tanda}{angka(ch1, 2)}% hari ini)")
-    if d.get("score") is not None:
-        baris.append(f"Skor: {angka(d.get('score'), 1)}/100 · Grade {d.get('grade') or '—'}")
-    if d.get("recommendation"):
-        baris.append(f"Rekomendasi: {d['recommendation']}")
-    baris.append(
-        f"RSI {angka(d.get('rsi'), 1)} · Volume {angka(d.get('vol_ratio'), 2)}x rata-rata"
-    )
-    naik, turun = d.get("potensi_naik_pct"), d.get("risiko_turun_pct")
-    if naik is not None or turun is not None:
-        baris.append(f"Potensi naik {angka(naik, 1, '%')} · risiko turun {angka(turun, 1, '%')}")
-    if d.get("likuiditas"):
-        baris.append(f"Likuiditas: {d['likuiditas']}")
-    if d.get("insight"):
-        baris += ["", d["insight"]]
-    baris += ["", "_Analisis teknikal otomatis, bukan ajakan membeli/menjual._"]
+
+def _angka(x) -> str:
+    if x is None:
+        return "—"
+    return f"{float(x):,.0f}".replace(",", ".")
+
+
+# Urutan & julukan skenario entry. Kuncinya mengikuti _determine_entry_points()
+# di core/trading_plan.py -- JANGAN diarang sendiri di sini.
+_WA_SKENARIO = (
+    ("normal", "Normal", "masuk di harga sekarang"),
+    ("pullback", "Pullback", "tunggu turun tipis"),
+    ("deep", "Deep", "entry kedua / rata-rata bawah"),
+    ("breakout", "Breakout", "tunggu tembus resistance"),
+)
+
+
+def _wa_fmt_plan(plan: dict, analisis: dict | None) -> str:
+    """Rencana trading satu emiten untuk WhatsApp.
+
+    SELURUH angkanya datang dari calculate_advanced_plan_from_df() -- fungsi
+    yang SAMA dipakai halaman Rencana Trading di web (/api/plan) -- dan
+    verdict-nya dari ai_score seperti halaman Analisis. Tidak ada rumus baru
+    di sini, supaya bot dan web tidak pernah bercerita beda soal saham yang
+    sama. Modul ini hanya menyusun tampilannya.
+
+    Sengaja TIDAK meniru mentah-mentah tata letak versi lama (garis "======",
+    tabel dua kolom S/R): di layar HP kolom seperti itu patah dan malah susah
+    dibaca. Yang dipertahankan justru isinya -- verdict, skenario entry, SL,
+    TP berjenjang, ukuran posisi, dan aturan scaling out.
+    """
+    kode = plan.get("ticker_symbol")
+    ubah = plan.get("daily_change_pct")
+    conf = plan.get("confidence")
+    a = analisis or {}
+
+    kepala = f"*{kode}*"
+    if a.get("recommendation"):
+        kepala += f" — {a.get('signal') or ''} *{a['recommendation']}*"
+    baris = [kepala.strip()]
+
+    sub = _rp(plan.get("current_price"))
+    if ubah is not None:
+        sub += f" ({'+' if ubah >= 0 else ''}{ubah:.2f}%)"
+    if a.get("score") is not None:
+        sub += f" · skor {a['score']:.0f}/100"
+    if a.get("grade"):
+        sub += f" · grade {a['grade']}"
+    baris += [sub, ""]
+
+    baris += [
+        "*Kondisi*",
+        f"• Tren: {plan.get('trend') or '—'}",
+        f"• RSI {plan.get('rsi')} — {plan.get('rsi_status') or '—'}",
+        f"• Volume {float(plan.get('vol_ratio') or 0):.1f}x — {plan.get('vol_status') or '—'}",
+        f"• ATR(14): {_rp(plan.get('atr'))}",
+        f"• Breakout: {plan.get('breakout_status') or '—'}",
+        "",
+        f"*Rencana masuk* — modal {_rp(plan.get('account_size'))}, risiko "
+        f"{plan.get('target_risk_pct')}% per transaksi",
+    ]
+
+    skenario = plan.get("scenarios") or {}
+    for nomor, (kunci, nama, catatan) in enumerate(_WA_SKENARIO, 1):
+        s = skenario.get(kunci)
+        if not s:
+            continue
+        tp = s.get("tp") or {}
+        baris += [
+            "",
+            f"{nomor}. *{nama}* — {catatan}",
+            f"   Entry {_rp(s.get('entry'))} · SL {_rp(s.get('sl'))} (−{float(s.get('risk_pct') or 0):.1f}%)",
+            f"   {_angka(s.get('position_size'))} lembar ≈ {_rp(s.get('position_value'))}",
+            f"   TP {_rp(tp.get('tp1'))} → {_rp(tp.get('tp2'))} → {_rp(tp.get('tp3'))}"
+            f"  (R:R 1:{tp.get('rr1')} · 1:{tp.get('rr2')} · 1:{tp.get('rr3')})",
+        ]
+
+    sr = plan.get("sr") or {}
+    dukungan = [sr.get(k) for k in ("S1", "S2", "S3", "S4") if sr.get(k)]
+    tahanan = [sr.get(k) for k in ("R1", "R2", "R3", "R4", "R5") if sr.get(k)]
+    if dukungan or tahanan:
+        baris += ["", "*Level penting*"]
+        if dukungan:
+            baris.append("Support: " + " · ".join(_angka(v) for v in dukungan))
+        if tahanan:
+            baris.append("Resistance: " + " · ".join(_angka(v) for v in tahanan))
+
+    if conf is not None:
+        rasa = ("tinggi — boleh masuk sesuai rencana" if conf >= 70
+                else "sedang — masuk bertahap" if conf >= 50
+                else "rendah — sebaiknya tunggu")
+        baris += ["", f"*Confidence: {conf}/100* ({rasa})"]
+
+    baris += [
+        "",
+        "*Kelola posisi*",
+        "• TP1 → jual 40%, SL geser ke titik impas",
+        "• TP2 → jual 35%, SL geser ke +1,5%",
+        "• TP3 → jual 25% / trailing stop",
+        "• Hormati SL, jangan average down di luar skenario Deep",
+        "",
+        "_Angka dari perhitungan yang sama dengan halaman Rencana Trading di "
+        "ranahsaham.com. Bukan ajakan membeli/menjual._",
+    ]
     return "\n".join(baris)
 
 
 def _wa_fmt_sinyal(rep: dict) -> str:
+    """Rekomendasi sinyal TERBAIK yang sedang berjalan, bukan sekadar
+    statistik.
+
+    Yang ditampilkan hanya sinyal yang masih hidup (OPEN/PENDING_ENTRY) --
+    sinyal yang sudah tutup tidak bisa lagi ditindaklanjuti. Urutannya
+    memakai confidence_score yang DISIMPAN bersama sinyalnya (dengan ai_score
+    sebagai cadangan untuk baris lama), jadi "terbaik" di sini berarti sama
+    persis dengan peringkat yang dipakai aplikasi -- bukan penilaian baru.
+    """
+    semua = rep.get("signals") or []
+    aktif = [s for s in semua if s.get("status") in ("OPEN", "PENDING_ENTRY")]
+    aktif.sort(key=lambda s: (s.get("confidence_score") or s.get("ai_score") or 0), reverse=True)
+
     stats = rep.get("stats") or {}
-    baris = ["*Audit Sinyal — ringkasan*", ""]
+    baris = ["*Rekomendasi sinyal terbaik*"]
     if stats.get("win_rate") is not None:
-        baris.append(f"Win rate: {stats['win_rate']:.1f}% dari {rep.get('n_total', 0)} sinyal")
-    baris.append(f"Posisi berjalan: {rep.get('n_open', 0)}")
-    terakhir = (rep.get("signals") or [])[:5]
-    if terakhir:
-        baris += ["", "*Terakhir tercatat:*"]
-        for s in terakhir:
-            entry = "" if s.get("entry_price") is None else f" · entry Rp{s['entry_price']:,.0f}".replace(",", ".")
-            baris.append(f"• {s.get('kode')} ({_sumber_wa(s.get('source'))}) — {_status_wa(s.get('status'))}{entry}")
-    baris += ["", "Rincian lengkap ada di ranahsaham.com", "_Bukan ajakan membeli/menjual._"]
+        baris.append(f"_Win rate tercatat {stats['win_rate']:.1f}% dari "
+                     f"{rep.get('n_total', 0)} sinyal._")
+    baris.append("")
+
+    if not aktif:
+        baris += ["_Tidak ada sinyal yang sedang berjalan saat ini._", "",
+                  "Coba *screener* untuk kandidat saringan Minervini hari ini."]
+        return "\n".join(baris)
+
+    for s in aktif[:5]:
+        skor = s.get("confidence_score") or s.get("ai_score")
+        arah = " (SELL)" if s.get("direction") == "SELL" else ""
+        judul = f"*{s.get('kode')}*{arah} — {_status_wa(s.get('status'))}"
+        if skor is not None:
+            judul += f" · confidence {float(skor):.0f}"
+        baris.append(judul)
+        detail = f"   Entry {_rp(s.get('entry_price'))}"
+        if s.get("tp_price"):
+            detail += f" · TP1 {_rp(s.get('tp_price'))}"
+        if s.get("sl_price"):
+            detail += f" · SL {_rp(s.get('sl_price'))}"
+        baris.append(detail)
+        jejak = _sumber_wa(s.get("source"))
+        if s.get("pattern"):
+            jejak += f" · {s['pattern']}"
+        baris.append(f"   _{jejak}_")
+
+    sisa = len(aktif) - 5
+    if sisa > 0:
+        baris.append(f"\n_...dan {sisa} sinyal berjalan lainnya di ranahsaham.com_")
+    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
+              "_Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
 
@@ -6172,16 +6405,47 @@ def _wa_fmt_screener(payload: dict) -> str:
     signal}], "universe": n}."""
     items = (payload or {}).get("items") or []
     if not items:
-        return "*Screener breakout hari ini*\n\n_Tidak ada saham yang lolos saringan hari ini._"
-    baris = ["*Screener breakout hari ini*", ""]
+        return "*Saringan breakout hari ini*\n\n_Tidak ada saham yang lolos saringan hari ini._"
+    baris = ["*Saringan breakout hari ini*", ""]
     for it in items[:10]:
         harga = it.get("price")
-        harga_txt = "" if harga is None else f" · Rp{harga:,.0f}".replace(",", ".")
+        harga_txt = "" if harga is None else f" · {_rp(harga)}"
         sinyal = f" · {it['signal']}" if it.get("signal") else ""
         baris.append(f"• *{it.get('ticker')}*{harga_txt}{sinyal}")
     if len(items) > 10:
         baris.append(f"_...dan {len(items) - 10} lainnya di ranahsaham.com_")
     baris += ["", "_Hasil saringan otomatis, bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_minervini(payload) -> str:
+    """Saringan Minervini (trend template 8 kriteria + RS vs IHSG).
+
+    Bentuk item mengikuti core/screening_pro.py: {ticker, skor, harga,
+    criteria_met, rs_score, rsi, vol_ratio, macd_bullish}. Hasilnya sudah
+    terurut skor menurun dari run_screenerpro().
+    """
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    items = items or []
+    if not items:
+        return ("*Saringan Minervini*\n\n_Tidak ada saham yang lolos trend template "
+                "hari ini._\n\nSaringan ini memang ketat — hari tanpa hasil itu wajar, "
+                "bukan tanda datanya rusak.")
+    baris = ["*Saringan Minervini — trend template*", ""]
+    for it in items[:10]:
+        baris.append(f"• *{it.get('ticker')}* · skor {it.get('skor')} · {_rp(it.get('harga'))}")
+        rinci = f"   {it.get('criteria_met')}/8 kriteria"
+        if it.get("rs_score") is not None:
+            rinci += f" · RS {it['rs_score']}"
+        if it.get("rsi") is not None:
+            rinci += f" · RSI {it['rsi']}"
+        if it.get("vol_ratio") is not None:
+            rinci += f" · vol {it['vol_ratio']}x"
+        baris.append(rinci)
+    if len(items) > 10:
+        baris.append(f"\n_...dan {len(items) - 10} lainnya di ranahsaham.com_")
+    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
+              "_Hasil saringan otomatis, bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
 
@@ -6223,7 +6487,19 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
     kode_valid = {t["kode"] for t in _load_ticker_directory()}
     kode = _norm_kode(pesan)
     adalah_kode = kode in kode_valid
-    if kunci not in {"sinyal", "screener", "kepemilikan", "x15", "bantuan", "help", "menu"} and not adalah_kode:
+
+    # Bentuk dua kata: "kepemilikan BBCA" -> lacak satu emiten. Kode polos
+    # tetap berarti rencana trading, jadi keduanya tidak pernah rancu.
+    kata = kunci.split()
+    kode_lacak = ""
+    if len(kata) == 2 and kata[0] in {"kepemilikan", "x15"}:
+        calon = _norm_kode(kata[1])
+        if calon in kode_valid:
+            kode_lacak = calon
+
+    if not kode_lacak and not adalah_kode and kunci not in {
+            "sinyal", "screener", "minervini", "breakout", "kepemilikan",
+            "x15", "bantuan", "help", "menu"}:
         return None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -6247,12 +6523,22 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if kunci in {"bantuan", "help", "menu"}:
             return _WA_BANTUAN
         if kunci == "sinyal":
-            return _wa_fmt_sinyal(await signals_ringkas())
-        if kunci == "screener":
+            # Laporan PENUH (bukan /ringkas): rekomendasi butuh entry/TP/SL
+            # dan confidence per sinyal, yang sengaja dibuang versi ringkas.
+            from core.signal_history import get_signal_report
+            return _wa_fmt_sinyal(await asyncio.to_thread(get_signal_report))
+        if kunci in {"screener", "minervini"}:
+            return _wa_fmt_minervini(await screenerpro())
+        if kunci == "breakout":
             return _wa_fmt_screener(await screener())
+        if kode_lacak:
+            return _wa_fmt_pemegang_kode(await api_pemegang_saham(kode_lacak))
         if kunci in {"kepemilikan", "x15"}:
-            return "\n".join(await _wa_x15_lines())
-        return _wa_fmt_analisis(await _analyze_payload(kode))
+            baris = await _wa_x15_lines()
+            baris += [""] + _wa_fmt_akumulasi(await _wa_akumulasi_berulang())
+            baris += ["", "Ketik `kepemilikan KODE` untuk melacak satu emiten."]
+            return "\n".join(baris)
+        return _wa_fmt_plan(await plan(kode), await _analyze_payload(kode))
     except HTTPException as e:
         return f"Maaf, {e.detail}"
     except X15FetchError as e:
