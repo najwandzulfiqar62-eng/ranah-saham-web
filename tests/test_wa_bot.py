@@ -798,3 +798,55 @@ def test_nyangkut_tidak_menyuruh_average_down_dan_menimbang_pasar(client, wa_ber
     assert "Kondisi pasar (IHSG)" in hasil and "BEARISH" in hasil
     assert "melawan arus" in hasil
     assert hasil.index("IHSG berhenti melemah dulu") < hasil.index("Ada tanda pembalikan")
+
+
+def test_balasan_emiten_menyertakan_status_sinyalnya(client, wa_bersih, monkeypatch):
+    """Kalau ERAA sedang jadi sinyal berjalan yang sudah naik puluhan persen,
+    mengetik "ERAA" HARUS menyebutnya -- itu yang paling dicari anggota grup,
+    dan anjurannya wajib sama dengan perintah `sinyal`, bukan hitungan lain."""
+    import core.signal_history as sh
+    import web.app as app_module
+
+    async def _rd_palsu(kode):
+        return {"ticker": kode, "score": 70, "rating": "BAGUS",
+                "recommendation": "BUY", "signal": "📈",
+                "ringkasan_eksekutif": "Gambaran teknikal condong menguat."}
+
+    async def _plan_palsu(kode):
+        return {"ticker_symbol": kode, "current_price": 595, "sr": {}, "scenarios": {},
+                "account_size": 100_000_000, "target_risk_pct": 3.0,
+                "breakout_status": "Belum breakout"}
+
+    def _report_palsu():
+        return {"signals": [
+            {"kode": "ERAA", "status": "OPEN", "entry_price": 520, "sl_price": 480,
+             "tp_price": 560, "tp_level_hit": 1, "sejak_sinyal_return_pct": 14.4,
+             "puncak_return_pct": 22.1, "recorded_at": "2026-09-03 09:00:00",
+             "emiten_rekap": {"tanggal_pertama": "2026-07-04", "entry_pertama": 358.0,
+                              "dari_pertama_pct": 66.2, "jumlah_sinyal": 10},
+             "masuk_lagi": {"pullback": {"entry": 575, "sl": 540},
+                            "deep": {"entry": 548, "sl": 515}}},
+            {"kode": "LAIN", "status": "OPEN", "entry_price": 100},
+        ]}
+
+    async def _lewati(*a, **k):
+        return None
+
+    monkeypatch.setattr(app_module, "_wa_report_data", _rd_palsu)
+    monkeypatch.setattr(app_module, "plan", _plan_palsu)
+    monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati)
+    monkeypatch.setattr(app_module, "_load_ticker_directory",
+                        lambda: [{"kode": "ERAA", "nama": "Erajaya"}])
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "eraa").json()["reply"]
+    assert "*Status sinyal* — 1 sinyal tercatat untuk ERAA" in hasil
+    assert "Sinyal pertama 2026-07-04 di Rp358 → +66.2%" in hasil
+    assert "Puncak sejak sinyal muncul: *+22.1%*" in hasil
+    # Anjuran identik dengan perintah `sinyal`.
+    assert "HOLD, stop digeser ke titik impas (Rp520)" in hasil
+    assert "area terbaik Rp548 (SL Rp515)" in hasil
+    # Statusnya di ATAS ringkasan analisis, bukan terkubur di bawah.
+    assert hasil.index("Status sinyal") < hasil.index("Ringkasan")
+    assert "LAIN" not in hasil, "sinyal emiten lain tidak boleh ikut"

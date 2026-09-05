@@ -6589,6 +6589,80 @@ def _wa_fmt_berita(items: list[dict] | None, kode: str = "") -> str:
     return "\n".join(baris)
 
 
+async def _wa_blok_sinyal_emiten(kode: str) -> list[str]:
+    """Status sinyal emiten ini, untuk disisipkan ke balasan KODE EMITEN.
+
+    Tanpa ini, mengetik "ERAA" memberi analisis lengkap tapi TIDAK menyebut
+    bahwa emiten itu sedang jadi sinyal berjalan yang sudah naik puluhan
+    persen -- padahal justru itu yang paling ingin diketahui anggota grup.
+    Datanya & anjurannya SAMA dengan perintah `sinyal`, bukan hitungan lain.
+    """
+    from core.signal_history import get_signal_report
+
+    try:
+        laporan = await asyncio.to_thread(get_signal_report)
+        milik = [s for s in (laporan.get("signals") or []) if s.get("kode") == kode]
+        if not milik:
+            return []
+        # Cache-only (boleh_fetch=False): balasan satu emiten tidak boleh
+        # memicu unduhan riwayat ~200 kode.
+        await _tempel_puncak_sejak_sinyal(milik)
+    except Exception as e:
+        print(f"⚠️ wa: gagal menyiapkan status sinyal {kode}: {type(e).__name__}: {e}")
+        return []
+
+    aktif = [s for s in milik if s.get("status") in ("OPEN", "PENDING_ENTRY")]
+    terbaru = max(aktif or milik,
+                  key=lambda s: s.get("entry_filled_at") or s.get("recorded_at") or "")
+    baris = ["", f"*Status sinyal* — {len(milik)} sinyal tercatat untuk {kode}"]
+
+    rekap = terbaru.get("emiten_rekap")
+    if rekap:
+        baris.append(f"• Sinyal pertama {rekap['tanggal_pertama']} di "
+                     f"{_rp(rekap['entry_pertama'])} → {rekap['dari_pertama_pct']:+.1f}%")
+    puncak = max((s.get("puncak_return_pct") for s in milik
+                  if s.get("puncak_return_pct") is not None), default=None)
+    if puncak is not None:
+        baris.append(f"• Puncak sejak sinyal muncul: *{puncak:+.1f}%*")
+
+    if not aktif:
+        baris.append("• _Tidak ada sinyal yang sedang berjalan untuk emiten ini._")
+        return baris
+
+    baris.append(f"• Sinyal berjalan: {_status_wa(terbaru.get('status'))}, entry "
+                 f"{_rp(terbaru.get('entry_price'))} · SL {_rp(terbaru.get('sl_price'))}")
+
+    # Anjuran memakai aturan yang SAMA dengan perintah `sinyal`.
+    if terbaru.get("status") == "PENDING_ENTRY":
+        baris.append(f"👉 *Belum punya*: pasang beli di {_rp(terbaru.get('entry_price'))}, "
+                     f"SL {_rp(terbaru.get('sl_price'))}")
+        return baris
+
+    lv = terbaru.get("tp_level_hit") or 0
+    if lv >= 2 and terbaru.get("tp_price"):
+        jaga = f"stop dinaikkan ke level TP1 ({_rp(terbaru['tp_price'])})"
+    elif lv >= 1:
+        jaga = f"stop digeser ke titik impas ({_rp(terbaru.get('entry_price'))})"
+    else:
+        jaga = f"stop tetap {_rp(terbaru.get('sl_price'))}"
+    baris.append(f"👉 *Sudah punya*: HOLD, {jaga}")
+
+    ml = terbaru.get("masuk_lagi") or {}
+    area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
+                  key=lambda a: a["entry"])
+    naik = terbaru.get("sejak_sinyal_return_pct") or 0
+    if area:
+        utama = area[0]
+        teks = f"👉 *Belum punya*: area terbaik {_rp(utama['entry'])} (SL {_rp(utama['sl'])})"
+        if len(area) > 1:
+            teks += f", alternatif lebih dangkal {_rp(area[1]['entry'])}"
+        baris.append(teks)
+        if naik > 3:
+            baris.append(f"_Harga sudah jalan {naik:+.1f}% dari entry — masuk HANYA "
+                         f"kalau harga turun menyentuh area itu._")
+    return baris
+
+
 def _wa_fmt_nyangkut(kode: str, avg: float, d: dict, pasar: dict | None) -> str:
     """Panduan untuk posisi yang sedang merugi -- termasuk sesudah kena SL.
 
@@ -6728,7 +6802,7 @@ async def _wa_report_data(kode: str) -> dict:
                              rec_badge=rec_badge)
 
 
-def _wa_fmt_emiten(rd: dict, blok_rencana: list[str]) -> str:
+def _wa_fmt_emiten(rd: dict, blok_rencana: list[str], blok_sinyal: list[str] | None = None) -> str:
     """Susun laporan emiten untuk WhatsApp, mengikuti URUTAN BAGIAN di PDF:
     rekomendasi → snapshot → indikator → bull/bear → sintesis → rencana
     trading → skenario → SMC → konteks IHSG → berita → manajemen risiko.
@@ -6749,6 +6823,12 @@ def _wa_fmt_emiten(rd: dict, blok_rencana: list[str]) -> str:
         baris.append(f"Rekomendasi teknikal: *{badge['label']}*{kuat}")
         if badge.get("reason"):
             baris.append(f"_{badge['reason']}_")
+
+    # Status sinyal ditaruh paling atas: itu yang paling dicari anggota grup
+    # ("sudah naik berapa? masih boleh masuk?"), jangan dikubur di bawah
+    # tabel indikator.
+    if blok_sinyal:
+        baris += blok_sinyal
 
     if rd.get("ringkasan_eksekutif"):
         baris += ["", "*Ringkasan*", rd["ringkasan_eksekutif"]]
@@ -7317,9 +7397,13 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
                      "mimetype": "application/pdf"})
         # Isi SAMA dengan PDF Laporan Analisis (termasuk SMC & berita), plus
         # rencana entry, plus grafik yang sama dengan halaman Analisis.
-        rd, rencana = await asyncio.gather(_wa_report_data(kode), plan(kode))
+        rd, rencana, blok_sinyal = await asyncio.gather(
+            _wa_report_data(kode), plan(kode), _wa_blok_sinyal_emiten(kode))
         blok = _wa_fmt_plan(rencana, None, dengan_kepala=False).split("\n")
-        return _wa_fmt_emiten(rd, blok), {
+        # Status sinyalnya ditaruh PALING ATAS setelah verdict: itu yang
+        # paling dicari ("ERAA sudah naik berapa? masih boleh masuk?"),
+        # bukan dikubur di bawah tabel indikator.
+        return _wa_fmt_emiten(rd, blok, blok_sinyal), {
             "kind": "image", "jenis": "chart", "kode": kode,
             "filename": f"{kode}.png",
             "caption": f"*{kode}* — grafik harga & indikator"}
