@@ -22,6 +22,10 @@ __pycache__/
 
 # User Uploads
 web/static/forum_uploads/
+web/static/profile_uploads/
+# Screenshot bukti anggota grup WhatsApp -- data pribadi pendaftar, JANGAN
+# pernah masuk repo publik (repo ini di GitHub).
+web/private_uploads/
 
 # Dokumen skripsi pribadi (draft, contoh skripsi kating/teman, pedoman) --
 # bahan penulisan, bukan bagian dari source code aplikasi.

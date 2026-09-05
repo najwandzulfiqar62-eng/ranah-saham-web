@@ -101,7 +101,8 @@ from core.config import (SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS, ACCESS_COOKI
                          GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI,
                          WA_BOT_URL, WA_BOT_SECRET, WA_DAILY_SEND_TIME, WA_CHECK_INTERVAL_SECONDS)
 from core.access import (
-    SESSION_DAYS, admin_is_configured, authenticate, ensure_access_tables,
+    SESSION_DAYS, PasswordCheckUnavailable, admin_is_configured, authenticate,
+    ensure_access_tables,
     ensure_bootstrap_admin, get_session_user, list_users, register_user,
     revoke_session, set_user_status, update_profile, create_session_for_user, upsert_google_user,
     revoke_user_approval, delete_access_history_user, get_proof_filename, update_proof_filename,
@@ -508,7 +509,21 @@ async def api_access_pending_proof(request: Request):
 @app.post("/api/access/login")
 async def api_access_login(request: Request):
     body = await _access_payload(request)
-    user, token_or_error = authenticate(body.get("login", body.get("email", "")), body.get("password", ""))
+    # Verifikasi scrypt makan ~100-300 ms DAN 16 MB memori. Dijalankan langsung
+    # di sini (endpoint async), satu login membekukan event loop selama itu --
+    # terasa sekali kalau beberapa orang masuk bersamaan, mis. tepat setelah
+    # broadcast WhatsApp pagi. Karena itu dipindah ke thread pool.
+    try:
+        user, token_or_error = await asyncio.to_thread(
+            authenticate, body.get("login", body.get("email", "")), body.get("password", ""))
+    except PasswordCheckUnavailable as exc:
+        # Servernya yang kehabisan memori, passwordnya belum tentu salah --
+        # JANGAN pernah menyuruh user mengganti password yang sudah benar.
+        print(f"⚠️ Verifikasi password gagal (sumber daya server): {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Server sedang sibuk sehingga password belum bisa diperiksa. Coba lagi sebentar lagi.",
+        )
     if user is None:
         raise HTTPException(status_code=403, detail=token_or_error)
     response = JSONResponse({"user": user})
@@ -873,15 +888,35 @@ async def access_gate(request: Request, call_next):
     tetapi SELURUH endpoint bisnis `/api/*` hanya bisa dipakai oleh sesi yang
     sudah disetujui admin. Endpoint `/api/access/*` adalah satu-satunya jalur
     publik untuk daftar dan masuk.
+
+    Dua hal yang membuat situs terasa berat dan kadang "mengeluarkan" user,
+    keduanya diperbaiki di sini:
+
+    1. Lookup sesi DULU dijalankan untuk SETIAP request. Karena frontend
+       di-mount di "/" (StaticFiles), setiap CSS/JS/gambar/foto profil ikut
+       menembak database, padahal `request.state.access_user` hanya dibaca
+       oleh handler `/api/...`. Sekarang path non-API tidak menyentuh DB sama
+       sekali -- ini TIDAK mengubah proteksi apa pun, karena gate memang hanya
+       pernah mengunci `/api/*` (bukti pendaftaran yang sensitif disimpan di
+       luar folder statis dan dilayani lewat endpoint API tersendiri).
+    2. Lookup itu sinkron di dalam middleware async, jadi selama ia menunggu
+       SQLite (yang bisa mengantre sampai busy_timeout 5 detik di belakang
+       loop latar yang sedang menulis) SELURUH event loop ikut membeku --
+       macet untuk semua pengunjung sekaligus, bukan cuma yang bersangkutan.
+       Sekarang dipindah ke thread pool.
     """
     path = request.url.path
     if path == "/health":
         return await call_next(request)
 
-    user = get_session_user(request.cookies.get("rs_session"))
+    if not path.startswith("/api/"):
+        request.state.access_user = None
+        return await call_next(request)
+
+    user = await asyncio.to_thread(get_session_user, request.cookies.get("rs_session"))
     request.state.access_user = user
 
-    if path.startswith("/api/") and not path.startswith("/api/access/") and not user:
+    if not path.startswith("/api/access/") and not user:
         return JSONResponse(
             status_code=401,
             content={"detail": "Akses akun diperlukan. Silakan masuk terlebih dahulu."},

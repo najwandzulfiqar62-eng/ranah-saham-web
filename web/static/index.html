@@ -1656,7 +1656,38 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
   function announceNewAccessRequests(nextCount){const added=nextCount-pendingCount;if(!pendingNoticeReady||added<=0)return;const label=added===1?'Ada 1 permintaan akses baru.':'Ada '+added+' permintaan akses baru.';try{if(typeof _notifSound==='function')_notifSound();if(typeof _maybeBrowserNotif==='function')_maybeBrowserNotif('Ranah Saham — permintaan akses baru',label)}catch(_){}const button=document.getElementById('accessAccountBtn');if(button){button.classList.add('access-has-new');setTimeout(()=>button.classList.remove('access-has-new'),2200)}}
   async function refreshAdminNotice(){if(!currentUser||!currentUser.is_admin)return;try{const d=await fetch('/api/access/admin/summary',{credentials:'same-origin'}).then(r=>r.ok?r.json():null);const nextCount=d?Number(d.pending_count||0):0;announceNewAccessRequests(nextCount);pendingCount=nextCount;pendingNoticeReady=true;refreshAccountButton()}catch(_){}}
   function unlock(user){currentUser=user;window.rsAccessUser=user;document.body.classList.remove('access-locked');gate.setAttribute('aria-hidden','true');refreshAccountButton();refreshAdminNotice()}
-  window.rsAccessReady=fetch('/api/access/me',{credentials:'same-origin'}).then(async r=>{const data=await r.json().catch(()=>({}));window.rsGoogleEnabled=!!data.google_enabled;const gb=document.getElementById('googleLoginBtn');if(gb&&!data.google_enabled){gb.hidden=true}if(data.user)unlock(data.user);else if(data.pending_proof){document.getElementById('accessLoginForm').hidden=true;document.getElementById('accessRegisterForm').hidden=true;document.getElementById('googleProofForm').hidden=false;document.querySelector('.access-tabs').hidden=true;showMessage('Akun Google ditemukan. Kirim bukti anggota untuk menunggu persetujuan admin.','ok')}return data.user||null}).catch(()=>null);
+  /* Sesi hanya dicek SEKALI saat halaman dibuka. Dulu setiap kegagalan --
+     termasuk timeout/500 karena server sedang sibuk, atau sinyal HP putus
+     sekejap -- ditelan `.catch(()=>null)` sehingga hasilnya sama persis
+     dengan "belum login": layar masuk muncul dan user mengira dirinya
+     dikeluarkan, padahal cookie sesinya masih hidup 30 hari. Sekarang
+     kegagalan sementara dicoba ulang sekali, lalu dibedakan dari benar-benar
+     belum login. */
+  async function fetchAccessState(){
+    for(let attempt=0;attempt<2;attempt++){
+      let res=null;
+      try{res=await fetch('/api/access/me',{credentials:'same-origin'})}catch(_){res=null}
+      if(res&&res.status<500)return await res.json().catch(()=>({}));
+      if(attempt)break;
+      await new Promise(done=>setTimeout(done,700));
+    }
+    return {_gagalKoneksi:true};
+  }
+  window.rsAccessReady=fetchAccessState().then(data=>{
+    if(data._gagalKoneksi){
+      document.getElementById('accessLoginForm').hidden=true;
+      document.getElementById('accessRegisterForm').hidden=true;
+      document.getElementById('googleProofForm').hidden=true;
+      const tabs=document.querySelector('.access-tabs');if(tabs)tabs.hidden=true;
+      showMessage('Server sedang sibuk atau koneksi terputus. Sesimu TIDAK hilang — coba muat ulang halaman sebentar lagi.','err');
+      return null;
+    }
+    window.rsGoogleEnabled=!!data.google_enabled;
+    const gb=document.getElementById('googleLoginBtn');if(gb&&!data.google_enabled){gb.hidden=true}
+    if(data.user)unlock(data.user);
+    else if(data.pending_proof){document.getElementById('accessLoginForm').hidden=true;document.getElementById('accessRegisterForm').hidden=true;document.getElementById('googleProofForm').hidden=false;document.querySelector('.access-tabs').hidden=true;showMessage('Akun Google ditemukan. Kirim bukti anggota untuk menunggu persetujuan admin.','ok')}
+    return data.user||null;
+  });
   window.rsRefreshAccountButton=refreshAccountButton;
   setInterval(refreshAdminNotice,60000);
   document.querySelectorAll('[data-access-tab]').forEach(btn=>btn.addEventListener('click',()=>{

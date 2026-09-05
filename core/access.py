@@ -11,6 +11,8 @@ import hashlib
 import hmac
 import re
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from core.config import ACCESS_ADMIN_EMAIL, ACCESS_ADMIN_PASSWORD
@@ -20,6 +22,19 @@ SESSION_DAYS = 30
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+# scrypt butuh 128*r*N = 16 MB per pemanggilan. Batas bawaan OpenSSL 32 MB itu
+# terlalu mepet: begitu ada tambahan sedikit saja, yang keluar bukan "lambat"
+# melainkan ValueError yang dulu tersamar jadi "password salah" (lihat
+# verify_password). Diberi kelonggaran supaya yang bisa menggagalkannya hanya
+# kehabisan memori sungguhan, bukan plafon yang kesempitan.
+_SCRYPT_MAXMEM = 64 * 1024 * 1024
+
+
+class PasswordCheckUnavailable(RuntimeError):
+    """Verifikasi password gagal karena sumber daya server, BUKAN karena
+    passwordnya keliru. Pemanggil WAJIB membedakan keduanya: menuduh user
+    salah password padahal servernya yang kehabisan memori membuat user
+    mengganti-ganti password yang sebenarnya sudah benar."""
 
 
 def _now() -> str:
@@ -41,7 +56,8 @@ def _normalize_phone(value: str | None) -> str:
 def _hash_password(password: str, salt: bytes | None = None) -> str:
     salt = salt or secrets.token_bytes(16)
     digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P
+        password.encode("utf-8"), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P,
+        maxmem=_SCRYPT_MAXMEM,
     )
     return "scrypt${}${}${}${}${}".format(
         _SCRYPT_N,
@@ -53,18 +69,38 @@ def _hash_password(password: str, salt: bytes | None = None) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
+    """True/False HANYA menjawab cocok atau tidaknya password.
+
+    BUG NYATA yang diperbaiki di sini -- laporan user: "kadang ada beberapa yg
+    kata sandi udah bener jadi salah". Dulu SELURUH ValueError ditelan menjadi
+    `return False`, padahal `hashlib.scrypt` melempar ValueError ("memory limit
+    exceeded") ketika gagal memperoleh 16 MB memorinya. Di VPS yang sedang
+    sesak (Chrome untuk solve Cloudflare IDX, sidecar wa-bot, app utama),
+    kegagalan sumber daya itu terbaca sebagai "password salah" -- user yakin
+    passwordnya benar, dan memang benar.
+
+    Sekarang hanya kegagalan MEMBACA hash tersimpan yang berarti False (hash
+    rusak/format lain memang bukan kecocokan). Kegagalan scrypt-nya sendiri
+    dilempar sebagai PasswordCheckUnavailable supaya pemanggil menjawab
+    "server sedang sibuk", bukan menuduh user.
+    """
     try:
         algorithm, n, r, p, salt, expected = stored.split("$")
         if algorithm != "scrypt":
             return False
-        got = hashlib.scrypt(
-            password.encode("utf-8"),
-            salt=base64.urlsafe_b64decode(salt.encode("ascii")),
-            n=int(n), r=int(r), p=int(p),
-        )
-        return hmac.compare_digest(got, base64.urlsafe_b64decode(expected.encode("ascii")))
+        salt_bytes = base64.urlsafe_b64decode(salt.encode("ascii"))
+        expected_bytes = base64.urlsafe_b64decode(expected.encode("ascii"))
+        n_int, r_int, p_int = int(n), int(r), int(p)
     except (ValueError, TypeError):
         return False
+    try:
+        got = hashlib.scrypt(
+            password.encode("utf-8"), salt=salt_bytes,
+            n=n_int, r=r_int, p=p_int, maxmem=_SCRYPT_MAXMEM,
+        )
+    except (ValueError, MemoryError) as exc:
+        raise PasswordCheckUnavailable(str(exc)) from exc
+    return hmac.compare_digest(got, expected_bytes)
 
 
 def _public(row) -> dict:
@@ -83,6 +119,60 @@ def _public(row) -> dict:
         "has_google_login": bool(row["google_sub"]) if "google_sub" in row.keys() else False,
         "history_hidden": bool(row["history_hidden"]) if "history_hidden" in row.keys() else False,
     }
+
+
+# =========================
+# CACHE SESI DI MEMORI
+# =========================
+# access_gate memvalidasi cookie untuk SETIAP request /api/, dan satu kali buka
+# Beranda menembak ~11 endpoint sekaligus -- artinya ~11 query SQLite hanya
+# untuk memeriksa satu cookie yang sama. Tiap query itu bisa ikut mengantre di
+# belakang loop latar yang sedang menulis (busy_timeout 5 detik di
+# core/database.py), dan itulah yang membuat situs terasa berat lalu
+# melemparkan user ke layar login ketika satu permintaan akhirnya gagal.
+#
+# TTL sengaja pendek supaya pencabutan akses oleh admin tetap cepat terasa;
+# selain itu setiap perubahan status/profil membuang cache ini seluruhnya.
+# Hasil NEGATIF tidak pernah disimpan -- user yang baru saja login harus
+# langsung diakui, bukan menunggu TTL habis.
+_SESSION_CACHE_TTL = 30.0
+_SESSION_CACHE_MAX = 512
+_session_cache: dict[str, tuple[float, dict]] = {}
+_session_cache_lock = threading.Lock()
+
+
+def _session_cache_get(token_hash: str) -> dict | None:
+    now = time.monotonic()
+    with _session_cache_lock:
+        entry = _session_cache.get(token_hash)
+        if entry is None:
+            return None
+        cached_at, user = entry
+        if now - cached_at > _SESSION_CACHE_TTL:
+            _session_cache.pop(token_hash, None)
+            return None
+        return dict(user)  # salinan: pemanggil tidak boleh mengubah isi cache
+
+
+def _session_cache_put(token_hash: str, user: dict) -> None:
+    now = time.monotonic()
+    with _session_cache_lock:
+        if len(_session_cache) >= _SESSION_CACHE_MAX:
+            for key, (cached_at, _) in list(_session_cache.items()):
+                if now - cached_at > _SESSION_CACHE_TTL:
+                    _session_cache.pop(key, None)
+            if len(_session_cache) >= _SESSION_CACHE_MAX:
+                _session_cache.clear()
+        _session_cache[token_hash] = (now, dict(user))
+
+
+def invalidate_session_cache(token_hash: str | None = None) -> None:
+    """Buang satu entri (logout) atau seluruh cache (status/profil berubah)."""
+    with _session_cache_lock:
+        if token_hash is None:
+            _session_cache.clear()
+        else:
+            _session_cache.pop(token_hash, None)
 
 
 _ensured = False
@@ -244,8 +334,14 @@ def authenticate(identifier: str, password: str) -> tuple[dict | None, str | Non
 def get_session_user(token: str | None, include_pending: bool = False) -> dict | None:
     if not token:
         return None
-    ensure_access_tables()
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    # Jalur pending (upload bukti akun Google) sengaja melewati cache: jarang
+    # dipakai, dan justru statusnya yang sedang berubah-ubah.
+    if not include_pending:
+        cached = _session_cache_get(token_hash)
+        if cached is not None:
+            return cached
+    ensure_access_tables()
     with get_db() as conn:
         row = conn.execute(
             """SELECT u.* FROM access_session s JOIN access_user u ON u.id = s.user_id
@@ -255,15 +351,22 @@ def get_session_user(token: str | None, include_pending: bool = False) -> dict |
         if row is None:
             return None
         user = _public(row)
-        return user if include_pending or user["status"] == "approved" else None
+        if user["status"] != "approved":
+            return user if include_pending else None
+        if not include_pending:
+            _session_cache_put(token_hash, user)
+        return user
 
 
 def revoke_session(token: str | None) -> None:
     if not token:
         return
     ensure_access_tables()
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with get_db() as conn:
-        conn.execute("DELETE FROM access_session WHERE token_hash = ?", (hashlib.sha256(token.encode("utf-8")).hexdigest(),))
+        conn.execute("DELETE FROM access_session WHERE token_hash = ?", (token_hash,))
+    # Tanpa ini, logout baru benar-benar terasa setelah TTL cache habis.
+    invalidate_session_cache(token_hash)
 
 
 def update_profile(user_id: int, name: str, bio: str | None = None, avatar_url: str | None = None, phone: str | None = None) -> dict:
@@ -284,6 +387,8 @@ def update_profile(user_id: int, name: str, bio: str | None = None, avatar_url: 
             raise ValueError("Nomor WhatsApp ini sudah terdaftar pada akun lain.")
         conn.execute("UPDATE access_user SET name = ?, bio = ?, avatar_url = ?, phone = ? WHERE id = ?", (name, bio, avatar_url, phone, user_id))
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
+    # Nama/foto yang dipakai postingan forum ikut tersimpan di cache sesi.
+    invalidate_session_cache()
     return _public(row)
 
 
@@ -355,7 +460,9 @@ def set_user_status(user_id: int, status: str) -> dict | None:
             (status, _now() if status == "approved" else None, user_id),
         )
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
-        return _public(row) if row else None
+    # Penolakan harus langsung menutup pintu, tidak menunggu TTL cache.
+    invalidate_session_cache()
+    return _public(row) if row else None
 
 
 def revoke_user_approval(user_id: int) -> dict | None:
@@ -367,7 +474,9 @@ def revoke_user_approval(user_id: int) -> dict | None:
             (user_id,),
         )
         row = conn.execute("SELECT * FROM access_user WHERE id = ?", (user_id,)).fetchone()
-        return _public(row) if row else None
+    # Idem set_user_status: akses yang dicabut harus berhenti seketika.
+    invalidate_session_cache()
+    return _public(row) if row else None
 
 
 def delete_access_history_user(user_id: int) -> dict | None:
