@@ -3681,9 +3681,11 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
     if not dipakai:
         return
 
-    kunci = "sinyal_puncak:v1"
-    peta = _cache_get(kunci)
-    if peta is None:
+    kunci = "sinyal_puncak:v2"
+    tersimpan = _cache_get(kunci)
+    if tersimpan is None:
+        from core.trading_plan import calculate_advanced_plan_from_df
+
         awal = min((s.get("entry_filled_at") or s.get("recorded_at"))[:10] for s in dipakai)
         kode_unik = sorted({s["kode"] for s in dipakai})
         try:
@@ -3692,7 +3694,7 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
         except Exception as e:
             print(f"⚠️ puncak-sinyal: gagal unduh riwayat: {type(e).__name__}: {e}")
             return
-        peta = {}
+        peta, rencana = {}, {}
         for k in kode_unik:
             df = data.get(k + ".JK")
             if df is None or len(df) == 0:
@@ -3704,7 +3706,26 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
                            if pd.notna(h) and pd.notna(c)]
             except Exception:
                 continue
-        _cache_set(kunci, peta, ttl=3600)
+            # Level "masuk lagi" dihitung dari HARGA SEKARANG memakai fungsi
+            # rencana yang SAMA dengan halaman Rencana Trading -- pertanyaan
+            # user: "kalau kita mau entry lagi dari kenaikan awal muncul
+            # sinyal, enak di berapa". Entry sinyal aslinya sudah lewat, jadi
+            # angka yang berguna adalah level hari ini, bukan level lama.
+            try:
+                p = calculate_advanced_plan_from_df(df, k)
+                if p and p.get("scenarios"):
+                    rencana[k] = {
+                        n: {"entry": v["entry"], "sl": v["sl"], "risk_pct": v["risk_pct"],
+                            "tp1": v["tp"]["tp1"]}
+                        for n, v in p["scenarios"].items() if n in ("pullback", "deep")
+                    }
+            except Exception:
+                pass
+        tersimpan = {"bar": peta, "masuk_lagi": rencana}
+        _cache_set(kunci, tersimpan, ttl=3600)
+
+    peta = tersimpan.get("bar") or {}
+    rencana = tersimpan.get("masuk_lagi") or {}
 
     from core.signal_history import is_price_scale_anomaly
     for s in dipakai:
@@ -3728,6 +3749,8 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
         s["puncak_return_pct"] = round((harga_puncak / entry - 1) * 100, 2)
         s["sejak_sinyal_return_pct"] = round((sesudah[-1][2] / entry - 1) * 100, 2)
         s["hari_sejak_sinyal"] = len(sesudah)
+        if rencana.get(s["kode"]):
+            s["masuk_lagi"] = rencana[s["kode"]]
 
 
 @app.get("/api/signals/ringkas")
@@ -6778,6 +6801,20 @@ def _wa_fmt_sinyal(rep: dict) -> str:
                 tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
                 bagian.append(f"*puncak {puncak:+.1f}%*{tgl}")
             isi.append("   " + " · ".join(bagian))
+        # "Masuk lagi di berapa" -- hanya ditampilkan kalau harganya memang
+        # sudah lari jauh dari entry aslinya (>3%). Kalau harga masih di
+        # sekitar entry, level lamanya masih berlaku dan menambah baris ini
+        # cuma bikin ramai.
+        ml = s.get("masuk_lagi") or {}
+        if ml and (sekarang or 0) > 3:
+            pb, dp = ml.get("pullback"), ml.get("deep")
+            potong = []
+            if pb:
+                potong.append(f"pullback {_rp(pb['entry'])} (SL {_rp(pb['sl'])})")
+            if dp:
+                potong.append(f"deep {_rp(dp['entry'])} (SL {_rp(dp['sl'])})")
+            if potong:
+                isi.append("   Masuk lagi: " + " · ".join(potong))
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
             jejak += f" · {s['pattern']}"

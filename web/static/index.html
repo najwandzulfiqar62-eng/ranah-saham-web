@@ -4813,12 +4813,26 @@ async function loadSignalAudit(){
         const hit=tpLevelFinal>=n;
         return `<div style="${hit?'':'opacity:.5'}">${hit?icon('check',{size:11})+' ':''}TP${n} Rp${fmt(price)} <span class="muted" style="font-size:9.5px">(${tpSign}${fmt(pct,1)}%)</span></div>`;
       };
+      // "Sejak sinyal muncul": puncak tertinggi yang pernah dicapai. Pada
+      // sinyal yang keburu kena SL, angka inilah yang menjawab "harusnya
+      // udah profit puluhan persen kalau entry dari awal" -- dengan angka,
+      // bukan perasaan. Ditandai jelas sbg PUNCAK, bukan hasil yang diraih.
+      const puncakTxt=s.puncak_return_pct==null?'':
+        `<div style="font-size:9.5px;color:var(--bull);margin-top:2px" title="Harga tertinggi sejak sinyal muncul${s.puncak_date?' ('+s.puncak_date+')':''} — bukan hasil yang direalisasikan">`
+        +`puncak ${s.puncak_return_pct>=0?'+':''}${fmt(s.puncak_return_pct,1)}%</div>`;
+      // Entry aslinya sudah lewat -> level yang berguna adalah level HARI INI
+      // (dihitung fungsi rencana yang sama dengan halaman Rencana Trading).
+      const ml=s.masuk_lagi||null;
+      const masukLagiTxt=(!ml||!(ml.pullback||ml.deep))?'':
+        `<div class="muted" style="font-size:9.5px;margin-top:3px">masuk lagi: `
+        +[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',ml.deep?`Rp${fmt(ml.deep.entry)}`:'']
+          .filter(Boolean).join(' / ')+`</div>`;
 
       if(auditViewMode === 'table') {
         return `<tr style="cursor:pointer" data-k="${s.kode}">
-          <td>${tickerTag(s.kode)}${_riskBadge(s)}${_corpBadge(s)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div></td>
+          <td>${tickerTag(s.kode)}${_riskBadge(s)}${_corpBadge(s)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div>${puncakTxt}</td>
           <td class="hide-xs">${_sourceLabel(s.source)} ${dirBadge}</td>
-          <td>Rp${fmt(s.entry_price)}</td>
+          <td>Rp${fmt(s.entry_price)}${masukLagiTxt}</td>
           <td style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
           <td style="color:var(--bear);font-family:'JetBrains Mono',monospace;font-size:11px">Rp${fmt(s.sl_price)} <div class="muted" style="font-size:9.5px">(${slSign}${fmt(s.sl_pct,1)}%)</div></td>
           <td style="color:${_auditStatusColor(s)}">${_auditStatusLabel(s)}</td>
@@ -4841,6 +4855,14 @@ async function loadSignalAudit(){
             <span class="zeta-sig-lbl">Entry</span>
             <span class="zeta-sig-val">Rp${fmt(s.entry_price)}</span>
           </div>
+          ${s.puncak_return_pct==null?'':`<div class="zeta-sig-row" style="margin-top:4px">
+            <span class="zeta-sig-lbl">Puncak sejak muncul</span>
+            <span class="zeta-sig-val" style="color:var(--bull)">${s.puncak_return_pct>=0?'+':''}${fmt(s.puncak_return_pct,1)}%${s.puncak_date?` <span class="muted" style="font-size:9.5px">${s.puncak_date}</span>`:''}</span>
+          </div>`}
+          ${(!ml||!(ml.pullback||ml.deep))?'':`<div class="zeta-sig-row" style="margin-top:4px">
+            <span class="zeta-sig-lbl">Masuk lagi</span>
+            <span class="zeta-sig-val">${[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',ml.deep?`Rp${fmt(ml.deep.entry)}`:''].filter(Boolean).join(' / ')}</span>
+          </div>`}
           <div class="zeta-sig-row" style="margin-top:4px;align-items:flex-start">
             <span class="zeta-sig-lbl">Target (TP)</span>
             <div style="text-align:right;color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">

@@ -222,7 +222,10 @@ def test_sinyal_menyebut_puncak_sejak_muncul(client, wa_bersih, monkeypatch):
         for s in signals:
             s.update({"mulai_dilacak": "2026-07-01", "hari_sejak_sinyal": 45,
                       "puncak_return_pct": 132.5, "puncak_date": "2026-08-20",
-                      "sejak_sinyal_return_pct": 87.25})
+                      "sejak_sinyal_return_pct": 87.25,
+                      "masuk_lagi": {
+                          "pullback": {"entry": 745, "sl": 690, "risk_pct": 7.4, "tp1": 800},
+                          "deep": {"entry": 700, "sl": 650, "risk_pct": 7.1, "tp1": 750}}})
 
     monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
     monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _puncak_palsu)
@@ -232,6 +235,10 @@ def test_sinyal_menyebut_puncak_sejak_muncul(client, wa_bersih, monkeypatch):
     assert "Sejak 2026-07-01 (45 hari bursa)" in hasil
     assert "sekarang +87.2%" in hasil or "sekarang +87.3%" in hasil
     assert "*puncak +132.5%*" in hasil and "2026-08-20" in hasil
+    # Entry aslinya sudah lewat jauh, jadi yang berguna level HARI INI.
+    assert "Masuk lagi:" in hasil
+    assert "pullback Rp745 (SL Rp690)" in hasil
+    assert "deep Rp700 (SL Rp650)" in hasil
 
 
 def test_kode_emiten_membalas_rencana_trading_lengkap(client, wa_bersih, monkeypatch):
