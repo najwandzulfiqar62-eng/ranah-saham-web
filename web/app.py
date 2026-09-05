@@ -3659,7 +3659,7 @@ async def signals():
     return _py(report)
 
 
-async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
+async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = False) -> None:
     """Tempel "sejak sinyal muncul" ke tiap sinyal: puncak tertinggi yang
     pernah dicapai dan posisi harga sekarang.
 
@@ -3683,6 +3683,13 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
 
     kunci = "sinyal_puncak:v3"
     tersimpan = _cache_get(kunci)
+    if tersimpan is None and not boleh_fetch:
+        # Disiplin repo ini (scaling #1): permintaan USER tidak boleh memicu
+        # fetch Yahoo dingin. Riwayat ~200 kode itu mahal, jadi saat cache
+        # dingin laporan tetap dikirim -- tanpa kolom puncak/masuk-lagi --
+        # dan _cache_warmer_loop yang mengisinya di latar. Lebih baik satu
+        # kolom belum tampil daripada seluruh halaman Audit menggantung.
+        return
     if tersimpan is None:
         from core.trading_plan import calculate_advanced_plan_from_df
 
@@ -3971,6 +3978,17 @@ async def _warm_shared_caches():
             await _single_flight(key, lambda s=scope, k=key: _build_universe(s, k))
         except Exception as e:
             print(f"⚠️ cache-warmer universe:{scope}: {type(e).__name__}: {e}")
+
+    # Riwayat "sejak sinyal muncul" (puncak + level masuk lagi): ~200 kode,
+    # jadi HANYA dihangatkan di sini. Permintaan user memakai hasil cache-nya
+    # saja dan melewati kolom itu kalau belum hangat -- lihat
+    # _tempel_puncak_sejak_sinyal(boleh_fetch=...).
+    try:
+        from core.signal_history import get_signal_report
+        laporan = await asyncio.to_thread(get_signal_report)
+        await _tempel_puncak_sejak_sinyal(laporan.get("signals", []), boleh_fetch=True)
+    except Exception as e:
+        print(f"⚠️ cache-warmer puncak-sinyal: {type(e).__name__}: {e}")
 
 
 async def _cache_warmer_loop():

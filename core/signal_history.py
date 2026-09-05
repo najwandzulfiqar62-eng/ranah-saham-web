@@ -2014,8 +2014,15 @@ def get_signal_report() -> dict:
     terpisah, bukan tercampur jadi satu angka."""
     _ensure_table()
     with get_db() as conn:
+        # DULU dibatasi 200 baris terbaru. Ditemukan nyata di produksi:
+        # tabelnya sudah 481 baris, jadi 281 sinyal (58%) TIDAK PERNAH tampil
+        # -- dan yang lebih berbahaya, win rate & seluruh statistik ikut
+        # dihitung hanya dari 200 itu, sehingga track record lama pelan-pelan
+        # menghilang dari perhitungan tanpa ada yang memberitahu. Laporan
+        # yang mengaku "riwayat sinyal" tidak boleh diam-diam memotong
+        # sebagian besar riwayatnya sendiri.
         rows = conn.execute(
-            "SELECT * FROM signal_history ORDER BY recorded_at DESC LIMIT 200"
+            "SELECT * FROM signal_history ORDER BY recorded_at DESC"
         ).fetchall()
 
     signals = [dict(r) for r in rows]

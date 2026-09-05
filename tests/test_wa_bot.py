@@ -588,3 +588,36 @@ def test_jeda_menahan_banjir_balasan_dari_satu_nomor(client, wa_bersih):
     # Permintaan beruntun dari nomor yang sama didiamkan -- grup tidak banjir
     # dan pola kirimnya tidak terlihat seperti mesin.
     assert _kirim(client, "bantuan").json()["reply"] is None
+
+
+def test_puncak_tidak_pernah_memicu_unduhan_dari_permintaan_user(monkeypatch):
+    """Disiplin repo (scaling #1): permintaan USER tidak boleh memicu fetch
+    Yahoo dingin. Riwayat ~200 kode itu mahal, jadi saat cache dingin
+    laporan tetap dikirim tanpa kolom puncak -- yang mengisi cache adalah
+    _cache_warmer_loop (boleh_fetch=True), bukan pengunjung halaman."""
+    import asyncio
+
+    import web.app as app_module
+
+    ditembak = []
+
+    async def _jangan_diunduh(*a, **k):
+        ditembak.append(a)
+        raise AssertionError("permintaan user memicu unduhan Yahoo")
+
+    monkeypatch.setattr(app_module, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "async_download_many", _jangan_diunduh)
+
+    sinyal = [{"kode": "ERAA", "entry_price": 358.0, "status": "OPEN",
+               "recorded_at": "2026-07-04 17:15:35"}]
+    asyncio.run(app_module._tempel_puncak_sejak_sinyal(sinyal))
+
+    assert ditembak == [], "permintaan user tidak boleh menembak Yahoo"
+    assert "puncak_return_pct" not in sinyal[0]
+
+    # Pemanas cache BOLEH mengunduh -- di situlah biayanya ditanggung.
+    # (Kegagalan unduhannya sendiri sudah ditangani fungsi ini: dicatat ke
+    # log lalu keluar, tidak merambat ke pemanggil -- jadi yang diperiksa
+    # di sini "apakah dicoba", bukan "apakah melempar".)
+    asyncio.run(app_module._tempel_puncak_sejak_sinyal(sinyal, boleh_fetch=True))
+    assert ditembak, "pemanas cache justru tidak pernah mencoba mengunduh"
