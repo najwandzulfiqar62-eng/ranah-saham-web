@@ -84,3 +84,16 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.environ.get(
     "GOOGLE_REDIRECT_URI", "https://ranahsaham.com/api/access/google/callback"
 ).strip()
+
+# ---- Broadcast sinyal ke grup WhatsApp (sidecar wa-bot/, lihat README-nya) ----
+# WhatsApp Cloud API resmi tidak bisa kirim ke grup, jadi dipakai sidecar
+# Node.js (Baileys, otomasi WhatsApp Web) terpisah -- lihat docker-compose.yml
+# service "wa-bot". Kosong = fitur nonaktif diam-diam (send_wa_text fail-open,
+# tidak pernah membuat app utama crash).
+WA_BOT_URL = os.environ.get("WA_BOT_URL", "http://127.0.0.1:3901").rstrip("/")
+WA_BOT_SECRET = os.environ.get("WA_BOT_SECRET", "")
+# Jam kirim digest harian (WIB, format "HH:MM"), sebelum bursa buka 09:00.
+WA_DAILY_SEND_TIME = os.environ.get("WA_DAILY_SEND_TIME", "08:30")
+# Interval cek loop background (detik) -- tidak perlu presisi menit, cukup
+# cek berkala sampai jam target terlewati.
+WA_CHECK_INTERVAL_SECONDS = int(os.environ.get("WA_CHECK_INTERVAL_SECONDS", "300"))

@@ -2323,13 +2323,20 @@ def test_audit_open_signals_tp1_tp2_progress_then_tp3_closes(clean_signal_db):
     assert len(events4) == 1 and events4[0]["kind"] == "resolved" and events4[0]["status"] == "TP_HIT"
 
 
-def test_audit_open_signals_sl_still_terminal_after_tp_progress(clean_signal_db):
-    """Regresi: SL HARUS tetap final TERLEPAS dari tp_level_hit sudah
-    berapa -- user tidak minta stop-loss dipindah ke breakeven setelah
-    TP1/TP2 kena, jadi risiko awal (sl_pct dari entry) tetap berlaku
-    penuh selama posisi masih terbuka. Simulasi: TP1 kena dulu (harga
-    naik), LALU harga jatuh tembus SL awal -> harus tetap SL_HIT, dan
-    tp_level_hit HISTORIS (1) tetap tercatat, bukan direset ke 0."""
+def test_audit_open_signals_stop_pindah_ke_impas_setelah_tp1(clean_signal_db):
+    """Regresi: sesudah TP1 pernah tersentuh, stop PINDAH KE TITIK IMPAS --
+    untung mengambang tidak boleh berbalik jadi rugi penuh.
+
+    Sebelumnya stop awal berlaku penuh sampai posisi tutup, dan itu
+    SUNGGUHAN memakan 9 sinyal produksi (KIJA, AGII, PPRE, MNCN, AMRT,
+    ERAA, ANTM, ULTJ, MDKA): semuanya sempat lewat TP1 lalu tutup di
+    -3,0% s/d -4,1%, padahal _compute_stats mencatat kesembilannya
+    MENANG lewat doktrin "TP1 tercapai = menang permanen".
+
+    Simulasi: TP1 kena dulu (harga naik), LALU harga jatuh. Turun ke 980
+    (di atas SL awal 970, di bawah entry) sudah harus menutup posisi di
+    titik impas, BUKAN dibiarkan lanjut sampai 970. tp_level_hit historis
+    tetap tercatat, bukan direset ke 0."""
     import asyncio
 
     from core.database import get_db
@@ -2337,7 +2344,7 @@ def test_audit_open_signals_sl_still_terminal_after_tp_progress(clean_signal_db)
 
     _ensure_table()
     with get_db() as conn:
-        # entry=1000, tp1=5% (1050), sl=3% (970)
+        # entry=1000, tp1=5% (1050), sl awal=3% (970)
         conn.execute('''
             INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct)
             VALUES ('ZZTPTHENSL', 1000, 5, 10, 15, 3)
@@ -2355,14 +2362,178 @@ def test_audit_open_signals_sl_still_terminal_after_tp_progress(clean_signal_db)
         mid = conn.execute("SELECT status, tp_level_hit FROM signal_history WHERE kode='ZZTPTHENSL'").fetchone()
     assert mid["status"] == "OPEN" and mid["tp_level_hit"] == 1
 
-    asyncio.run(_audit_at(960.0))  # lalu jatuh tembus SL
+    # 980: MASIH DI ATAS sl awal (970) -- di bawah perilaku lama ini
+    # dibiarkan tetap OPEN dan baru tutup -3% di 970. Sekarang stop impas
+    # sudah berlaku, jadi posisi tutup di sini tanpa rugi.
+    events = asyncio.run(_audit_at(980.0))
     with get_db() as conn:
         final = conn.execute(
-            "SELECT status, tp_level_hit, return_pct FROM signal_history WHERE kode='ZZTPTHENSL'"
+            "SELECT status, tp_level_hit, return_pct, resolved_price "
+            "FROM signal_history WHERE kode='ZZTPTHENSL'"
         ).fetchone()
-    assert final["status"] == "SL_HIT", "SL harus tetap final walau TP1 sudah pernah tercapai"
-    assert final["return_pct"] == -3
-    assert final["tp_level_hit"] == 1, "tp_level_hit historis (TP1 pernah tercapai) tidak boleh direset ke 0"
+    assert final["status"] == "SL_HIT", "stop impas tetap status penutup SL_HIT"
+    assert final["return_pct"] == -2.0, (
+        "return memakai harga TERAMATI: 980 dari entry 1000 = -2%, "
+        "bukan dipaksa 0,00 dan bukan -3% (sl awal)")
+    assert final["resolved_price"] == 980.0
+    assert final["tp_level_hit"] == 1, "tp_level_hit historis tidak boleh direset ke 0"
+    assert len(events) == 1 and events[0]["stop_terkunci"] == 1, (
+        "kejadian harus ditandai stop tangga ke-1 (impas) supaya antarmuka "
+        "tidak menyebutnya kena batas rugi biasa")
+
+
+def test_audit_open_signals_stop_impas_tepat_di_entry(clean_signal_db):
+    """Kasus normal stop impas: harga kembali PERSIS ke entry -> tutup 0%.
+
+    Inilah yang membuat doktrin "TP1 tercapai = menang permanen" pada
+    _compute_stats jujur: kemungkinan terburuk sesudah TP1 adalah impas,
+    bukan rugi penuh."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct)
+            VALUES ('ZZIMPAS', 2000, 4, 8, 12, 5)
+        ''')
+
+    from datetime import date
+
+    async def _audit_at(price):
+        async def fake_lookup(kode):
+            return price, date.today()
+        return await audit_open_signals(fake_lookup)
+
+    asyncio.run(_audit_at(2100.0))   # TP1 (4% = 2080) tercapai
+    asyncio.run(_audit_at(2000.0))   # balik persis ke entry
+    with get_db() as conn:
+        final = conn.execute(
+            "SELECT status, return_pct FROM signal_history WHERE kode='ZZIMPAS'"
+        ).fetchone()
+    assert final["status"] == "SL_HIT"
+    assert final["return_pct"] == 0.0, "kembali ke entry sesudah TP1 = impas, bukan rugi"
+
+
+def test_audit_open_signals_stop_naik_ke_tp1_setelah_tp2(clean_signal_db):
+    """Tangga stop tingkat kedua: sesudah TP2 tersentuh, stop naik ke level
+    TP1 sehingga untungnya ikut terkunci bertahap.
+
+    Ini yang membedakan tangga stop dari stop impas biasa: posisi yang
+    sudah sampai TP2 lalu berbalik TIDAK pulang dengan tangan kosong,
+    tetapi keluar membawa +tp_pct. Penutupannya berstatus SL_HIT dengan
+    return POSITIF -- antarmuka wajib membacanya lewat return_pct, bukan
+    lewat status mentahnya."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        # entry=1000, tp1=4% (1040), tp2=8% (1080), tp3=12% (1120), sl=3%
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct)
+            VALUES ('ZZTANGGA', 1000, 4, 8, 12, 3)
+        ''')
+
+    from datetime import date
+
+    async def _audit_at(price):
+        async def fake_lookup(kode):
+            return price, date.today()
+        return await audit_open_signals(fake_lookup)
+
+    asyncio.run(_audit_at(1045.0))   # TP1 tersentuh
+    asyncio.run(_audit_at(1085.0))   # TP2 tersentuh
+    with get_db() as conn:
+        mid = conn.execute(
+            "SELECT status, tp_level_hit FROM signal_history WHERE kode='ZZTANGGA'").fetchone()
+    assert mid["status"] == "OPEN" and mid["tp_level_hit"] == 2
+
+    # 1040 = level TP1. Di bawah stop impas saja posisi ini masih OPEN
+    # (1040 > entry 1000); dgn tangga stop, posisi tutup di sini MEMBAWA
+    # UNTUNG +4%.
+    events = asyncio.run(_audit_at(1040.0))
+    with get_db() as conn:
+        final = conn.execute(
+            "SELECT status, tp_level_hit, return_pct FROM signal_history "
+            "WHERE kode='ZZTANGGA'").fetchone()
+    assert final["status"] == "SL_HIT"
+    assert final["return_pct"] == 4.0, "tutup di level TP1 = +4%, bukan impas dan bukan rugi"
+    assert final["tp_level_hit"] == 2
+    assert len(events) == 1 and events[0]["stop_terkunci"] == 2
+
+
+def test_locked_return_tidak_melebihi_hasil_nyata_stop_tangga(clean_signal_db):
+    """`_locked_return` TIDAK BOLEH mengklaim level TP2 untuk posisi yang
+    keluar di level TP1 lewat tangga stop.
+
+    Sebelum tangga stop ada, untung tidak pernah benar-benar diambil,
+    sehingga metrik "terkunci" memakai level tertinggi yang tersentuh.
+    Sekarang posisi SUNGGUHAN keluar di level stopnya, jadi return_pct
+    yang otoritatif -- kalau tidak, +4% yang nyata dilaporkan +8%."""
+    from core.signal_history import _compute_stats
+
+    keluar_di_tp1 = {
+        "status": "SL_HIT", "tp_level_hit": 2, "return_pct": 4.0,
+        "tp_pct": 4.0, "tp2_pct": 8.0, "days_to_resolve": 5,
+    }
+    stats = _compute_stats([keluar_di_tp1])
+    assert stats["avg_return_locked_pct"] == 4.0, (
+        "harus memakai hasil nyata (+4%), bukan level TP2 (+8%) yang "
+        "tersentuh tapi tidak jadi titik keluar")
+
+    # Baris LAMA (ditutup sebelum tangga stop ada, return_pct negatif)
+    # tetap memakai konvensi level tertinggi -- angka historis yang sudah
+    # dilaporkan tidak boleh berubah diam-diam.
+    lama = {
+        "status": "SL_HIT", "tp_level_hit": 1, "return_pct": -3.0,
+        "tp_pct": 4.0, "tp2_pct": 8.0, "days_to_resolve": 6,
+    }
+    stats_lama = _compute_stats([lama])
+    assert stats_lama["avg_return_locked_pct"] == 4.0
+
+
+def test_audit_open_signals_stop_awal_tetap_berlaku_sebelum_tp1(clean_signal_db):
+    """Penyeimbang: sebelum TP1 pernah tersentuh, stop AWAL tetap berlaku
+    penuh. Stop impas TIDAK BOLEH berlaku dini -- kalau iya, seluruh
+    sinyal akan tertutup impas begitu harga sedikit di bawah entry dan
+    rencananya kehilangan makna."""
+    import asyncio
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct)
+            VALUES ('ZZBELUMTP1', 1000, 5, 10, 15, 3)
+        ''')
+
+    from datetime import date
+
+    async def _audit_at(price):
+        async def fake_lookup(kode):
+            return price, date.today()
+        return await audit_open_signals(fake_lookup)
+
+    events = asyncio.run(_audit_at(985.0))  # di bawah entry, di atas sl awal
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status FROM signal_history WHERE kode='ZZBELUMTP1'").fetchone()
+    assert row["status"] == "OPEN" and not events, (
+        "tanpa TP1, harga di bawah entry belum menutup apa pun")
+
+    asyncio.run(_audit_at(960.0))  # tembus sl awal
+    with get_db() as conn:
+        final = conn.execute(
+            "SELECT status, return_pct FROM signal_history WHERE kode='ZZBELUMTP1'"
+        ).fetchone()
+    assert final["status"] == "SL_HIT" and final["return_pct"] == -3
 
 
 def test_audit_open_signals_resolves_tp_sl_expired(clean_signal_db):
@@ -2633,6 +2804,229 @@ def test_audit_open_signals_still_expires_with_permanently_stale_price(clean_sig
     assert row["status"] == "EXPIRED", "harus tetap expire walau harganya basi -- jangan tersangkut OPEN selamanya"
     assert row["return_pct"] == 1.0  # (1010/1000 - 1) * 100
     assert len(events) == 1 and events[0]["status"] == "EXPIRED"
+
+
+def test_audit_open_signals_pemenang_tp1_tidak_dikadaluarsakan(clean_signal_db):
+    """Regresi: batas MAX_HOLD_DAYS TIDAK BOLEH menutup posisi yang sudah
+    menyentuh TP.
+
+    Dilaporkan user sambil menunjuk ELSA/AMMN/ICBP/MIKA/JPFA di Audit
+    Sinyal ("kalo lagi jalan jgn kadaluarsa harusnya udah pda full tp"):
+    17 dari 20 baris EXPIRED di produksi ternyata posisi UNTUNG yang sudah
+    lewat TP1 (rata-rata +3,6%) atau TP2 (rata-rata +8,5%), tapi tertulis
+    "Kadaluarsa" -- sebutan yang membacanya seperti gagal.
+
+    Sesudah TP1 tersentuh, tangga stop naik ke titik impas sehingga posisi
+    tidak bisa lagi tutup rugi. Menutupnya karena kalender hanya membuang
+    peluang TP3 tanpa menghindari risiko apa pun. Batas waktu itu HANYA
+    untuk posisi yang stopnya masih stop awal."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        # entry=1000, tp1=5% (1050), tp2=10% (1100), tp3=15% (1150), sl=3%
+        # tp_level_hit=1: TP1 SUDAH tersentuh, stop kini di titik impas.
+        conn.execute(
+            "INSERT INTO signal_history "
+            "(kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, recorded_at) "
+            "VALUES ('ZZTUATP1', 1000, 5, 10, 15, 3, 1, datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 3} days',),
+        )
+        # Pembanding: umur SAMA persis tapi belum pernah kena TP -- ini yang
+        # memang harus kadaluarsa (jangan sampai perbaikan di atas kebablasan
+        # dan membuat semua sinyal hidup selamanya).
+        conn.execute(
+            "INSERT INTO signal_history "
+            "(kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, recorded_at) "
+            "VALUES ('ZZTUATANPATP', 1000, 5, 10, 15, 3, 0, datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 3} days',),
+        )
+
+    async def fake_lookup(kode):
+        return 1020.0, date.today()  # untung tipis: di atas impas, di bawah TP1
+
+    events = asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        menang = conn.execute(
+            "SELECT status, tp_level_hit FROM signal_history WHERE kode='ZZTUATP1'").fetchone()
+        polos = conn.execute(
+            "SELECT status, return_pct FROM signal_history WHERE kode='ZZTUATANPATP'").fetchone()
+
+    assert menang["status"] == "OPEN", "pemenang TP1 harus dibiarkan berjalan, bukan dikadaluarsakan"
+    assert menang["tp_level_hit"] == 1
+    assert polos["status"] == "EXPIRED", "yang belum kena TP sama sekali TETAP harus kadaluarsa"
+    assert polos["return_pct"] == 2.0
+    assert [e["kode"] for e in events] == ["ZZTUATANPATP"]
+
+
+def test_audit_open_signals_pemenang_yang_dibiarkan_jalan_bisa_sampai_tp3(clean_signal_db):
+    """Lanjutan uji di atas: gunanya membiarkan pemenang berjalan adalah
+    supaya posisi masih bisa mencapai TP3. Sinyal yang umurnya jauh lewat
+    MAX_HOLD_DAYS harus tetap bisa TP_HIT penuh saat harganya sampai."""
+    import asyncio
+    from datetime import date
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history "
+            "(kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, recorded_at) "
+            "VALUES ('ZZTUASAMPAI3', 1000, 5, 10, 15, 3, 2, datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 10} days',),
+        )
+
+    async def fake_lookup(kode):
+        return 1160.0, date.today()  # tembus TP3 (1150)
+
+    asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, tp_level_hit, return_pct FROM signal_history WHERE kode='ZZTUASAMPAI3'").fetchone()
+
+    assert row["status"] == "TP_HIT"
+    assert row["tp_level_hit"] == 3
+    assert row["return_pct"] == 15.0
+
+
+def test_audit_open_signals_pemenang_harga_basi_ditutup_sebagai_menang(clean_signal_db):
+    """Satu-satunya pengecualian aturan "pemenang dibiarkan jalan": kalau
+    harganya BASI (feed macet -- suspensi/delisting), tangga stop tidak bisa
+    dikelola sama sekali, jadi posisi tetap harus ditutup pada MAX_HOLD_DAYS.
+    Kalau tidak, saham bermasalah menyangkut OPEN selamanya -- persis bug
+    yang dicegah test_audit_open_signals_still_expires_with_permanently_
+    stale_price.
+
+    Statusnya tetap jujur: sudah kena TP berarti ditutup sbg MENANG, bukan
+    "kadaluarsa". tp_level_hit memakai level TERSIMPAN, bukan yang dihitung
+    dari harga basi itu."""
+    import asyncio
+    from datetime import date, timedelta
+
+    from core.database import get_db
+    from core.signal_history import _ensure_table, audit_open_signals, MAX_HOLD_DAYS
+
+    _ensure_table()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO signal_history "
+            "(kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, recorded_at) "
+            "VALUES ('ZZTUABASI', 1000, 5, 10, 15, 3, 2, datetime('now', ?))",
+            (f'-{MAX_HOLD_DAYS + 1} days',),
+        )
+
+    stale_date = date.today() - timedelta(days=MAX_HOLD_DAYS + 5)
+
+    async def fake_lookup(kode):
+        # 1160 sebenarnya sudah di atas TP3, tapi harganya basi -- level
+        # TIDAK boleh diklaim dari sini.
+        return 1160.0, stale_date
+
+    events = asyncio.run(audit_open_signals(fake_lookup))
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, tp_level_hit, return_pct FROM signal_history WHERE kode='ZZTUABASI'").fetchone()
+
+    assert row["status"] == "TP_HIT", "sudah kena TP -- ditutup sbg menang, bukan kadaluarsa"
+    assert row["tp_level_hit"] == 2, "level tersimpan, JANGAN naik ke 3 dari harga basi"
+    assert row["return_pct"] == 16.0  # (1160/1000 - 1) * 100, harga teramati apa adanya
+    assert len(events) == 1 and events[0]["status"] == "TP_HIT"
+
+
+def test_migrasi_pemenang_lama_berstatus_kadaluarsa_diperbaiki(clean_signal_db):
+    """Migrasi ke-19: baris lama yang terlanjur EXPIRED padahal tp_level_hit
+    >= 1 diperbaiki jadi TP_HIT. Angka realisasinya (return_pct,
+    resolved_price, days_to_resolve) DIBIARKAN APA ADANYA -- yang keliru
+    cuma sebutannya, hasilnya sungguh terjadi di pasar.
+
+    Baris EXPIRED yang memang tidak pernah kena TP TIDAK boleh ikut
+    berubah."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, status,
+                 recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZMIG19MENANG', 647, 4.1, 8.2, 12.3, 4.1, 2, 'EXPIRED',
+                    '2026-07-16 09:00:00', '2026-08-05 09:00:00', 690, 6.65, 20)
+        ''')
+        conn.execute('''
+            INSERT INTO signal_history
+                (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, status,
+                 recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+            VALUES ('ZZMIG19POLOS', 1000, 5, 10, 15, 3, 0, 'EXPIRED',
+                    '2026-07-16 09:00:00', '2026-08-05 09:00:00', 980, -2.0, 20)
+        ''')
+
+    sh._ensured = False
+    sh._ensure_table()
+
+    with get_db() as conn:
+        menang = conn.execute(
+            "SELECT status, tp_level_hit, return_pct, resolved_price, days_to_resolve "
+            "FROM signal_history WHERE kode='ZZMIG19MENANG'").fetchone()
+        polos = conn.execute(
+            "SELECT status, return_pct FROM signal_history WHERE kode='ZZMIG19POLOS'").fetchone()
+
+    assert menang["status"] == "TP_HIT"
+    assert menang["tp_level_hit"] == 2
+    assert menang["return_pct"] == 6.65, "hasil realisasi jangan diubah -- itu benar-benar terjadi"
+    assert menang["resolved_price"] == 690
+    assert menang["days_to_resolve"] == 20
+    assert polos["status"] == "EXPIRED", "yang tak pernah kena TP tetap kadaluarsa"
+
+
+def test_win_rate_tidak_bergeser_oleh_migrasi_pemenang_kadaluarsa(clean_signal_db):
+    """Penjaga: migrasi ke-19 mengubah SEBUTAN, bukan hasil. _compute_stats
+    sedari awal menghitung menang dari tp_level_hit >= 1 (bukan dari
+    status), jadi win rate sebelum dan sesudah migrasi harus SAMA PERSIS --
+    kalau berubah, berarti ada jalur statistik yang diam-diam bersandar
+    pada status dan angka yang sudah dilaporkan jadi tidak bisa dipercaya."""
+    from core.database import get_db
+    import core.signal_history as sh
+
+    baris = [
+        ('ZZWR1', 2, 'EXPIRED', 6.65),    # pemenang yang salah label
+        ('ZZWR2', 1, 'EXPIRED', 3.60),    # pemenang yang salah label
+        ('ZZWR3', 0, 'EXPIRED', -2.00),   # kadaluarsa sungguhan
+        ('ZZWR4', 0, 'SL_HIT', -3.00),    # kalah
+        ('ZZWR5', 3, 'TP_HIT', 15.00),    # menang tuntas
+    ]
+    with get_db() as conn:
+        for kode, lvl, status, ret in baris:
+            conn.execute('''
+                INSERT INTO signal_history
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct, tp_level_hit, status,
+                     recorded_at, resolved_at, resolved_price, return_pct, days_to_resolve)
+                VALUES (?, 1000, 5, 10, 15, 3, ?, ?, '2026-07-16 09:00:00',
+                        '2026-08-05 09:00:00', 1000, ?, 20)
+            ''', (kode, lvl, status, ret))
+        rows = [dict(r) for r in conn.execute("SELECT * FROM signal_history")]
+
+    sebelum = sh._compute_stats(rows)
+
+    sh._ensured = False
+    sh._ensure_table()
+    with get_db() as conn:
+        rows2 = [dict(r) for r in conn.execute("SELECT * FROM signal_history")]
+    sesudah = sh._compute_stats(rows2)
+
+    assert {r["kode"] for r in rows2 if r["status"] == "TP_HIT"} == {'ZZWR1', 'ZZWR2', 'ZZWR5'}
+    assert sebelum["win_rate"] == sesudah["win_rate"] == 75.0  # 3 menang : 1 kalah
+    assert sebelum["avg_return_pct"] == sesudah["avg_return_pct"]
+    # n_expired justru HARUS turun -- itu memang inti perbaikannya.
+    assert sebelum["n_expired"] == 3 and sesudah["n_expired"] == 1
 
 
 def test_get_signal_report_tp_sl_price_bidirectional(clean_signal_db):

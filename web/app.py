@@ -98,7 +98,8 @@ from core.relative_strength import calculate_relative_strength
 from core.volume_patterns import calculate_ad_line
 from core.charts.snr_chart import calculate_snr_levels
 from core.config import (SAHAM_XLSX_PATH, YF_FETCH_TIMEOUT_SECONDS, ACCESS_COOKIE_SECURE,
-                         GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)
+                         GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI,
+                         WA_BOT_URL, WA_BOT_SECRET, WA_DAILY_SEND_TIME, WA_CHECK_INTERVAL_SECONDS)
 from core.access import (
     SESSION_DAYS, admin_is_configured, authenticate, ensure_access_tables,
     ensure_bootstrap_admin, get_session_user, list_users, register_user,
@@ -304,6 +305,7 @@ async def _lifespan(_app: "FastAPI"):
         asyncio.create_task(_signal_auto_loop()),
         asyncio.create_task(_forum_push_loop()),
         asyncio.create_task(_cache_warmer_loop()),
+        asyncio.create_task(_wa_broadcast_loop()),
     ]
     yield
     for t in tasks:
@@ -5912,6 +5914,151 @@ async def api_insider(hari: int = 0):
     })
     _cache_set(cache_key, payload, ttl=_CACHE_TTL if hari == 0 else _CACHE_TTL_HISTORICAL)
     return payload
+
+
+# =========================
+# BROADCAST SINYAL KE GRUP WHATSAPP (sidecar wa-bot/, lihat README-nya)
+# =========================
+# Digunakan baik oleh loop otomatis harian (_wa_broadcast_loop) maupun tombol
+# "Kirim Sekarang" admin (/api/admin/whatsapp/send-now) -- SATU fungsi builder
+# supaya isi digest selalu konsisten dari sumber logic yang sama. Transport
+# (kirim HTTP ke wa-bot, simpan cursor) ada di core/whatsapp_notify.py;
+# helper X-15 (_fetch_x15_today, _split_x15_items) reuse yang sudah dipakai
+# /api/x15, TIDAK ada logic baru yang menduplikasi itu.
+async def _build_wa_digest_text() -> tuple[str, int]:
+    """Return (teks siap kirim, latest_id sinyal saat ini). Pemanggil
+    (_send_wa_digest_now) yang bertanggung jawab memajukan cursor -- HANYA
+    setelah kirim WA benar2 berhasil, supaya sinyal tidak pernah 'hilang'
+    dari digest berikutnya kalau pengiriman kali ini gagal."""
+    from datetime import datetime as _dt
+    from core.signal_history import get_signal_notifications
+    from core.whatsapp_notify import get_last_signal_id
+
+    tgl_str = _dt.now(_WIB).strftime("%d %b %Y")
+    lines = [f"*Ranah Saham — Ringkasan {tgl_str}*", ""]
+
+    cursor = get_last_signal_id()
+    notif = get_signal_notifications(since_id=cursor or 0)
+    if cursor is None:
+        # Pertama kali fitur ini aktif -- jangan tumpahkan seluruh histori,
+        # cukup catat baseline (semantik sama dgn bel notifikasi in-app).
+        lines.append("_Sinyal baru: mulai dilacak dari sekarang._")
+    elif notif["items"]:
+        lines.append("*Sinyal baru:*")
+        for it in reversed(notif["items"]):  # kronologis, bukan DESC by id
+            entry = f", entry {it['entry_price']:.0f}" if it.get("entry_price") is not None else ""
+            tp = f", TP {it['tp_pct']:.1f}%" if it.get("tp_pct") is not None else ""
+            lines.append(f"• {it['kode']} ({it['source']}/{it['direction']}) — {it['status']}{entry}{tp}")
+    else:
+        lines.append("_Tidak ada sinyal baru sejak ringkasan terakhir._")
+    lines.append("")
+
+    try:
+        raw_items = await _fetch_x15_today(days_back=0)
+        items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+        akumulasi, distribusi, _ = _split_x15_items(items)
+        lines.append("*Kepemilikan ≥5% (X-15) hari ini:*")
+        if not akumulasi and not distribusi:
+            lines.append("_Tidak ada filing akumulasi/distribusi ≥5% hari ini._")
+        for it in akumulasi[:10]:
+            nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
+            lines.append(f"• {it['kode']} — {nama} naik {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% (+{it['perubahan']:.2f}%)")
+        for it in distribusi[:10]:
+            nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
+            lines.append(f"• {it['kode']} — {nama} turun {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% ({it['perubahan']:.2f}%)")
+    except X15FetchError as e:
+        lines.append(f"_Data kepemilikan ≥5% tidak terjangkau hari ini ({e})._")
+    except Exception as e:
+        lines.append("_Gagal memuat data kepemilikan ≥5% hari ini._")
+        print(f"⚠️ wa-digest: gagal X-15: {type(e).__name__}: {e}")
+
+    lines.append("")
+    lines.append("_Otomatis dari Ranah Saham. Bukan ajakan membeli/menjual._")
+    return "\n".join(lines), notif["latest_id"]
+
+
+async def _send_wa_digest_now() -> bool:
+    """Bangun digest lalu kirim -- cursor sinyal HANYA dimajukan kalau kirim
+    berhasil (lihat catatan di _build_wa_digest_text)."""
+    from core.whatsapp_notify import send_wa_text, set_last_signal_id
+
+    text, latest_id = await _build_wa_digest_text()
+    ok = await send_wa_text(text)
+    if ok:
+        set_last_signal_id(latest_id)
+    return ok
+
+
+async def _wa_broadcast_loop():
+    """Loop background: tiap WA_CHECK_INTERVAL_SECONDS, kirim digest harian
+    SEKALI saja per hari kalender WIB, begitu jam sekarang sudah melewati
+    WA_DAILY_SEND_TIME. Guard 'sudah kirim hari ini?' disimpan di app_config
+    (core/whatsapp_notify.get_last_daily_sent_date) -- proses ini SATU-
+    SATUNYA proses (Dockerfile jalan tanpa --workers), jadi tidak perlu
+    distributed lock, cukup guard sederhana ini (pola sama _cache_warmer_loop
+    dkk di _lifespan)."""
+    from datetime import datetime as _dt
+    from core.whatsapp_notify import get_last_daily_sent_date, set_last_daily_sent_date
+
+    while True:
+        try:
+            now = _dt.now(_WIB)
+            today_str = now.strftime("%Y-%m-%d")
+            if now.strftime("%H:%M") >= WA_DAILY_SEND_TIME and get_last_daily_sent_date() != today_str:
+                if await _send_wa_digest_now():
+                    set_last_daily_sent_date(today_str)
+        except Exception as e:
+            print(f"⚠️ wa-broadcast-loop: {type(e).__name__}: {e}")
+        await asyncio.sleep(WA_CHECK_INTERVAL_SECONDS)
+
+
+@app.get("/api/admin/whatsapp/status")
+async def api_admin_whatsapp_status(request: Request):
+    _require_admin(request)
+    from core.whatsapp_notify import get_last_daily_sent_date
+    status = {"configured": bool(WA_BOT_URL and WA_BOT_SECRET), "last_daily_sent_date": get_last_daily_sent_date()}
+    if status["configured"]:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                res = await client.get(f"{WA_BOT_URL}/status", headers={"Authorization": f"Bearer {WA_BOT_SECRET}"})
+                res.raise_for_status()
+                status["wa_bot"] = res.json()
+        except Exception as e:
+            status["wa_bot"] = {"error": f"{type(e).__name__}: {e}"}
+    return status
+
+
+@app.post("/api/admin/whatsapp/send-now")
+async def api_admin_whatsapp_send_now(request: Request):
+    _require_admin(request)
+    ok = await _send_wa_digest_now()
+    if not ok:
+        raise HTTPException(502, "Gagal mengirim ke WhatsApp -- cek status wa-bot (belum di-pairing/tidak terhubung?).")
+    return {"ok": True}
+
+
+@app.get("/api/admin/whatsapp/qr")
+async def api_admin_whatsapp_qr(request: Request):
+    _require_admin(request)
+    if not (WA_BOT_URL and WA_BOT_SECRET):
+        raise HTTPException(400, "WA_BOT_URL/WA_BOT_SECRET belum diisi.")
+    async with httpx.AsyncClient(timeout=10) as client:
+        res = await client.get(f"{WA_BOT_URL}/qr", headers={"Authorization": f"Bearer {WA_BOT_SECRET}"})
+    if res.status_code != 200:
+        raise HTTPException(res.status_code, res.json().get("error", "QR tidak tersedia.") if res.headers.get("content-type", "").startswith("application/json") else "QR tidak tersedia.")
+    return Response(content=res.content, media_type="image/png")
+
+
+@app.get("/api/admin/whatsapp/groups")
+async def api_admin_whatsapp_groups(request: Request):
+    _require_admin(request)
+    if not (WA_BOT_URL and WA_BOT_SECRET):
+        raise HTTPException(400, "WA_BOT_URL/WA_BOT_SECRET belum diisi.")
+    async with httpx.AsyncClient(timeout=15) as client:
+        res = await client.get(f"{WA_BOT_URL}/groups", headers={"Authorization": f"Bearer {WA_BOT_SECRET}"})
+    if res.status_code != 200:
+        raise HTTPException(502, f"Gagal mengambil daftar grup dari wa-bot ({res.status_code}).")
+    return res.json()
 
 
 @app.get("/api/holders/{kode}")

@@ -1685,11 +1685,28 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
     if(isAdmin){
       const card=panel.querySelector('.access-admin-card'),form=panel.querySelector('#profileForm'),content=panel.querySelector('#accessAdminContent');
       card.querySelector('h2').textContent='Panel Admin';
-      const tabs=document.createElement('div');tabs.className='access-admin-tabs';tabs.innerHTML='<button class="active" type="button" data-admin-tab="access">Manajemen akses</button><button type="button" data-admin-tab="profile">Profil saya</button>';
+      const tabs=document.createElement('div');tabs.className='access-admin-tabs';tabs.innerHTML='<button class="active" type="button" data-admin-tab="access">Manajemen akses</button><button type="button" data-admin-tab="whatsapp">Grup WhatsApp</button><button type="button" data-admin-tab="profile">Profil saya</button>';
       const profileSection=document.createElement('div');profileSection.id='accessProfileSection';profileSection.className='access-admin-section';profileSection.hidden=true;profileSection.innerHTML='<h3 class="access-admin-section-title">Profil saya</h3>';
       const accessSection=document.createElement('div');accessSection.id='accessAdminSection';accessSection.className='access-admin-section';accessSection.innerHTML='<h3 class="access-admin-section-title">Persetujuan &amp; riwayat</h3>';
-      card.querySelector('.access-admin-head').after(tabs);tabs.after(accessSection);accessSection.append(content);accessSection.after(profileSection);profileSection.append(form);
-      tabs.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.onclick=()=>{const profile=btn.dataset.adminTab==='profile';profileSection.hidden=!profile;accessSection.hidden=profile;tabs.querySelectorAll('[data-admin-tab]').forEach(item=>item.classList.toggle('active',item===btn))});
+      const waSection=document.createElement('div');waSection.id='accessWaSection';waSection.className='access-admin-section';waSection.hidden=true;waSection.innerHTML='<h3 class="access-admin-section-title">Broadcast sinyal ke grup WhatsApp</h3><div id="waStatusBox" style="font-size:13px;color:var(--muted);margin:0 0 10px">Memuat status...</div><button class="access-submit" id="waSendNowBtn" type="button">Kirim sinyal ke grup sekarang</button><p id="waSendMsg" style="font-size:12px;margin-top:8px"></p>';
+      card.querySelector('.access-admin-head').after(tabs);tabs.after(accessSection);accessSection.append(content);accessSection.after(waSection);waSection.after(profileSection);profileSection.append(form);
+      tabs.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.onclick=()=>{const which=btn.dataset.adminTab;profileSection.hidden=which!=='profile';accessSection.hidden=which!=='access';waSection.hidden=which!=='whatsapp';if(which==='whatsapp')loadWaStatus();tabs.querySelectorAll('[data-admin-tab]').forEach(item=>item.classList.toggle('active',item===btn))});
+      async function loadWaStatus(){
+        const box=waSection.querySelector('#waStatusBox');
+        try{
+          const d=await fetch('/api/admin/whatsapp/status',{credentials:'same-origin'}).then(async r=>{const j=await r.json();if(!r.ok)throw new Error(j.detail||'Gagal memuat status.');return j});
+          if(!d.configured){box.textContent='Belum dikonfigurasi (WA_BOT_URL/WA_BOT_SECRET kosong di server).';return}
+          const bot=d.wa_bot||{};
+          box.innerHTML=(bot.error?'<span style="color:#e5484d">wa-bot tidak terjangkau: '+escapeHtml(bot.error)+'</span>':bot.connected?'<span style="color:#2fbf71">Terhubung ke WhatsApp.</span>':'<span style="color:#e5a84d">Belum terhubung — perlu scan QR (lihat wa-bot/README.md).</span>')+'<br>Ringkasan harian terakhir: '+(d.last_daily_sent_date||'belum pernah')+'.';
+        }catch(err){box.textContent=err.message||'Gagal memuat status.'}
+      }
+      waSection.querySelector('#waSendNowBtn').onclick=async()=>{
+        const btn=waSection.querySelector('#waSendNowBtn'),msg=waSection.querySelector('#waSendMsg');
+        btn.disabled=true;msg.textContent='Mengirim...';msg.style.color='var(--muted)';
+        try{await jsonRequest('/api/admin/whatsapp/send-now');msg.textContent='Terkirim ke grup WhatsApp.';msg.style.color='#2fbf71';loadWaStatus()}
+        catch(err){msg.textContent=err.message||'Gagal mengirim.';msg.style.color='#e5484d'}
+        finally{btn.disabled=false}
+      };
     }
     const profileForm=panel.querySelector('#profileForm'),phoneLabel=document.createElement('label');
     phoneLabel.innerHTML='Nomor HP WhatsApp <small>(dipakai juga untuk login)</small><input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="0812xxxx" value="'+escapeHtml(currentUser.phone||'')+'" required>';
@@ -4141,8 +4158,38 @@ async function loadTopPick(){
 $('#tpBtn').addEventListener('click',()=>{loaded.toppick=0;loadTopPick()});
 
 /* ---------- AUDIT SINYAL ---------- */
-function _auditStatusColor(s){return s==='TP_HIT'?'var(--bull)':s==='SL_HIT'?'var(--bear)':(s==='EXPIRED'||s==='EXPIRED_NO_ENTRY')?'var(--muted)':s==='PENDING_ENTRY'?'var(--accent)':'var(--gold)'}
-function _auditStatusLabel(s){return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan',PENDING_ENTRY:'Menunggu Entry',EXPIRED_NO_ENTRY:'Entry Tidak Tercapai'}[s]||s}
+// Tangga stop (server: audit_open_signals) bikin SL_HIT TIDAK lagi selalu
+// berarti rugi -- sesudah TP1 stop pindah ke titik impas, sesudah TP2 naik
+// lagi ke level TP1. Penutupannya tetap berstatus SL_HIT, jadi label/warna
+// WAJIB dibaca dari return_pct-nya, bukan dari status mentah: "Kena SL
+// +4,0%" itu membingungkan dan terbaca seperti cacat data.
+// Sengaja memakai return_pct (bukan tp_level_hit): baris LAMA yang ditutup
+// sebelum tangga stop ada memang rugi walau tp_level_hit>=1, dan harus
+// tetap terbaca "Kena SL" apa adanya.
+function _slHitRasa(s){
+  const r=(s&&typeof s==='object')?s.return_pct:null;
+  if(r==null)return 'loss';
+  if(r>0.005)return 'lock';      // keluar di level TP1 -- untung terkunci
+  if(r>=-0.005)return 'flat';    // keluar di titik impas
+  return 'loss';
+}
+function _auditStatusColor(s){
+  const st=(s&&typeof s==='object')?s.status:s;
+  if(st==='SL_HIT'){const k=_slHitRasa(s);return k==='lock'?'var(--bull)':k==='flat'?'var(--muted)':'var(--bear)'}
+  return st==='TP_HIT'?'var(--bull)':(st==='EXPIRED'||st==='EXPIRED_NO_ENTRY')?'var(--muted)':st==='PENDING_ENTRY'?'var(--accent)':'var(--gold)'
+}
+function _auditStatusLabel(s){
+  const st=(s&&typeof s==='object')?s.status:s;
+  if(st==='SL_HIT'){const k=_slHitRasa(s);if(k==='lock')return 'Untung Terkunci';if(k==='flat')return 'Tutup Impas'}
+  // TP_HIT kini mencakup dua hal: tuntas sampai TP3, DAN posisi yang sudah
+  // untung tapi ditutup di level TP1/TP2 (harga feed-nya macet -- lihat
+  // audit_open_signals). Keduanya menang, tapi bedanya nyata bagi pengguna,
+  // jadi levelnya disebut. Baris lama tanpa tp_level_hit (0) memakai sebutan
+  // umum -- statusnya sudah cukup membuktikan menang, levelnya saja yang
+  // tidak pernah tercatat.
+  if(st==='TP_HIT'){const lv=(s&&typeof s==='object')?(s.tp_level_hit||0):0;if(lv===1||lv===2)return `TP${lv} Tercapai`}
+  return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan',PENDING_ENTRY:'Menunggu Entry',EXPIRED_NO_ENTRY:'Entry Tidak Tercapai'}[st]||st
+}
 function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money',NR7_52W:'NR7 + 52W High'}[s]||s||'Top Pick'}
 // Badge HIGH RISK khusus sinyal NR7+52W High (teori breakout momentum: stop
 // ketat + breakout bisa palsu -- ditandai jelas atas permintaan user).
@@ -4225,11 +4272,16 @@ function _riwayatHarianBodyHtml(rh){
   };
   const winChip=(w)=>{
     const lv=w.tp_level_hit||1;
+    if(w.status==='SL_HIT'&&_slHitRasa(w)!=='loss'){
+      // Tangga stop bekerja -- keluar di titik impas atau di level TP1,
+      // return_pct-nya sudah hasil nyata (SAMA logika dgn kartu Signal
+      // Confirmed).
+      return `<span class="chip" style="color:var(--bull);border-color:var(--bull)66">${w.kode} ${w.return_pct>=0?'+':''}${fmt(w.return_pct,2)}% · TP${lv} tercapai, keluar di stop ${_slHitRasa(w)==='lock'?'level TP1':'impas'}</span>`;
+    }
     if(w.status==='SL_HIT'){
-      // Menang permanen dari TP1+ duluan, tapi akhirnya balik turun kena
-      // SL -- JANGAN tampilkan return_pct akhir yg negatif seolah itu
-      // untung, tampilkan target TP yang SUDAH tercapai (SAMA logika dgn
-      // kartu Signal Confirmed).
+      // Baris LAMA: menang permanen dari TP1+ duluan, tapi akhirnya balik
+      // turun kena stop AWAL -- JANGAN tampilkan return_pct akhir yg
+      // negatif seolah itu untung, tampilkan target TP yang SUDAH tercapai.
       const pct=_tpLevelPct(w);
       return `<span class="chip" style="color:var(--bull);border-color:var(--bull)66">${w.kode} +${fmt(pct,2)}% · sempat TP${lv}, lalu balik turun & kena SL</span>`;
     }
@@ -4342,17 +4394,28 @@ async function loadSignalAudit(){
     }else if(s.status==='TP_HIT'){
       pct=s.return_pct;
       sub=`Rp${fmt(s.entry_price)} → Rp${fmt(s.resolved_price)} · ${s.days_to_resolve} hari${s.pattern?' · '+s.pattern:''}`;
+    }else if(_slHitRasa(s)!=='loss'){
+      // Tangga stop bekerja: posisi keluar di titik impas (sesudah TP1)
+      // atau di level TP1 (sesudah TP2). return_pct-nya SUDAH hasil nyata
+      // yang direalisasikan, jadi dipakai apa adanya -- tidak perlu lagi
+      // meminjam angka level TP seperti baris lama di bawah.
+      pct=s.return_pct;
+      sub=`Rp${fmt(s.entry_price)} → Rp${fmt(s.resolved_price)} · TP${lv} tercapai, keluar di stop ${_slHitRasa(s)==='lock'?'level TP1':'impas'}`;
     }else{
-      // SL_HIT sesudah sempat TP1+ -- TETAP confirmed/menang (permanen
-      // sejak TP1 tercapai), tapi JANGAN tampilkan return_pct akhir yg
-      // negatif seolah itu untung -- tampilkan target TP yang SUDAH
+      // Baris LAMA (ditutup sebelum tangga stop ada): sempat TP1+ lalu
+      // balik turun sampai stop AWAL, jadi return_pct akhirnya negatif.
+      // Tetap confirmed/menang (permanen sejak TP1), tapi JANGAN pajang
+      // angka negatif itu seolah untung -- tampilkan level TP yang SUDAH
       // tercapai, dan tetap jujur bahwa harga akhirnya balik turun.
       pct=_tpLevelPct(s);
       sub=`Rp${fmt(s.entry_price)} → sempat TP${lv}, lalu SL`;
     }
     const isSell=s.direction==='SELL';
     const tpSign=isSell?'-':'+';
-    const tpLevelFinal=s.status==='TP_HIT'?3:(s.tp_level_hit||0);
+    // Sama alasannya dgn tabel Audit Sinyal: TP_HIT tidak lagi selalu berarti
+    // tuntas TP3, jadi tp_level_hit yang dipercaya duluan. Angka 3 tinggal
+    // cadangan utk baris lama yang levelnya tidak pernah tercatat.
+    const tpLevelFinal=(s.tp_level_hit||0)||(s.status==='TP_HIT'?3:0);
     const tpRow=(n,price,pct)=>{
       if(price==null||pct==null)return'';
       const hit=tpLevelFinal>=n;
@@ -4433,6 +4496,12 @@ async function loadSignalAudit(){
     // (kapan hasil TERJADI), bukan tanggal sinyal lahir.
     const _lockedRet=t=>{
       if(t.status==='TP_HIT'&&t.return_pct!=null)return t.return_pct;
+      // Cermin _locked_return di server: sesudah tangga stop berlaku,
+      // penutupan SL_HIT dgn TP1+ SUDAH merealisasikan untungnya sendiri,
+      // jadi JANGAN diklaim setinggi level tertinggi yang pernah
+      // tersentuh -- posisi tidak keluar di sana. Baris lama (return_pct
+      // negatif) tidak kena cabang ini, angkanya tidak ikut berubah.
+      if(t.status==='SL_HIT'&&(t.tp_level_hit||0)>=1&&t.return_pct!=null&&t.return_pct>=0)return t.return_pct;
       const lv=t.tp_level_hit||0;
       if(lv>=2&&t.tp2_pct!=null)return Math.abs(t.tp2_pct);
       if(lv>=1&&t.tp_pct!=null)return Math.abs(t.tp_pct);
@@ -4691,7 +4760,13 @@ async function loadSignalAudit(){
       const isSell=s.direction==='SELL';
       const dirBadge=isSell?`<span style="font-size:9.5px;font-weight:700;color:var(--bear);border:1px solid var(--bear)55;border-radius:4px;padding:1px 5px;margin-left:5px">SELL</span>`:'';
       const tpSign=isSell?'-':'+', slSign=isSell?'+':'-';
-      const tpLevelFinal=s.status==='TP_HIT'?3:(s.tp_level_hit||0);
+      // TP_HIT tidak lagi selalu berarti tuntas TP3: sejak batas waktu hanya
+      // berlaku bagi sinyal tanpa TP, posisi yang harganya macet ditutup sbg
+      // TP_HIT di level TP1/TP2. Jadi tp_level_hit yang dipercaya duluan --
+      // memaksa 3 akan mencentang TP3 pada posisi yang tidak pernah sampai
+      // ke sana. Angka 3 tinggal cadangan utk baris LAMA yang level-nya tidak
+      // pernah tercatat (status TP_HIT-nya sendiri sudah membuktikan tuntas).
+      const tpLevelFinal=(s.tp_level_hit||0)||(s.status==='TP_HIT'?3:0);
       const tpRow=(n,price,pct)=>{
         if(price==null||pct==null)return'';
         const hit=tpLevelFinal>=n;
@@ -4705,7 +4780,7 @@ async function loadSignalAudit(){
           <td>Rp${fmt(s.entry_price)}</td>
           <td style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
           <td style="color:var(--bear);font-family:'JetBrains Mono',monospace;font-size:11px">Rp${fmt(s.sl_price)} <div class="muted" style="font-size:9.5px">(${slSign}${fmt(s.sl_pct,1)}%)</div></td>
-          <td style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</td>
+          <td style="color:${_auditStatusColor(s)}">${_auditStatusLabel(s)}</td>
           <td style="text-align:right"><b style="color:${retColor};font-size:14px">${retTxt}</b>${retSub}</td>
         </tr>`;
       }
@@ -4733,7 +4808,7 @@ async function loadSignalAudit(){
           </div>
           <div class="zeta-sig-row">
             <span class="zeta-sig-lbl">Status</span>
-            <span class="zeta-sig-val" style="color:${_auditStatusColor(s.status)}">${_auditStatusLabel(s.status)}</span>
+            <span class="zeta-sig-val" style="color:${_auditStatusColor(s)}">${_auditStatusLabel(s)}</span>
           </div>
           <div class="zeta-sig-row">
             <span class="zeta-sig-lbl">Return</span>
@@ -4743,17 +4818,30 @@ async function loadSignalAudit(){
       </div>`;
     }).join('');
 
+    // Tiap saringan menyebut jumlahnya. Tanpa angka ini, daftar yang dipotong
+    // di 12 baris tidak bisa dibedakan dari daftar yang memang cuma segitu --
+    // dan user tidak punya petunjuk bahwa sinyal yang dicarinya ada di
+    // saringan LAIN (ELSA sudah kena TP1+TP2 tapi posisinya masih berjalan,
+    // jadi ada di "Sedang Berjalan"/"Confirmed", bukan di "TP Tercapai").
+    const _hitung = (f) => f === 'ALL' ? base.length
+      : f === 'EXPIRED' ? base.filter(s => s.status === 'EXPIRED' || s.status === 'EXPIRED_NO_ENTRY').length
+      : f === 'CONFIRMED' ? base.filter(s => (s.tp_level_hit || 0) >= 1).length
+      : base.filter(s => s.status === f).length;
+    const _chip = (f, teks) => {
+      const n = _hitung(f);
+      return `<button class="chip ${auditFilter === f ? 'active' : ''}" data-f="${f}">${teks} <span class="muted" style="font-weight:400">${n}</span></button>`;
+    };
     const filterChips = `
       <div id="auditFilter" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:center;justify-content:space-between">
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <span class="muted" style="font-size:12px;margin-right:4px">${icon('filter',{size:12})} Filter:</span>
-          <button class="chip ${auditFilter==='ALL'?'active':''}" data-f="ALL">Semua</button>
-          <button class="chip ${auditFilter==='CONFIRMED'?'active':''}" data-f="CONFIRMED">Confirmed (TP1+)</button>
-          <button class="chip ${auditFilter==='PENDING_ENTRY'?'active':''}" data-f="PENDING_ENTRY">Belum Entry</button>
-          <button class="chip ${auditFilter==='OPEN'?'active':''}" data-f="OPEN">Sedang Berjalan</button>
-          <button class="chip ${auditFilter==='TP_HIT'?'active':''}" data-f="TP_HIT">TP Tercapai</button>
-          <button class="chip ${auditFilter==='SL_HIT'?'active':''}" data-f="SL_HIT">Kena SL</button>
-          <button class="chip ${auditFilter==='EXPIRED'?'active':''}" data-f="EXPIRED">Kadaluarsa</button>
+          ${_chip('ALL','Semua')}
+          ${_chip('CONFIRMED','Confirmed (TP1+)')}
+          ${_chip('PENDING_ENTRY','Belum Entry')}
+          ${_chip('OPEN','Sedang Berjalan')}
+          ${_chip('TP_HIT','TP Tercapai')}
+          ${_chip('SL_HIT','Kena SL')}
+          ${_chip('EXPIRED','Kadaluarsa & Tanpa Entry')}
         </div>
         <div style="display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:8px;border:1px solid var(--line-soft)">
           <button class="chip ${auditViewMode==='card'?'active':''}" data-v="card" style="margin:0;padding:5px 12px;border:none">${icon('layers',{size:12})} Kartu</button>
@@ -4766,7 +4854,12 @@ async function loadSignalAudit(){
       `<div style="overflow-x:auto"><table class="ctable" style="width:100%"><thead><tr><th>Saham</th><th class="hide-xs">Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th style="text-align:right">Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>` : 
       `<div class="decision-grid" id="auditTbody">${rows}</div>`;
 
-    const loadMoreHtml = isMore ? `<div style="text-align:center;margin-top:24px"><button class="btn ghost" id="btnLoadMoreAudit" style="width:100%;max-width:320px;border:1px solid var(--line);padding:10px">Muat Lebih Banyak &darr;</button></div>` : '';
+    // Tombol WAJIB menyebut sisanya. Dulu cuma "Muat Lebih Banyak", jadi
+    // daftar 64 baris yang dipotong di 12 tampak sudah habis -- user melapor
+    // "mana belom ada di tp tercapai harusnya ada ctra elsa jpfa" padahal
+    // keempatnya ada, cuma di halaman berikutnya.
+    const sisaBaris = filtered.length - toRender.length;
+    const loadMoreHtml = isMore ? `<div style="text-align:center;margin-top:24px"><button class="btn ghost" id="btnLoadMoreAudit" style="width:100%;max-width:320px;border:1px solid var(--line);padding:10px">Muat ${Math.min(12, sisaBaris)} Lagi &darr; <span class="muted" style="font-weight:400">(${sisaBaris} sinyal belum tampil)</span></button></div>` : '';
 
     $('#auditDynamicPanel').innerHTML = filterChips + listHtml + loadMoreHtml;
 

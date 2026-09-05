@@ -796,6 +796,33 @@ def _ensure_table():
               AND sl_pct > 0
               AND tp_pct < sl_pct * 2
         ''')
+
+        # Migrasi kesembilan belas: permintaan user langsung, menunjuk baris
+        # ELSA/AMMN/ICBP/MIKA/JPFA di Audit Sinyal ("kalo lagi jalan jgn
+        # kadaluarsa harusnya udah pda full tp"). Batas MAX_HOLD_DAYS dulu
+        # menutup SEMUA posisi tanpa memandang tp_level_hit, sehingga 17 dari
+        # 20 baris EXPIRED sebenarnya posisi UNTUNG yang sudah menyentuh TP1
+        # (rata-rata +3,6%) atau TP2 (rata-rata +8,5%) -- tertulis
+        # "Kadaluarsa" di layar, sebutan yang membacanya seperti gagal.
+        # Kejanggalan itu dua sisi dari satu akar: sesudah TP1 tangga stop
+        # membuat posisi tidak bisa tutup rugi, jadi tidak ada alasan
+        # menutupnya karena kalender. audit_open_signals kini hanya
+        # meng-EXPIRED baris yang tp_level_hit-nya masih 0.
+        #
+        # Baris lama diberi status TP_HIT, TIDAK dibuka kembali jadi OPEN:
+        # posisi itu ditutup berhari-hari lalu, dan jalur harga di antaranya
+        # sudah tidak bisa direkonstruksi -- membukanya lagi lalu mengaudit
+        # dgn harga HARI INI akan mengarang hasil yang tidak pernah terjadi.
+        # return_pct/resolved_price/days_to_resolve DIBIARKAN APA ADANYA:
+        # angka realisasinya nyata, hanya sebutannya yang keliru. Win rate
+        # tidak bergeser sedikit pun -- _compute_stats sedari awal menghitung
+        # menang dari tp_level_hit >= 1, bukan dari status (lihat 'wins').
+        conn.execute('''
+            UPDATE signal_history
+            SET status = 'TP_HIT'
+            WHERE status = 'EXPIRED'
+              AND COALESCE(tp_level_hit, 0) >= 1
+        ''')
     _ensured = True
 
 
@@ -1562,20 +1589,56 @@ async def audit_open_signals(price_lookup) -> list[dict]:
     permintaan user: "misalkan kena area tp1 tandai juga lanjut ke area tp
     selanjutnya", jadi TP1/TP2 tercapai HANYA menaikkan tp_level_hit (posisi
     TETAP OPEN, tidak ditutup); hanya TP3 yang jadi status akhir TP_HIT.
-    SL selalu final TIDAK PEDULI tp_level_hit sudah berapa (user tidak minta
-    stop-loss dipindah ke breakeven, jadi risiko awal tetap berlaku penuh
-    selama posisi masih terbuka).
+
+    STOP NAIK BERTANGGA mengikuti target yang sudah terbukti tercapai
+    (tp_level_hit dari siklus SEBELUMNYA):
+
+        tp_level_hit  stop berlaku       terburuk sesudahnya
+        ------------  -----------------  -------------------
+        0             sl_pct dari entry  -sl_pct
+        1 (TP1 kena)  entry (impas)      0%
+        2 (TP2 kena)  level TP1          +tp_pct
+
+    Sebelum ini stop awal berlaku penuh sampai posisi tutup, jadi untung
+    mengambang boleh berbalik jadi rugi penuh -- dan itu SUNGGUHAN terjadi
+    pada 9 sinyal (KIJA, AGII, PPRE, MNCN, AMRT, ERAA, ANTM, ULTJ, MDKA):
+    semuanya sempat lewat TP1, tidak ada yang dijual, semuanya tutup di
+    -3,0% s/d -4,1% (AGII bahkan sudah sampai TP2). Padahal _compute_stats
+    mencatat kesembilannya MENANG ("TP1 tercapai = menang permanen") --
+    klaim yang tidak ditebus perilaku sistemnya sendiri. Dgn tangga stop,
+    sebutan "menang" itu jujur: sesudah TP1 kemungkinan terburuknya impas,
+    sesudah TP2 malah sudah untung. Posisi TETAP mengejar TP3, hanya
+    risikonya yang dilucuti bertahap.
+
+    Stop TIDAK PERNAH TURUN lagi setelah naik (baris lama tanpa tp_pct
+    jatuh kembali ke titik impas, bukan ke stop awal).
+
+    return_pct utk stop yang sudah naik memakai harga TERAMATI, bukan
+    dipaksa ke angka levelnya -- kalau harga loncat (gap) menembus level
+    stop, angkanya harus jujur menunjukkan selisih gap itu.
 
     Status akhir (BUY, arah default/mayoritas -- harga diharapkan NAIK):
     - TP_HIT: harga >= entry x (1 + tp3_pct/100)
-    - SL_HIT: harga <= entry x (1 - sl_pct/100)
+    - SL_HIT: harga <= level stop yang sedang berlaku menurut tangga di
+      atas (bisa berarti tutup UNTUNG kalau stop sudah naik ke TP1)
 
     Utk SELL (arah baru -- Distribusi/Distribusi Agresif Smart Money,
     harga diharapkan TURUN, "untung" berarti harga jatuh sejumlah tp_pct):
     - TP_HIT: harga <= entry x (1 - tp3_pct/100)
-    - SL_HIT: harga >= entry x (1 + sl_pct/100)
+    - SL_HIT: harga >= level stop yang sedang berlaku (cerminan tangga di
+      atas)
 
-    - EXPIRED: belum kena TP3/SL tapi sudah lewat MAX_HOLD_DAYS sejak dicatat
+    - EXPIRED: lewat MAX_HOLD_DAYS sejak dicatat TANPA pernah menyentuh TP
+      manapun (tp_level_hit masih 0). Batas waktu ini sengaja HANYA berlaku
+      selagi posisi masih menanggung risiko. Begitu TP1 tersentuh, tangga
+      stop membuat posisi tidak bisa lagi tutup rugi, jadi menutupnya karena
+      kalender cuma membuang peluang TP3 tanpa menghindari risiko apa pun --
+      dan melabelinya "kadaluarsa" menyesatkan, karena posisinya sedang
+      untung. Pemenang dibiarkan berjalan sampai TP3 atau tangga stopnya
+      tersentuh. SATU pengecualian: kalau harganya basi/anomali skala
+      (feed macet, suspensi, indikasi split), tangga stop tidak bisa
+      dikelola sama sekali, jadi posisi tetap ditutup pada MAX_HOLD_DAYS --
+      sbg TP_HIT bila sudah kena TP, sbg EXPIRED bila belum.
     - OPEN: belum satupun kondisi di atas terpenuhi, tetap dibiarkan terbuka
 
     return_pct SELALU direpresentasikan sbg untung(+)/rugi(-), BUKAN
@@ -1648,7 +1711,26 @@ async def audit_open_signals(price_lookup) -> list[dict]:
                 return False
             return price <= target if is_sell else price >= target
 
-        sl_price = entry * (1 + row["sl_pct"] / 100) if is_sell else entry * (1 - row["sl_pct"] / 100)
+        # TANGGA STOP mengikuti target yang SUDAH terbukti tercapai (lihat
+        # docstring). Sengaja memakai tp_level_hit yang SUDAH TERSIMPAN,
+        # bukan reached_level siklus ini: stop baru boleh berlaku setelah
+        # levelnya benar-benar tercatat, bukan pada observasi yang sama.
+        #   0 -> stop awal (sl_pct dari entry)
+        #   1 -> titik impas (entry)          : TP1 sudah tersentuh
+        #   2 -> level TP1                    : TP2 sudah tersentuh
+        # Level 3 tidak pernah muncul di sini -- TP3 langsung jadi TP_HIT.
+        tersimpan_level = row["tp_level_hit"] or 0
+        if tersimpan_level >= 2:
+            # _level_price bisa None utk baris lama tanpa tp_pct -- jatuh
+            # kembali ke titik impas, bukan ke stop awal (jangan pernah
+            # MENURUNKAN stop yang sudah naik).
+            sl_moved, sl_price = 2, (_level_price(row["tp_pct"]) or entry)
+        elif tersimpan_level >= 1:
+            sl_moved, sl_price = 1, entry
+        else:
+            sl_moved = 0
+            sl_price = (entry * (1 + row["sl_pct"] / 100) if is_sell
+                        else entry * (1 - row["sl_pct"] / 100))
         tp1_price = _level_price(row["tp_pct"])
         tp2_price = _level_price(row["tp2_pct"])
         tp3_price = _level_price(row["tp3_pct"])
@@ -1681,23 +1763,52 @@ async def audit_open_signals(price_lookup) -> list[dict]:
 
         prev_level = row["tp_level_hit"] or 0
         kind, status, return_pct = None, None, None
+        final_level = prev_level
 
         if is_stale or is_anomaly:
             # Harga basi ATAU skala harga anomali (indikasi split) -- lewati
-            # klaim TP/SL/tp_progress sepenuhnya, cuma EXPIRED (berbasis
-            # waktu) yang boleh jalan. Utk anomali, return_pct NULL: untung/
+            # klaim TP/SL/tp_progress sepenuhnya, cuma penutupan berbasis
+            # WAKTU yang boleh jalan. Utk anomali, return_pct NULL: untung/
             # rugi tidak bisa diukur jujur di skala harga yang berubah.
             if age_days >= MAX_HOLD_DAYS:
-                kind, status = "resolved", "EXPIRED"
+                # Beda dgn cabang harga normal di bawah: posisi yang sudah
+                # kena TP pun HARUS ditutup di sini. Tangga stop butuh harga
+                # yang bisa dipercaya utk dikelola, dan justru itu yang tidak
+                # ada -- membiarkannya terbuka membuat saham bermasalah
+                # (suspensi/delisting) menyangkut OPEN selamanya. Statusnya
+                # tetap jujur: yang sudah kena TP ditutup sbg kemenangan.
+                kind = "resolved"
+                status = "TP_HIT" if prev_level >= 1 else "EXPIRED"
                 if not is_anomaly:
                     return_pct = round((entry / price - 1) * 100, 2) if is_sell else round((price / entry - 1) * 100, 2)
         elif sl_hit:
-            kind, status, return_pct = "resolved", "SL_HIT", -row["sl_pct"]
+            kind, status = "resolved", "SL_HIT"
+            if sl_moved:
+                # Stop yang sudah naik: normalnya 0% (impas) atau +tp_pct
+                # (level TP1). Dipakai harga teramati supaya gap yang
+                # menembus level stop tetap terlaporkan apa adanya.
+                return_pct = (round((entry / price - 1) * 100, 2) if is_sell
+                              else round((price / entry - 1) * 100, 2))
+            else:
+                return_pct = -row["sl_pct"]
         elif reached_level >= configured_max and reached_level > 0:
             kind, status, return_pct = "resolved", "TP_HIT", final_pct
+            final_level = reached_level
         elif reached_level > prev_level:
             kind = "tp_progress"  # TP1/TP2 baru tercapai -- TETAP OPEN
-        elif age_days >= MAX_HOLD_DAYS:
+        elif age_days >= MAX_HOLD_DAYS and prev_level == 0:
+            # Batas waktu HANYA berlaku selama posisi masih menanggung
+            # risiko, yaitu belum menyentuh TP manapun: setup teknikalnya
+            # sudah basi dan stop-nya masih stop awal, jadi menahannya lebih
+            # lama cuma memperpanjang paparan rugi.
+            #
+            # Begitu TP1 tersentuh, tangga stop naik ke titik impas (lalu ke
+            # level TP1 sesudah TP2), sehingga posisi TIDAK BISA lagi tutup
+            # rugi. Menutupnya karena kalender justru membuang peluang TP3
+            # tanpa menghindari risiko apa pun -- dan melabelinya
+            # "kadaluarsa" menyesatkan, karena posisi itu sedang untung.
+            # Pemenang dibiarkan berjalan sampai TP3 tercapai atau tangga
+            # stop tersentuh; keduanya menutup posisi dgn hasil yang jujur.
             kind, status = "resolved", "EXPIRED"
             return_pct = round((entry / price - 1) * 100, 2) if is_sell else round((price / entry - 1) * 100, 2)
 
@@ -1721,7 +1832,10 @@ async def audit_open_signals(price_lookup) -> list[dict]:
         # SL_HIT/EXPIRED mempertahankan tp_level_hit historis (TP1/TP2 yang
         # SUDAH terbukti tercapai sebelumnya tetap tercatat apa adanya,
         # bukan direset ke 0 hanya karena harga sekarang sudah turun lagi).
-        final_level = reached_level if status == "TP_HIT" else prev_level
+        # final_level sudah ditetapkan tiap cabang di atas: hanya TP_HIT dari
+        # harga yang SAH yang boleh menaikkannya ke reached_level -- TP_HIT
+        # dari cabang harga basi memakai prev_level, karena reached_level di
+        # sana dihitung dari harga yang justru tidak boleh dipercaya.
         with get_db() as conn:
             conn.execute('''
                 UPDATE signal_history
@@ -1735,6 +1849,11 @@ async def audit_open_signals(price_lookup) -> list[dict]:
             "kind": "resolved", "status": status, "resolved_price": price, "return_pct": return_pct,
             "days_to_resolve": age_days, "recorded_at": row["recorded_at"],
             "source": row["source"], "pattern": row["pattern"], "direction": row["direction"],
+            # Tangga stop yang sedang berlaku saat posisi tutup: 0 = stop
+            # awal, 1 = titik impas, 2 = level TP1. Ketiganya berstatus
+            # SL_HIT, tapi artinya jauh berbeda bagi pengguna -- yang
+            # terakhir bahkan tutup UNTUNG.
+            "stop_terkunci": sl_moved if status == "SL_HIT" else 0,
         })
 
     return just_resolved
@@ -1827,7 +1946,23 @@ def _compute_stats(signals: list[dict]) -> dict | None:
     # tidak pernah diklaim, level di atas yang TERBUKTI tidak dibuang.
     def _locked_return(s):
         if s["status"] == "TP_HIT" and s.get("return_pct") is not None:
-            return s["return_pct"]  # tuntas penuh -- angka realisasi aktual
+            # Angka realisasi AKTUAL. Berlaku utk dua macam TP_HIT: tuntas
+            # sampai TP3, maupun ditutup di level TP1/TP2 krn harganya macet
+            # (lihat audit_open_signals). Keduanya benar-benar keluar di harga
+            # itu, jadi return_pct-nya otoritatif -- alasan yang sama dgn
+            # cabang SL_HIT bertangga stop di bawah.
+            return s["return_pct"]
+        # Sesudah tangga stop berlaku, penutupan SL_HIT dgn tp_level_hit >= 1
+        # SUDAH merealisasikan untungnya sendiri (impas atau level TP1),
+        # jadi return_pct-nya otoritatif -- JANGAN diklaim setinggi level
+        # tertinggi yang pernah tersentuh, karena posisi tidak keluar di
+        # sana. Baris LAMA (ditutup sebelum tangga stop ada) return_pct-nya
+        # negatif dan tidak kena cabang ini, jadi angka historis yang sudah
+        # dilaporkan tidak ikut berubah.
+        if (s["status"] == "SL_HIT" and (s.get("tp_level_hit") or 0) >= 1
+                and s.get("return_pct") is not None
+                and s["return_pct"] >= 0):
+            return s["return_pct"]
         lvl = s.get("tp_level_hit") or 0
         if lvl >= 2 and s.get("tp2_pct") is not None:
             return abs(s["tp2_pct"])

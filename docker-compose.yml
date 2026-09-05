@@ -6,14 +6,29 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=/data/fundamental_cache.db
+      - WA_BOT_URL=http://wa-bot:3901
+      - WA_BOT_SECRET=${WA_BOT_SECRET}
     volumes:
       - fundamental_cache:/data
     depends_on:
       - redis
+      - wa-bot
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
 
+  wa-bot:
+    build: ./wa-bot
+    restart: unless-stopped
+    environment:
+      - WA_BOT_SECRET=${WA_BOT_SECRET}
+      - WA_GROUP_JID=${WA_GROUP_JID}
+    volumes:
+      - wa_auth:/data
+    # SENGAJA tidak ada "ports": -- hanya reachable oleh service "web" lewat
+    # jaringan internal docker-compose, tidak diekspos ke host/publik.
+
 volumes:
   fundamental_cache:
+  wa_auth:
