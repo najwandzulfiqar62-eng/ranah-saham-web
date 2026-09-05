@@ -241,9 +241,9 @@ def test_sinyal_menyebut_puncak_sejak_muncul(client, wa_bersih, monkeypatch):
     assert "bukan hasil yang direalisasikan" in hasil
     # Entry aslinya sudah lewat jauh, jadi yang berguna level HARI INI --
     # disampaikan sebagai anjuran, bukan sekadar angka.
-    assert "jangan kejar" in hasil
-    assert "tunggu Rp745 (SL Rp690)" in hasil
-    assert "lebih dalam Rp700" in hasil
+    assert "area terbaik Rp700 (SL Rp650)" in hasil
+    assert "alternatif lebih dangkal Rp745" in hasil
+    assert "dikejar" in hasil
 
 
 def test_kode_emiten_membalas_rencana_trading_lengkap(client, wa_bersih, monkeypatch):
@@ -705,11 +705,14 @@ def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa
 
     # Sudah TP1 -> stop digeser ke titik impas (tangga stop yang dipakai audit).
     assert "*Sudah punya*: HOLD, stop digeser ke titik impas (Rp400)" in hasil
-    # Sudah jalan jauh -> jangan kejar, tunggu level pullback.
-    assert "jangan kejar" in hasil and "tunggu Rp520 (SL Rp480)" in hasil
-    assert "lebih dalam Rp500" in hasil
-    # Masih dekat entry -> boleh masuk di sekitar entry.
-    assert "boleh masuk di sekitar Rp1.000 dengan SL Rp940" in hasil
+    # Area masuk dipimpin yang PALING DALAM (Rp500), pullback jadi
+    # alternatif -- diurutkan dari harganya, bukan dari namanya.
+    assert "area terbaik Rp500 (SL Rp465)" in hasil
+    assert "alternatif lebih dangkal Rp520" in hasil
+    assert "jangan" in hasil and "dikejar" in hasil
+    # Tidak ada level masuk lagi -> pakai entry sinyalnya, tapi tetap
+    # "kalau harga menyentuh", bukan disuruh beli di harga sekarang.
+    assert "masuk kalau harga menyentuh Rp1.000, SL Rp940" in hasil
     # Belum entry -> pasang beli, bukan disuruh HOLD.
     assert "*Belum punya*: pasang beli di Rp250, SL Rp235" in hasil
     assert "stop tetap Rp940" in hasil

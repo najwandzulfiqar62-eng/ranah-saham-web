@@ -4889,8 +4889,17 @@ async function loadSignalAudit(){
           :lv>=1?`stop ke titik impas Rp${fmt(s.entry_price)}`
           :`stop tetap Rp${fmt(s.sl_price)}`;
         anjuran=`HOLD — ${jaga}`;
-        if(_naik>3&&ml&&ml.pullback) anjuran+=` · belum punya: jangan kejar, tunggu Rp${fmt(ml.pullback.entry)} (SL Rp${fmt(ml.pullback.sl)})`;
-        else if(s.entry_price!=null) anjuran+=` · belum punya: boleh masuk sekitar Rp${fmt(s.entry_price)}`;
+        // Area masuk diurutkan dari yang PALING DALAM (harga terbaik = risiko
+        // terkecil), dihitung dari harganya sendiri bukan dari namanya --
+        // level "deep" memakai support S2 yang kadang justru di ATAS pullback.
+        const _area=[ml&&ml.deep,ml&&ml.pullback].filter(Boolean).sort((a,b)=>a.entry-b.entry);
+        if(_area.length){
+          anjuran+=` · belum punya: area terbaik Rp${fmt(_area[0].entry)} (SL Rp${fmt(_area[0].sl)})`;
+          if(_area.length>1) anjuran+=`, alternatif Rp${fmt(_area[1].entry)}`;
+          if(_naik>3) anjuran+=` — tunggu harganya turun ke situ, jangan dikejar`;
+        }else if(s.entry_price!=null){
+          anjuran+=` · belum punya: masuk kalau menyentuh Rp${fmt(s.entry_price)}`;
+        }
       }
       const anjuranTxt=anjuran?`<div style="font-size:9.5px;color:var(--gold);margin-top:3px">${anjuran}</div>`:'';
       // Entry aslinya sudah lewat -> level yang berguna adalah level HARI INI

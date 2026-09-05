@@ -6929,16 +6929,28 @@ def _wa_fmt_sinyal(rep: dict) -> str:
                 jaga = f"stop tetap {_rp(sl_sinyal)}"
             isi.append(f"   👉 *Sudah punya*: HOLD, {jaga}")
 
-            pb, dp = ml.get("pullback"), ml.get("deep")
-            if naik > 3 and pb:
-                lebih_dalam = (f" · lebih dalam {_rp(dp['entry'])}"
-                               if dp and dp["entry"] < pb["entry"] else "")
-                isi.append(f"   👉 *Belum punya*: harga sudah jalan {naik:+.1f}%, "
-                           f"jangan kejar — tunggu {_rp(pb['entry'])} "
-                           f"(SL {_rp(pb['sl'])}){lebih_dalam}")
+            # Area masuk diurutkan dari yang PALING DALAM: harga terbaik =
+            # risiko paling kecil. Permintaan user: "kalau tembus area entry
+            # berarti cari area terenaknya, yang terbagus, deep gitu".
+            # Urutannya dihitung dari harganya sendiri, bukan dari namanya --
+            # level "deep" memakai support S2 yang kadang justru di ATAS
+            # pullback.
+            area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
+                          key=lambda a: a["entry"])
+            if area:
+                utama = area[0]
+                teks = (f"   👉 *Belum punya*: area terbaik {_rp(utama['entry'])} "
+                        f"(SL {_rp(utama['sl'])})")
+                if len(area) > 1:
+                    teks += f", alternatif lebih dangkal {_rp(area[1]['entry'])}"
+                isi.append(teks)
+                if naik > 3:
+                    isi.append(f"   _Harga sudah jalan {naik:+.1f}% dari entry — masuk "
+                               f"HANYA kalau harga turun menyentuh area itu, jangan "
+                               f"dikejar di harga sekarang._")
             elif entry_sinyal is not None:
-                isi.append(f"   👉 *Belum punya*: masih dekat entry, boleh masuk "
-                           f"di sekitar {_rp(entry_sinyal)} dengan SL {_rp(sl_sinyal)}")
+                isi.append(f"   👉 *Belum punya*: masuk kalau harga menyentuh "
+                           f"{_rp(entry_sinyal)}, SL {_rp(sl_sinyal)}")
 
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
