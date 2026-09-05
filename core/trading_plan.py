@@ -27,6 +27,11 @@ from core.indicators import calculate_atr, calculate_support_resistance_deep, ca
 # jarak minimum yang wajar, SAMA dgn floor TP1 (max(3.0, risk_pct)) yang
 # sudah ada -- konsisten, bukan angka baru yang asal pilih.
 MIN_SL_PCT = 3.0
+# Pengali ATR untuk lantai SL (lihat alasan lengkap + angka simulasinya di
+# _calc_entry_levels). Lantai sesungguhnya = max(MIN_SL_PCT, SL_ATR_MULT x
+# ATR%), jadi saham tenang tetap memakai 3% sedangkan saham bergejolak
+# mendapat ruang sesuai gejolaknya sendiri.
+SL_ATR_MULT = 2.0
 
 # Diskon entry PULLBACK dari harga saat ini (persen). REVISI KETIGA sehari
 # (S1 pivot -> MA20 -> 1x ATR -> INI, permintaan user langsung sambil
@@ -68,28 +73,50 @@ def _calc_entry_levels(entry: float, atr: float, sr: dict) -> dict:
     support_levels = [sr["S1"], sr["S2"], sr["S3"], sr["S4"]]
     supports_below = [s for s in support_levels if s < entry]
 
+    # Lantai SL mengikuti VOLATILITAS saham, bukan angka datar.
+    #
+    # Lantai 3% datar terbukti kesempitan. Diukur dari 54 sinyal SL_HIT
+    # sungguhan di database: 87% harganya balik ke ATAS entry dalam 20 hari
+    # bursa sesudah di-stop, dan 70% tetap mencapai TP1 -- artinya stop-nya
+    # tersapu gerak harian biasa, bukan karena trennya rusak. Penurunan
+    # terdalam sebelum harga berbalik: median 6,5%, sementara SL yang
+    # dipasang median cuma 3,3%.
+    #
+    # 2xATR bukan angka karangan: bagian Manajemen Risiko di laporan
+    # aplikasi ini SUDAH menganjurkannya ("stop loss yang masuk akal minimal
+    # sekitar 2x ATR"), cuma tidak pernah diterapkan kodenya. Untuk ATR khas
+    # ~3,3% angkanya jatuh di ~6,6% -- praktis sama dengan 6,5% yang keluar
+    # dari data, dua jalan berbeda menuju angka yang sama.
+    #
+    # Simulasi ulang 176 sinyal (SL & TP sama-sama mengikuti aturannya
+    # masing-masing): stop-out 26,7% -> 23,3%, rata-rata hasil +2,74% ->
+    # +6,92%, total +482pp -> +1.217pp. Win rate turun tipis (73,3% ->
+    # 70,5%) karena target ikut menjauh -- pertukaran yang dipilih user
+    # secara sadar ("entry lebih tepat dan targetnya jauh").
+    atr_pct = (atr / entry * 100) if entry > 0 and atr else 0.0
+    lantai_pct = max(MIN_SL_PCT, SL_ATR_MULT * atr_pct)
+
     stop_loss = None
     for support in supports_below:
         candidate_sl = support - (atr * 0.2)
         candidate_risk_pct = ((entry - candidate_sl) / entry) * 100 if entry > 0 else 0
-        if candidate_risk_pct >= MIN_SL_PCT:
+        if candidate_risk_pct >= lantai_pct:
             stop_loss = candidate_sl
             break
 
     if stop_loss is None:
         # Tidak ada level S1..S4 (di bawah entry) yang cukup jauh, atau
-        # tidak ada support di bawah entry sama sekali -- fallback floor
-        # persentase generik (jaring pengaman lama).
-        stop_loss = entry * (1 - MIN_SL_PCT / 100)
+        # tidak ada support di bawah entry sama sekali -- pakai lantai.
+        stop_loss = entry * (1 - lantai_pct / 100)
 
     risk_abs = entry - stop_loss
     risk_pct = (risk_abs / entry) * 100 if entry > 0 else 5
-    if risk_pct < MIN_SL_PCT:
+    if risk_pct < lantai_pct:
         # Jaring pengaman terakhir (harusnya jarang/tidak pernah kena
-        # kalau loop di atas benar) -- hitung ULANG stop_loss dari floor
+        # kalau loop di atas benar) -- hitung ULANG stop_loss dari lantai
         # supaya risk_pct dan sl (Rp) tetap konsisten satu sama lain.
-        risk_pct = MIN_SL_PCT
-        stop_loss = entry * (1 - MIN_SL_PCT / 100)
+        risk_pct = lantai_pct
+        stop_loss = entry * (1 - lantai_pct / 100)
     tp1_pct = max(3.0, risk_pct)
     tp2_pct = tp1_pct * 2
     tp3_pct = tp1_pct * 3

@@ -5679,3 +5679,34 @@ def test_rencana_lanjutan_tidak_pernah_memasang_sl_kedeketan():
         # TP tetap berjenjang naik dan R:R-nya konsisten dengan risikonya.
         assert s["tp"]["tp1"] < s["tp"]["tp2"] < s["tp"]["tp3"]
         assert s["tp"]["rr1"] >= 1.0
+
+
+def test_lantai_sl_mengikuti_volatilitas_bukan_angka_datar():
+    """Lantai SL = max(3%, 2xATR), bukan 3% datar.
+
+    Diukur dari 54 sinyal SL_HIT sungguhan: 87% harganya balik ke ATAS entry
+    dalam 20 hari sesudah di-stop dan 70% tetap mencapai TP1 -- stop-nya
+    tersapu gerak harian biasa. Saham tenang tetap memakai 3%; saham
+    bergejolak harus mendapat ruang sesuai gejolaknya sendiri.
+    """
+    from core.trading_plan import MIN_SL_PCT, SL_ATR_MULT, _calc_entry_levels
+
+    entry = 1000.0
+    sr = {"S1": 995.0, "S2": 985.0, "S3": 970.0, "S4": 950.0}
+
+    # ATR 1% -> 2xATR (2%) di bawah lantai 3%, jadi lantai lama yang berlaku.
+    tenang = _calc_entry_levels(entry, atr=10.0, sr=sr)
+    assert tenang["risk_pct"] >= MIN_SL_PCT - 0.11
+    assert tenang["risk_pct"] < 5.0, "saham tenang tidak boleh dapat SL lebar"
+
+    # ATR 5% -> lantai jadi 10%, jauh di atas semua support terdekat.
+    bergejolak = _calc_entry_levels(entry, atr=50.0, sr=sr)
+    diharapkan = SL_ATR_MULT * 5.0
+    assert bergejolak["risk_pct"] >= diharapkan - 0.11, (
+        f"SL cuma {bergejolak['risk_pct']}%, seharusnya >= {diharapkan}%")
+    assert bergejolak["risk_pct"] > tenang["risk_pct"]
+
+    # TP ikut menjauh mengikuti risiko -- inilah yang dipilih user secara
+    # sadar ("targetnya jauh"), bukan efek samping tak sengaja.
+    assert bergejolak["tp1_pct"] >= bergejolak["risk_pct"] - 0.11
+    assert bergejolak["tp3_pct"] > tenang["tp3_pct"]
