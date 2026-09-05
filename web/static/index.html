@@ -4642,7 +4642,7 @@ async function loadSignalAudit(){
             if(!ada||x.puncak_return_pct>ada.puncak_return_pct) puncakMap[x.kode]=x;
           }
           const top=Object.values(puncakMap).filter(x=>x.puncak_return_pct>=20)
-            .sort((a,b)=>b.puncak_return_pct-a.puncak_return_pct).slice(0,12);
+            .sort((a,b)=>b.puncak_return_pct-a.puncak_return_pct);
           if(!top.length) return '';
           const chips=top.map(x=>{
             const tutupSL=x.status==='SL_HIT';

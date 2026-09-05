@@ -660,8 +660,11 @@ def test_sinyal_menyebut_yang_terbang_sesudah_sl_tanpa_mengklaimnya_untung(clien
     _daftarkan_approved()
 
     hasil = _kirim(client, "sinyal").json()["reply"]
-    assert "*Puncak terjauh sejak sinyal muncul*" in hasil
+    assert "*Puncak terjauh sejak sinyal muncul* (2 emiten di atas +20%)" in hasil
     assert "CSMI" in hasil and "+88.4%" in hasil
+    # GIAA (+31%) WAJIB ikut: dipotong oleh ambang persentase, bukan oleh
+    # "N teratas" -- dengan potongan 5 teratas ia dulu hilang.
+    assert "GIAA" in hasil and "+31.0%" in hasil
     assert hasil.index("CSMI") < hasil.index("GIAA"), "urut dari puncak tertinggi"
     # Wajib jujur: posisinya sudah ditutup rugi, angka itu tidak pernah diraih.
     assert "posisi sudah ditutup di SL" in hasil

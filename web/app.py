@@ -6134,6 +6134,11 @@ async def api_insider(hari: int = 0):
 # helper X-15 (_fetch_x15_today, _split_x15_items) reuse yang sudah dipakai
 # /api/x15, TIDAK ada logic baru yang menduplikasi itu.
 _WA_AKUM_HARI = 31  # sama dengan panel Akumulasi Berulang di web (index.html)
+# Ambang "puncak" yang layak disebut di ringkasan. Dipilih 20% karena
+# TP3 terjauh saja ~+25%, jadi apa pun di atas ini sudah di luar skenario
+# sinyal biasa -- bukan angka yang dipilih supaya daftarnya kelihatan
+# panjang.
+_WA_PUNCAK_MIN_PCT = 20.0
 
 
 async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
@@ -6830,10 +6835,17 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         lama = puncak_per_kode.get(s["kode"])
         if lama is None or p > lama["puncak_return_pct"]:
             puncak_per_kode[s["kode"]] = s
-    terjauh = sorted(puncak_per_kode.values(),
-                     key=lambda x: x["puncak_return_pct"], reverse=True)[:10]
+    # Ambang persentase, BUKAN "N teratas": permintaan user "pokoknya yg
+    # return puluhan persen tetap masukin aja". Dengan potongan 5 teratas,
+    # GIAA (+31%) tidak pernah tampil padahal jelas mencolok. Yang memotong
+    # sekarang cuma besarnya kenaikan, dan itu bisa dijelaskan; "kebetulan
+    # peringkat 6" tidak.
+    terjauh = sorted([x for x in puncak_per_kode.values()
+                      if x["puncak_return_pct"] >= _WA_PUNCAK_MIN_PCT],
+                     key=lambda x: x["puncak_return_pct"], reverse=True)
     if terjauh:
-        baris += ["", "*Puncak terjauh sejak sinyal muncul*"]
+        baris += ["", f"*Puncak terjauh sejak sinyal muncul* ({len(terjauh)} emiten "
+                      f"di atas +{_WA_PUNCAK_MIN_PCT:.0f}%)"]
         for s in terjauh:
             tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
             catatan = " · posisi sudah ditutup di SL" if s.get("status") == "SL_HIT" else ""
