@@ -98,15 +98,34 @@ ENTRY_ANOMALY_RATIO = 0.6
 ENTRY_ANOMALY_RATIO_UP = 1.6
 
 
-def is_price_scale_anomaly(entry_price: float, price: float) -> bool:
+# Ambang ATAS khusus pelacakan "puncak sejak sinyal muncul". ENTRY_ANOMALY_
+# RATIO_UP (1,6x) dirancang untuk AUDIT, dengan alasan "TP3 terjauh cuma
+# ~+25%, jadi 1,6x pasti aksi korporasi". Alasan itu TIDAK berlaku untuk
+# pelacakan puncak, yang justru bertujuan menangkap saham yang lari JAUH
+# melewati TP3 -- ditemukan nyata: CSMI bergerak dari ~Rp78 ke Rp195 (2,5x),
+# dan dengan ambang 1,6x seluruh datanya tersaring habis sehingga saham
+# terbaik justru yang paling mungkin hilang dari daftar. Reverse split di
+# BEI praktis selalu >=1:5, jadi 5x tetap menyaring itu tanpa membuang
+# kenaikan pasar yang sungguhan.
+PEAK_ANOMALY_RATIO_UP = 5.0
+
+
+def is_price_scale_anomaly(entry_price: float, price: float,
+                           ratio_up: float = None) -> bool:
     """True kalau harga terpantau BEDA SKALA dari entry (indikasi stock
     split / reverse split, kasus nyata RAJA split ~1:5) -- selisih segini
     dalam horizon sinyal hampir pasti aksi korporasi, bukan pergerakan
     pasar. Dipakai TIGA tempat yang WAJIB konsisten: audit_open_signals
     (jangan resolve TP/SL palsu), floating P&L /api/signals (jangan pajang
     -79% bohong di tabel audit), dan record_daily_snapshots (jangan
-    racuni recap harian dgn delta palsu)."""
-    return price < entry_price * ENTRY_ANOMALY_RATIO or price > entry_price * ENTRY_ANOMALY_RATIO_UP
+    racuni recap harian dgn delta palsu).
+
+    `ratio_up` boleh dilonggarkan oleh pemanggil yang memang MENGHARAPKAN
+    kenaikan besar (pelacakan puncak -- lihat PEAK_ANOMALY_RATIO_UP).
+    Default-nya tetap ambang audit, jadi ketiga pemakai di atas tidak
+    berubah perilakunya."""
+    batas_atas = ENTRY_ANOMALY_RATIO_UP if ratio_up is None else ratio_up
+    return price < entry_price * ENTRY_ANOMALY_RATIO or price > entry_price * batas_atas
 
 # Ambang minimum confidence_score supaya masuk daftar yang diaudit --
 # JANGAN catat SEMUA 45 saham tiap hari (terlalu bising, dan sinyal yang

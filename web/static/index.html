@@ -4629,6 +4629,34 @@ async function loadSignalAudit(){
             <div class="zeta-sub">Sampai TP/SL/kadaluarsa</div>
           </div>
         </div>
+        ${(()=>{
+          // PUNCAK TERTINGGI. Permintaan user: "kasih tau dong yg return
+          // tinggi tinggi yg puluhan bahkan 100an % di ringkasan". Diambil
+          // dari SELURUH sinyal (termasuk yang sudah ditutup) dan
+          // dikelompokkan per emiten, karena satu saham bisa punya belasan
+          // sinyal. Ambang 20% supaya yang tampil memang kasus mencolok.
+          const puncakMap={};
+          for(const x of (d.signals||[])){
+            if(x.puncak_return_pct==null) continue;
+            const ada=puncakMap[x.kode];
+            if(!ada||x.puncak_return_pct>ada.puncak_return_pct) puncakMap[x.kode]=x;
+          }
+          const top=Object.values(puncakMap).filter(x=>x.puncak_return_pct>=20)
+            .sort((a,b)=>b.puncak_return_pct-a.puncak_return_pct).slice(0,12);
+          if(!top.length) return '';
+          const chips=top.map(x=>{
+            const tutupSL=x.status==='SL_HIT';
+            return `<span class="chip" style="color:var(--bull);border-color:var(--bull)66"
+              title="Puncak sejak sinyal muncul${x.puncak_date?' ('+x.puncak_date+')':''}${tutupSL?' — posisinya sudah ditutup di SL':''}">`
+              +`${x.kode} +${fmt(x.puncak_return_pct,1)}%${tutupSL?' <span style="color:var(--bear)">·SL</span>':''}</span>`;
+          }).join('');
+          return `<section class="card" style="margin-top:14px">
+            <div class="zeta-chart-header">${icon('trending-up',{size:14})} Puncak Tertinggi Sejak Sinyal Muncul
+              <span class="muted" style="font-weight:400;font-size:11px">· ${top.length} emiten di atas +20%</span></div>
+            <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:10px">${chips}</div>
+            ${infoNote('Puncak = harga TERTINGGI yang pernah dicapai sejak sinyal muncul, BUKAN hasil yang direalisasikan. Yang bertanda ·SL posisinya sudah ditutup di stop loss, jadi kenaikan itu tidak diraih oleh yang mengikuti aturannya — ditampilkan supaya kelihatan seberapa jauh harga sempat lari sesudahnya.')}
+          </section>`;
+        })()}
         <div class="zeta-chart-grid">
           <div class="zeta-chart-wrapper">
             <div class="zeta-chart-header">${icon('activity',{size:14})} Equity Curve <span class="muted" style="font-weight:400;font-size:11px">· kumulatif Σ return sinyal selesai</span></div>

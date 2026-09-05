@@ -3748,7 +3748,7 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
     peta = tersimpan.get("bar") or {}
     rencana = tersimpan.get("masuk_lagi") or {}
 
-    from core.signal_history import is_price_scale_anomaly
+    from core.signal_history import PEAK_ANOMALY_RATIO_UP, is_price_scale_anomaly
     for s in dipakai:
         bar = peta.get(s["kode"])
         if not bar:
@@ -3761,7 +3761,10 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         # Split/reverse-split bikin harga lama & baru beda skala -- persentase
         # dari dua skala berbeda BUKAN untung/rugi (guard yang sama dipakai
         # floating P&L dan audit).
-        if is_price_scale_anomaly(entry, sesudah[-1][2]):
+        # Ambang atas dilonggarkan: fitur ini justru mencari saham yang lari
+        # jauh. Dengan ambang audit (1,6x) saham terbaik malah paling mungkin
+        # tersaring -- CSMI (2,5x dari entry) hilang seluruhnya.
+        if is_price_scale_anomaly(entry, sesudah[-1][2], ratio_up=PEAK_ANOMALY_RATIO_UP):
             continue
         tgl_puncak, harga_puncak, _ = max(sesudah, key=lambda b: b[1])
         s["mulai_dilacak"] = mulai
@@ -3793,7 +3796,8 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         urut_waktu = sorted(daftar, key=lambda x: (x.get("entry_filled_at") or x.get("recorded_at")))
         pertama = urut_waktu[0]
         terendah = min(daftar, key=lambda x: float(x["entry_price"]))
-        if is_price_scale_anomaly(float(pertama["entry_price"]), harga_kini):
+        if is_price_scale_anomaly(float(pertama["entry_price"]), harga_kini,
+                                  ratio_up=PEAK_ANOMALY_RATIO_UP):
             continue
         rekap = {
             "jumlah_sinyal": len(daftar),
@@ -6827,7 +6831,7 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         if lama is None or p > lama["puncak_return_pct"]:
             puncak_per_kode[s["kode"]] = s
     terjauh = sorted(puncak_per_kode.values(),
-                     key=lambda x: x["puncak_return_pct"], reverse=True)[:5]
+                     key=lambda x: x["puncak_return_pct"], reverse=True)[:10]
     if terjauh:
         baris += ["", "*Puncak terjauh sejak sinyal muncul*"]
         for s in terjauh:
