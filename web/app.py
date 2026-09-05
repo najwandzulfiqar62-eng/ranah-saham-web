@@ -913,6 +913,13 @@ async def access_gate(request: Request, call_next):
         request.state.access_user = None
         return await call_next(request)
 
+    # Sidecar wa-bot memanggil sebagai mesin (Bearer WA_BOT_SECRET), tidak
+    # pernah punya cookie sesi. Endpoint-nya sendiri yang memeriksa secret itu
+    # dan gagal-tertutup kalau secret belum diisi -- lihat api_wa_command.
+    if path.startswith("/api/wa/"):
+        request.state.access_user = None
+        return await call_next(request)
+
     user = await asyncio.to_thread(get_session_user, request.cookies.get("rs_session"))
     request.state.access_user = user
 
@@ -5960,6 +5967,31 @@ async def api_insider(hari: int = 0):
 # (kirim HTTP ke wa-bot, simpan cursor) ada di core/whatsapp_notify.py;
 # helper X-15 (_fetch_x15_today, _split_x15_items) reuse yang sudah dipakai
 # /api/x15, TIDAK ada logic baru yang menduplikasi itu.
+async def _wa_x15_lines() -> list[str]:
+    """Blok "kepemilikan ≥5%" dalam format WhatsApp. Dipakai BERSAMA oleh
+    digest harian dan perintah `kepemilikan` di grup -- satu sumber teks,
+    supaya keduanya tidak pernah bercerita beda."""
+    try:
+        raw_items = await _fetch_x15_today(days_back=0)
+        items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+        akumulasi, distribusi, _ = _split_x15_items(items)
+        lines = ["*Kepemilikan ≥5% (X-15) hari ini:*"]
+        if not akumulasi and not distribusi:
+            lines.append("_Tidak ada filing akumulasi/distribusi ≥5% hari ini._")
+        for it in akumulasi[:10]:
+            nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
+            lines.append(f"• {it['kode']} — {nama} naik {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% (+{it['perubahan']:.2f}%)")
+        for it in distribusi[:10]:
+            nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
+            lines.append(f"• {it['kode']} — {nama} turun {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% ({it['perubahan']:.2f}%)")
+        return lines
+    except X15FetchError as e:
+        return [f"_Data kepemilikan ≥5% tidak terjangkau hari ini ({e})._"]
+    except Exception as e:
+        print(f"⚠️ wa-digest: gagal X-15: {type(e).__name__}: {e}")
+        return ["_Gagal memuat data kepemilikan ≥5% hari ini._"]
+
+
 async def _build_wa_digest_text() -> tuple[str, int]:
     """Return (teks siap kirim, latest_id sinyal saat ini). Pemanggil
     (_send_wa_digest_now) yang bertanggung jawab memajukan cursor -- HANYA
@@ -5988,24 +6020,7 @@ async def _build_wa_digest_text() -> tuple[str, int]:
         lines.append("_Tidak ada sinyal baru sejak ringkasan terakhir._")
     lines.append("")
 
-    try:
-        raw_items = await _fetch_x15_today(days_back=0)
-        items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
-        akumulasi, distribusi, _ = _split_x15_items(items)
-        lines.append("*Kepemilikan ≥5% (X-15) hari ini:*")
-        if not akumulasi and not distribusi:
-            lines.append("_Tidak ada filing akumulasi/distribusi ≥5% hari ini._")
-        for it in akumulasi[:10]:
-            nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
-            lines.append(f"• {it['kode']} — {nama} naik {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% (+{it['perubahan']:.2f}%)")
-        for it in distribusi[:10]:
-            nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
-            lines.append(f"• {it['kode']} — {nama} turun {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% ({it['perubahan']:.2f}%)")
-    except X15FetchError as e:
-        lines.append(f"_Data kepemilikan ≥5% tidak terjangkau hari ini ({e})._")
-    except Exception as e:
-        lines.append("_Gagal memuat data kepemilikan ≥5% hari ini._")
-        print(f"⚠️ wa-digest: gagal X-15: {type(e).__name__}: {e}")
+    lines += await _wa_x15_lines()
 
     lines.append("")
     lines.append("_Otomatis dari Ranah Saham. Bukan ajakan membeli/menjual._")
@@ -6045,6 +6060,196 @@ async def _wa_broadcast_loop():
         except Exception as e:
             print(f"⚠️ wa-broadcast-loop: {type(e).__name__}: {e}")
         await asyncio.sleep(WA_CHECK_INTERVAL_SECONDS)
+
+
+# =========================
+# PERINTAH INTERAKTIF DI GRUP WHATSAPP
+# =========================
+# Arahnya kebalikan dari digest harian: wa-bot MENERIMA pesan grup lalu
+# bertanya ke sini lewat POST /api/wa/command. Pembagian tugas tetap sama --
+# Node cuma transport, seluruh logika (siapa boleh dilayani, perintah apa,
+# teksnya seperti apa) ada di Python dan memakai ulang endpoint yang sudah
+# dipakai website, BUKAN perhitungan baru.
+#
+# Dua penjaga yang sengaja ada:
+# 1. Hanya nomor milik akun yang SUDAH di-approve yang dilayani. Tanpa ini,
+#    siapa pun yang diundang ke grup dapat seluruh data tanpa perlu akun, dan
+#    alur daftar->approve jadi tidak ada gunanya.
+# 2. Jeda per-nomor. Otomasi WhatsApp Web itu di luar ToS resmi (lihat
+#    wa-bot/README.md); bot yang menyahut tiap pesan sepanjang hari jauh
+#    lebih mudah dianggap mesin dan berujung nomor dibatasi.
+_WA_CMD_COOLDOWN_SECONDS = 8
+_WA_INVITE_COOLDOWN_SECONDS = 6 * 3600
+_wa_last_reply: dict[str, float] = {}
+_wa_last_invite: dict[str, float] = {}
+
+
+def _wa_boleh_jawab(kunci: str, memori: dict[str, float], jeda: float) -> bool:
+    """True kalau nomor ini sudah boleh dibalas lagi. Sekalian membuang entri
+    kedaluwarsa supaya dict tidak tumbuh tanpa batas."""
+    sekarang = time.monotonic()
+    for k, kapan in list(memori.items()):
+        if sekarang - kapan > jeda:
+            memori.pop(k, None)
+    if sekarang - memori.get(kunci, -jeda) < jeda:
+        return False
+    memori[kunci] = sekarang
+    return True
+
+
+def _wa_phone_from_jid(jid: str) -> str:
+    """"6281234567890@s.whatsapp.net" -> "6281234567890"."""
+    return (jid or "").split("@", 1)[0].split(":", 1)[0].strip()
+
+
+_WA_BANTUAN = (
+    "*Bot Ranah Saham*\n\n"
+    "Ketik salah satu:\n"
+    "• *KODE EMITEN* (mis. `BBCA`) — analisis teknikal ringkas\n"
+    "• *sinyal* — ringkasan Audit Sinyal terbaru\n"
+    "• *screener* — saham lolos saringan breakout hari ini\n"
+    "• *kepemilikan* — filing kepemilikan ≥5% (X-15) hari ini\n\n"
+    "_Bukan ajakan membeli/menjual._"
+)
+
+
+def _wa_fmt_analisis(d: dict) -> str:
+    def angka(v, koma=2, akhiran=""):
+        return "—" if v is None else f"{v:,.{koma}f}".replace(",", ".") + akhiran
+
+    baris = [f"*{d.get('kode')}* — {d.get('rating') or '—'}", ""]
+    harga = d.get("price")
+    ch1 = d.get("change_1d")
+    tanda = "" if ch1 is None else ("+" if ch1 >= 0 else "")
+    baris.append(f"Harga: Rp{angka(harga, 0)} ({tanda}{angka(ch1, 2)}% hari ini)")
+    if d.get("score") is not None:
+        baris.append(f"Skor: {angka(d.get('score'), 1)}/100 · Grade {d.get('grade') or '—'}")
+    if d.get("recommendation"):
+        baris.append(f"Rekomendasi: {d['recommendation']}")
+    baris.append(
+        f"RSI {angka(d.get('rsi'), 1)} · Volume {angka(d.get('vol_ratio'), 2)}x rata-rata"
+    )
+    naik, turun = d.get("potensi_naik_pct"), d.get("risiko_turun_pct")
+    if naik is not None or turun is not None:
+        baris.append(f"Potensi naik {angka(naik, 1, '%')} · risiko turun {angka(turun, 1, '%')}")
+    if d.get("likuiditas"):
+        baris.append(f"Likuiditas: {d['likuiditas']}")
+    if d.get("insight"):
+        baris += ["", d["insight"]]
+    baris += ["", "_Analisis teknikal otomatis, bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_sinyal(rep: dict) -> str:
+    stats = rep.get("stats") or {}
+    baris = ["*Audit Sinyal — ringkasan*", ""]
+    if stats.get("win_rate") is not None:
+        baris.append(f"Win rate: {stats['win_rate']:.1f}% dari {rep.get('n_total', 0)} sinyal")
+    baris.append(f"Posisi berjalan: {rep.get('n_open', 0)}")
+    terakhir = (rep.get("signals") or [])[:5]
+    if terakhir:
+        baris += ["", "*Terakhir tercatat:*"]
+        for s in terakhir:
+            entry = "" if s.get("entry_price") is None else f" · entry Rp{s['entry_price']:,.0f}".replace(",", ".")
+            baris.append(f"• {s.get('kode')} ({_sumber_wa(s.get('source'))}) — {_status_wa(s.get('status'))}{entry}")
+    baris += ["", "Rincian lengkap ada di ranahsaham.com", "_Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+def _status_wa(s: str | None) -> str:
+    return {"TP_HIT": "TP tercapai", "SL_HIT": "kena SL", "OPEN": "berjalan",
+            "PENDING_ENTRY": "menunggu entry", "EXPIRED": "kadaluarsa",
+            "EXPIRED_NO_ENTRY": "entry tidak tercapai"}.get(s or "", s or "—")
+
+
+def _sumber_wa(s: str | None) -> str:
+    return {"TOP_PICK": "Top Pick", "MACD_CROSS": "MACD", "SMART_MONEY": "Smart Money",
+            "NR7_52W": "NR7+52W"}.get(s or "", s or "Top Pick")
+
+
+def _wa_fmt_screener(payload: dict) -> str:
+    """payload = bentuk /api/screener: {"items": [{ticker, price, volume,
+    signal}], "universe": n}."""
+    items = (payload or {}).get("items") or []
+    if not items:
+        return "*Screener breakout hari ini*\n\n_Tidak ada saham yang lolos saringan hari ini._"
+    baris = ["*Screener breakout hari ini*", ""]
+    for it in items[:10]:
+        harga = it.get("price")
+        harga_txt = "" if harga is None else f" · Rp{harga:,.0f}".replace(",", ".")
+        sinyal = f" · {it['signal']}" if it.get("signal") else ""
+        baris.append(f"• *{it.get('ticker')}*{harga_txt}{sinyal}")
+    if len(items) > 10:
+        baris.append(f"_...dan {len(items) - 10} lainnya di ranahsaham.com_")
+    baris += ["", "_Hasil saringan otomatis, bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+async def _wa_handle_command(jid: str, teks: str) -> str | None:
+    """Balasan untuk satu pesan grup, atau None kalau memang tidak perlu
+    dibalas (bukan perintah -- obrolan biasa TIDAK boleh disahut)."""
+    from core.access import get_approved_user_by_phone
+
+    pesan = (teks or "").strip()
+    if not pesan or len(pesan) > 40:  # obrolan panjang jelas bukan perintah
+        return None
+    kunci = pesan.lower().strip("?!. ")
+    nomor = _wa_phone_from_jid(jid)
+
+    kode_valid = {t["kode"] for t in _load_ticker_directory()}
+    kode = _norm_kode(pesan)
+    adalah_kode = kode in kode_valid
+    if kunci not in {"sinyal", "screener", "kepemilikan", "x15", "bantuan", "help", "menu"} and not adalah_kode:
+        return None
+
+    user = await asyncio.to_thread(get_approved_user_by_phone, nomor)
+    if not user:
+        # Diundang sekali saja per beberapa jam -- jangan menceramahi orang
+        # yang cuma kebetulan menyebut kode saham dalam obrolan.
+        if not _wa_boleh_jawab(nomor, _wa_last_invite, _WA_INVITE_COOLDOWN_SECONDS):
+            return None
+        return ("Halo! Bot ini melayani anggota yang akunnya sudah disetujui admin.\n\n"
+                "Daftar dulu di ranahsaham.com pakai *nomor WhatsApp ini*, "
+                "lalu tunggu persetujuan admin ya.")
+
+    if not _wa_boleh_jawab(nomor, _wa_last_reply, _WA_CMD_COOLDOWN_SECONDS):
+        return None
+
+    try:
+        if kunci in {"bantuan", "help", "menu"}:
+            return _WA_BANTUAN
+        if kunci == "sinyal":
+            return _wa_fmt_sinyal(await signals_ringkas())
+        if kunci == "screener":
+            return _wa_fmt_screener(await screener())
+        if kunci in {"kepemilikan", "x15"}:
+            return "\n".join(await _wa_x15_lines())
+        return _wa_fmt_analisis(await _analyze_payload(kode))
+    except HTTPException as e:
+        return f"Maaf, {e.detail}"
+    except X15FetchError as e:
+        return f"Maaf, data kepemilikan sedang tidak terjangkau ({e})."
+    except Exception as e:
+        print(f"⚠️ wa-command '{pesan}' gagal: {type(e).__name__}: {e}")
+        return "Maaf, datanya sedang tidak bisa diambil. Coba lagi sebentar lagi."
+
+
+@app.post("/api/wa/command")
+async def api_wa_command(request: Request):
+    """Dipanggil HANYA oleh sidecar wa-bot (Bearer WA_BOT_SECRET).
+
+    Jalur ini dikecualikan dari access_gate karena pemanggilnya mesin, bukan
+    browser bersesi -- karena itu ia WAJIB gagal-tertutup: tanpa
+    WA_BOT_SECRET terisi, endpoint ini menolak semua orang.
+    """
+    if not WA_BOT_SECRET:
+        raise HTTPException(503, "Bot WhatsApp tidak dikonfigurasi.")
+    kirim = (request.headers.get("authorization") or "")
+    if not hmac.compare_digest(kirim, f"Bearer {WA_BOT_SECRET}"):
+        raise HTTPException(401, "Tidak berwenang.")
+    body = await request.json()
+    balasan = await _wa_handle_command(str(body.get("from") or ""), str(body.get("text") or ""))
+    return {"reply": balasan}
 
 
 @app.get("/api/admin/whatsapp/status")

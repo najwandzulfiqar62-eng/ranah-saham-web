@@ -29,6 +29,35 @@ Sesi login tersimpan di volume `wa_auth` (mount ke `/data`) -- restart
 container BIASA tidak perlu scan ulang. Scan ulang hanya perlu kalau logout
 dari HP atau volume terhapus.
 
+## Perintah di grup (interaktif)
+
+Bot ikut MEMBACA pesan grup dan menjawab perintah berikut:
+
+| Ketik | Balasan |
+|---|---|
+| kode emiten, mis. `BBCA` | analisis teknikal ringkas |
+| `sinyal` | ringkasan Audit Sinyal |
+| `screener` | saham lolos saringan breakout |
+| `kepemilikan` / `x15` | filing kepemilikan ≥5% hari ini |
+| `bantuan` | daftar perintah |
+
+Logikanya TIDAK ada di sini: bot cuma meneruskan pesan ke app Python
+(`POST /api/wa/command`, Bearer `WA_BOT_SECRET`) dan mengirim balasannya.
+Karena itu `APP_BASE_URL` harus menunjuk app utama (default
+`http://127.0.0.1:8000`) -- pastikan portnya sama dengan yang dipakai
+`ranahsaham.service`.
+
+Dua penjaga yang sengaja ada, jangan dilonggarkan tanpa alasan:
+
+1. **Hanya nomor milik akun yang sudah di-approve yang dilayani.** Nomor lain
+   dibalas sekali dengan ajakan mendaftar, lalu didiamkan beberapa jam. Tanpa
+   ini, siapa pun yang diundang ke grup dapat seluruh data tanpa akun dan
+   alur daftar→persetujuan admin jadi tidak ada gunanya.
+2. **Jeda per-nomor + hanya perintah yang jelas yang disahut.** Obrolan biasa
+   tidak pernah dibalas. Bot yang menyahut sepanjang hari jauh lebih mudah
+   dianggap mesin oleh WhatsApp -- risiko nomor dibatasi naik seiring volume
+   pesan, jadi menjawab lebih sering bukan sekadar berisik, tapi berbahaya.
+
 ## Endpoint (internal, Bearer `WA_BOT_SECRET`)
 
 - `GET /status` -- status koneksi + apakah grup sudah dikonfigurasi.

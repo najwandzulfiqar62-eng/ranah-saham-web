@@ -331,6 +331,28 @@ def authenticate(identifier: str, password: str) -> tuple[dict | None, str | Non
     return user, token
 
 
+def get_approved_user_by_phone(phone: str | None) -> dict | None:
+    """Cari akun yang SUDAH disetujui admin berdasarkan nomor WhatsApp-nya.
+
+    Dipakai bot WhatsApp untuk memastikan penanya benar-benar anggota yang
+    sudah lolos persetujuan -- tanpa ini, jalur daftar/approve jadi sia-sia
+    karena datanya bisa diminta cuma-cuma lewat grup. Nomor dinormalkan
+    dengan aturan yang SAMA seperti saat pendaftaran, jadi "0812...",
+    "62812...", dan "+62812..." menunjuk akun yang sama.
+    """
+    ensure_access_tables()
+    try:
+        normalized = _normalize_phone(phone)
+    except ValueError:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM access_user WHERE phone = ? AND status = 'approved'",
+            (normalized,),
+        ).fetchone()
+    return _public(row) if row else None
+
+
 def get_session_user(token: str | None, include_pending: bool = False) -> dict | None:
     if not token:
         return None

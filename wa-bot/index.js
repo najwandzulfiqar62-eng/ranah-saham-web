@@ -12,6 +12,9 @@ const {
 const PORT = parseInt(process.env.WA_BOT_PORT || "3901", 10);
 const SECRET = process.env.WA_BOT_SECRET || "";
 const GROUP_JID = (process.env.WA_GROUP_JID || "").trim();
+// Ke mana pesan grup ditanyakan jawabannya. Bot ini SENGAJA tidak tahu apa-apa
+// soal saham -- seluruh logikanya ada di app Python (POST /api/wa/command).
+const APP_BASE_URL = (process.env.APP_BASE_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
 // Volume di docker-compose di-mount ke /data supaya sesi login (multi-file
 // auth state) bertahan lintas restart container -- tanpa ini admin harus
 // scan QR ulang tiap kali container di-redeploy.
@@ -66,6 +69,37 @@ async function startSock() {
       console.warn(`[wa-bot] Koneksi terputus (status ${statusCode}). ${loggedOut ? "Logged out -- perlu scan QR ulang." : "Mencoba menyambung ulang..."}`);
       if (!loggedOut) {
         startSock().catch((e) => console.error("[wa-bot] Gagal menyambung ulang:", e));
+      }
+    }
+  });
+
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify" || !GROUP_JID) return;
+    for (const msg of messages || []) {
+      try {
+        // Hanya grup yang dikonfigurasi, dan JANGAN pernah menanggapi pesan
+        // bot sendiri (kalau tidak, satu balasan bisa memicu balasan lagi).
+        if (msg.key?.remoteJid !== GROUP_JID || msg.key?.fromMe) continue;
+        const isi = msg.message?.conversation
+          || msg.message?.extendedTextMessage?.text
+          || "";
+        if (!isi.trim()) continue;
+        const pengirim = msg.key.participant || msg.key.remoteJid;
+
+        const res = await fetch(`${APP_BASE_URL}/api/wa/command`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${SECRET}` },
+          body: JSON.stringify({ from: pengirim, text: isi }),
+        });
+        if (!res.ok) {
+          console.warn(`[wa-bot] /api/wa/command menjawab ${res.status}`);
+          continue;
+        }
+        const { reply } = await res.json();
+        // reply null = memang bukan perintah; obrolan biasa tidak disahut.
+        if (reply) await sock.sendMessage(GROUP_JID, { text: reply }, { quoted: msg });
+      } catch (e) {
+        console.error("[wa-bot] Gagal memproses pesan:", e);
       }
     }
   });
