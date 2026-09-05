@@ -178,7 +178,8 @@ def test_sinyal_menyaring_yang_masih_berjalan_dan_mengurut_confidence(client, wa
                      "tp_price": 550, "sl_price": 470, "confidence_score": 60,
                      "source": "MACD_CROSS"},
                     {"kode": "UNGGUL", "status": "PENDING_ENTRY", "entry_price": 800,
-                     "tp_price": 880, "sl_price": 750, "confidence_score": 91,
+                     "tp_price": 880, "tp2_price": 960, "tp3_price": 1040,
+                     "sl_price": 750, "confidence_score": 91, "tp_level_hit": 1,
                      "source": "NR7_52W", "pattern": "NR7 breakout"},
                 ]}
 
@@ -189,7 +190,10 @@ def test_sinyal_menyaring_yang_masih_berjalan_dan_mengurut_confidence(client, wa
     assert "SUDAH" not in hasil, "sinyal yang sudah tutup tidak bisa ditindaklanjuti"
     assert "2 sinyal berjalan" in hasil
     assert hasil.index("UNGGUL") < hasil.index("BIASA"), "harus urut confidence"
-    assert "Rp880" in hasil and "Rp750" in hasil  # TP & SL ikut ditampilkan
+    # TP LENGKAP, bukan cuma TP1, dan level yang sudah tercapai ditandai.
+    assert "Rp750" in hasil                        # SL
+    assert "✅TP1 Rp880" in hasil                   # sudah tercapai
+    assert "TP2 Rp960" in hasil and "TP3 Rp1.040" in hasil
     assert "46.8" in hasil or "46,8" in hasil
 
 
@@ -238,7 +242,11 @@ def test_kode_emiten_membalas_rencana_trading_lengkap(client, wa_bersih, monkeyp
     # Keempat skenario hadir lengkap dengan SL & ukuran posisi.
     for nama in ("Normal", "Pullback", "Deep", "Breakout"):
         assert nama in hasil
-    assert "Rp717" in hasil and "47.517 lembar" in hasil
+    assert "Rp717" in hasil
+    # Skenario modal & ukuran posisi TIDAK ditampilkan: Rp100 juta itu contoh,
+    # bukan modal pembacanya, dan "47.517 lembar" gampang terbaca sebagai
+    # anjuran membeli sebanyak itu.
+    assert "lembar" not in hasil and "modal" not in hasil.lower()
     assert "Rp843" in hasil and "Rp969" in hasil
     assert "Confidence: 60/100" in hasil
     assert "Support: 737 · 723" in hasil

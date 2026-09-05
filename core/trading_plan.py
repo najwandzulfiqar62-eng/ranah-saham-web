@@ -466,14 +466,15 @@ def calculate_advanced_plan_from_df(df, ticker_symbol: str) -> dict | None:
     confidence = calculate_confidence(df, current_price, sr, volume_confirmation)
 
     entries = _determine_entry_points(current_price, atr, sr)
-    support_levels = [sr["S1"], sr["S2"], sr["S3"], sr["S4"]]
 
-    def get_stop_loss(entry_price):
-        supports_below = [s for s in support_levels if s < entry_price]
-        nearest_support = max(supports_below) if supports_below else entry_price * 0.97
-        stop_loss = nearest_support - (atr * 0.2)
-        return stop_loss, entry_price - stop_loss
-
+    # SL/TP memakai _calc_entry_levels() -- aturan yang SAMA dipakai sistem
+    # sinyal dan PDF Laporan Analisis. Versi lama di sini cuma "support
+    # terdekat - 0,2xATR" TANPA jarak minimum, sehingga saat harga kebetulan
+    # duduk persis di atas S1 keluar SL sedekat 1,8% -- nyaris pasti tersapu
+    # noise harian biasa, lalu harganya lanjut naik tanpa kita (keluhan user:
+    # "sl nya jgn kedeketan takut kalo kena sl malah terbang"). _calc_entry_
+    # levels menelusuri S1..S4 sampai ketemu support yang jaraknya >=
+    # MIN_SL_PCT, jadi SL tetap level teknikal sungguhan, bukan angka karangan.
     account_size = 100_000_000
     target_risk_pct = 3.0
     max_risk_amount = account_size * (target_risk_pct / 100)
@@ -483,37 +484,30 @@ def calculate_advanced_plan_from_df(df, ticker_symbol: str) -> dict | None:
             return 0
         return max(int(max_risk_amount / risk_abs), 100)
 
-    def calc_tps(entry_price, risk_pct):
-        risk_amount = entry_price * (risk_pct / 100)
-        min_tp1_pct = max(3.0, risk_pct)
-        tp1_amount = entry_price * (min_tp1_pct / 100)
-        tp1 = entry_price + tp1_amount
-        tp2 = entry_price + (tp1_amount * 2)
-        tp3 = entry_price + (tp1_amount * 3)
-        rr1 = tp1_amount / risk_amount if risk_amount > 0 else 0
-        rr2 = (tp1_amount * 2) / risk_amount if risk_amount > 0 else 0
-        rr3 = (tp1_amount * 3) / risk_amount if risk_amount > 0 else 0
-        return {
-            "tp1": round(tp1, 2), "tp2": round(tp2, 2), "tp3": round(tp3, 2),
-            "tp1_pct": round(min_tp1_pct, 1), "tp2_pct": round(min_tp1_pct * 2, 1),
-            "tp3_pct": round(min_tp1_pct * 3, 1),
-            "rr1": round(rr1, 1), "rr2": round(rr2, 1), "rr3": round(rr3, 1),
-            "risk_amount": round(risk_amount, 2), "risk_pct": risk_pct,
-        }
-
     scenarios = {}
     for key, entry_price in entries.items():
-        sl, risk_abs = get_stop_loss(entry_price)
-        risk_pct = (risk_abs / entry_price) * 100
+        lv = _calc_entry_levels(entry_price, atr, sr)
+        risk_pct = lv["risk_pct"]
+        risk_abs = lv["entry"] - lv["sl"]
         pos = calc_pos(risk_abs)
+
+        def _rr(tp_pct):
+            return round(tp_pct / risk_pct, 1) if risk_pct else 0.0
+
         scenarios[key] = {
-            "entry": entry_price,
-            "sl": sl,
+            "entry": lv["entry"],
+            "sl": lv["sl"],
             "risk_abs": risk_abs,
             "risk_pct": risk_pct,
             "position_size": pos,
-            "position_value": pos * entry_price,
-            "tp": calc_tps(entry_price, risk_pct),
+            "position_value": pos * lv["entry"],
+            "tp": {
+                "tp1": lv["tp1"], "tp2": lv["tp2"], "tp3": lv["tp3"],
+                "tp1_pct": lv["tp1_pct"], "tp2_pct": lv["tp2_pct"], "tp3_pct": lv["tp3_pct"],
+                "rr1": _rr(lv["tp1_pct"]), "rr2": _rr(lv["tp2_pct"]), "rr3": _rr(lv["tp3_pct"]),
+                "risk_amount": round(entry_price * risk_pct / 100, 2),
+                "risk_pct": risk_pct,
+            },
         }
 
     ma5 = df["Close"].rolling(5).mean().iloc[-1]

@@ -6517,10 +6517,12 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None, dengan_kepala: bool = True) 
         # dibawa karena tidak ada di bagian mana pun sebelumnya.
         baris.append(f"_Status breakout: {plan.get('breakout_status') or '—'}_")
 
-    baris += [
-        f"*Rencana masuk* — modal {_rp(plan.get('account_size'))}, risiko "
-        f"{plan.get('target_risk_pct')}% per transaksi",
-    ]
+    # Ukuran posisi & modal SENGAJA tidak ditampilkan di sini (permintaan
+    # user). Modal Rp100 juta itu contoh, bukan modal pembacanya, dan
+    # "47.517 lembar" gampang terbaca seperti anjuran membeli sebanyak itu.
+    # Level entry/SL/TP tetap lengkap -- itu yang bisa dipakai siapa pun,
+    # berapa pun modalnya. Angkanya tetap ada di /api/plan untuk halaman web.
+    baris += ["*Rencana masuk*"]
 
     skenario = plan.get("scenarios") or {}
     for nomor, (kunci, nama, catatan) in enumerate(_WA_SKENARIO, 1):
@@ -6532,7 +6534,6 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None, dengan_kepala: bool = True) 
             "",
             f"{nomor}. *{nama}* — {catatan}",
             f"   Entry {_rp(s.get('entry'))} · SL {_rp(s.get('sl'))} (−{float(s.get('risk_pct') or 0):.1f}%)",
-            f"   {_angka(s.get('position_size'))} lembar ≈ {_rp(s.get('position_value'))}",
             f"   TP {_rp(tp.get('tp1'))} → {_rp(tp.get('tp2'))} → {_rp(tp.get('tp3'))}"
             f"  (R:R 1:{tp.get('rr1')} · 1:{tp.get('rr2')} · 1:{tp.get('rr3')})",
         ]
@@ -6614,12 +6615,17 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         if skor is not None:
             judul += f" · confidence {float(skor):.0f}"
         baris.append(judul)
-        detail = f"   Entry {_rp(s.get('entry_price'))}"
-        if s.get("tp_price"):
-            detail += f" · TP1 {_rp(s.get('tp_price'))}"
-        if s.get("sl_price"):
-            detail += f" · SL {_rp(s.get('sl_price'))}"
-        baris.append(detail)
+        baris.append(f"   Entry {_rp(s.get('entry_price'))} · SL {_rp(s.get('sl_price'))}")
+        # TP LENGKAP (TP1/TP2/TP3), bukan cuma TP1: level yang sudah tercapai
+        # ditandai supaya kelihatan posisinya sedang di tangga yang mana.
+        tercapai = s.get("tp_level_hit") or 0
+        tp = []
+        for n, harga in ((1, s.get("tp_price")), (2, s.get("tp2_price")), (3, s.get("tp3_price"))):
+            if harga is None:
+                continue
+            tp.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
+        if tp:
+            baris.append("   " + " · ".join(tp))
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
             jejak += f" · {s['pattern']}"

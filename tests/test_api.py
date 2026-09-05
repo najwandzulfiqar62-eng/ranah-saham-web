@@ -5636,3 +5636,46 @@ def test_sm_process_df_allows_normal_move_within_ara_arb_bounds():
     result = app_module._process_sm_df("TESTNORMALMOVE", df)
     assert result is not None
     assert result["chg1"] == 6.0
+
+
+def test_rencana_lanjutan_tidak_pernah_memasang_sl_kedeketan():
+    """Keluhan user: "sl nya jgn kedeketan takut kalo kena sl malah terbang".
+
+    calculate_advanced_plan_from_df() dulu memakai aturannya sendiri
+    (support terdekat - 0,2xATR) TANPA jarak minimum, sehingga saat harga
+    kebetulan duduk persis di atas S1 keluar SL sedekat ~1-2% -- nyaris pasti
+    tersapu noise harian, bukan karena tren teknikalnya rusak. Sekarang ia
+    memakai _calc_entry_levels() yang SAMA dengan sistem sinyal & PDF, yang
+    menuruni S1..S4 sampai jaraknya >= MIN_SL_PCT.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from core.trading_plan import MIN_SL_PCT, calculate_advanced_plan_from_df
+
+    rng = np.random.default_rng(7)
+    n = 200
+    # .values dipakai sengaja: kalau Series ber-index angka dimasukkan ke
+    # DataFrame ber-index tanggal, pandas menyelaraskan index dan SELURUH
+    # nilainya jadi NaN -- data ujinya kosong tanpa terlihat kosong.
+    close = 1000 + np.cumsum(rng.normal(0, 8, n))
+    df = pd.DataFrame({
+        "Open": np.concatenate([[close[0]], close[:-1]]),
+        "High": close + 6,
+        "Low": close - 6,
+        "Close": close,
+        "Volume": rng.integers(1_000_000, 5_000_000, n),
+    }, index=pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n))
+
+    plan = calculate_advanced_plan_from_df(df, "UJI")
+    assert plan is not None
+    for nama, s in plan["scenarios"].items():
+        assert s["sl"] < s["entry"], f"{nama}: SL harus di bawah entry"
+        jarak = (s["entry"] - s["sl"]) / s["entry"] * 100
+        # entry & sl dibulatkan ke rupiah bulat, jadi jaraknya boleh meleset
+        # paling banyak satu rupiah dari lantai 3% -- bukan toleransi karangan.
+        longgar = 100.0 / s["entry"]
+        assert jarak >= MIN_SL_PCT - longgar, f"{nama}: SL cuma {jarak:.2f}% dari entry"
+        # TP tetap berjenjang naik dan R:R-nya konsisten dengan risikonya.
+        assert s["tp"]["tp1"] < s["tp"]["tp2"] < s["tp"]["tp3"]
+        assert s["tp"]["rr1"] >= 1.0
