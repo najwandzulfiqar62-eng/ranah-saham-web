@@ -4766,8 +4766,32 @@ async function loadSignalAudit(){
       else filtered = base.filter(s => s.status === auditFilter);
     }
     
-    const isMore = auditLimit < filtered.length;
-    const toRender = filtered.slice(0, auditLimit);
+    // SATU BARIS PER EMITEN. ERAA punya 10 sinyal (Rp358 sampai Rp595);
+    // menampilkan semuanya membuat tabel panjang tanpa menjawab apa pun --
+    // permintaan user: "eraa jga masih bnyk nongol disinyal, saya bilang kan
+    // 1 aja". Yang dipakai sebagai baris: sinyal TERBARU (itu yang bisa
+    // ditindaklanjuti), diperkaya jumlah sinyal emiten itu dan puncak
+    // TERTINGGI di antara seluruhnya (termasuk sinyal yang sudah ditutup --
+    // di sanalah puncak terbesar sering terjadi).
+    const _perEmiten = {}, _urutan = [];
+    for(const s of filtered){
+      const ada = _perEmiten[s.kode];
+      if(!ada){
+        _perEmiten[s.kode] = Object.assign({}, s, {_n:1, _puncakMax:s.puncak_return_pct ?? null});
+        _urutan.push(s.kode);
+        continue;
+      }
+      const n = ada._n + 1;
+      let pmax = ada._puncakMax;
+      if(s.puncak_return_pct != null && (pmax == null || s.puncak_return_pct > pmax)) pmax = s.puncak_return_pct;
+      // Baris diwakili sinyal TERBARU; riwayatnya tetap terbawa sbg ringkasan.
+      const pakaiBaru = (s.recorded_at||'') > (ada.recorded_at||'');
+      _perEmiten[s.kode] = Object.assign({}, pakaiBaru ? s : ada, {_n:n, _puncakMax:pmax});
+    }
+    const digabung = _urutan.map(k => _perEmiten[k]);
+
+    const isMore = auditLimit < digabung.length;
+    const toRender = digabung.slice(0, auditLimit);
 
     const rows = toRender.map(s => {
       const tanggal=(s.recorded_at||'').slice(0,10);
@@ -4817,9 +4841,30 @@ async function loadSignalAudit(){
       // sinyal yang keburu kena SL, angka inilah yang menjawab "harusnya
       // udah profit puluhan persen kalau entry dari awal" -- dengan angka,
       // bukan perasaan. Ditandai jelas sbg PUNCAK, bukan hasil yang diraih.
-      const puncakTxt=s.puncak_return_pct==null?'':
-        `<div style="font-size:9.5px;color:var(--bull);margin-top:2px" title="Harga tertinggi sejak sinyal muncul${s.puncak_date?' ('+s.puncak_date+')':''} — bukan hasil yang direalisasikan">`
-        +`puncak ${s.puncak_return_pct>=0?'+':''}${fmt(s.puncak_return_pct,1)}%</div>`;
+      // Puncak TERTINGGI di antara seluruh sinyal emiten ini, bukan cuma
+      // sinyal yang kebetulan mewakili barisnya.
+      const puncakNilai=(s._puncakMax!=null?s._puncakMax:s.puncak_return_pct);
+      const puncakTxt=puncakNilai==null?'':
+        `<div style="font-size:9.5px;color:var(--bull);margin-top:2px" title="Harga tertinggi sejak sinyal muncul — bukan hasil yang direalisasikan">`
+        +`puncak ${puncakNilai>=0?'+':''}${fmt(puncakNilai,1)}%</div>`
+        +((s._n>1)?`<div class="muted" style="font-size:9px">${s._n} sinyal</div>`:'');
+      // Anjuran, bukan cuma angka: dua situasi yang keputusannya berbeda.
+      // Stop mengikuti TANGGA yang sudah dipakai audit (sesudah TP1 ke titik
+      // impas, sesudah TP2 ke level TP1) -- bukan aturan baru.
+      const _naik=(s.floating_return_pct!=null?s.floating_return_pct:(s.sejak_sinyal_return_pct||0));
+      let anjuran='';
+      if(s.status==='PENDING_ENTRY'){
+        anjuran=`Belum punya: pasang beli Rp${fmt(s.entry_price)} (SL Rp${fmt(s.sl_price)})`;
+      }else if(s.status==='OPEN'){
+        const lv=s.tp_level_hit||0;
+        const jaga=lv>=2&&s.tp_price?`stop naik ke TP1 Rp${fmt(s.tp_price)}`
+          :lv>=1?`stop ke titik impas Rp${fmt(s.entry_price)}`
+          :`stop tetap Rp${fmt(s.sl_price)}`;
+        anjuran=`HOLD — ${jaga}`;
+        if(_naik>3&&ml&&ml.pullback) anjuran+=` · belum punya: jangan kejar, tunggu Rp${fmt(ml.pullback.entry)} (SL Rp${fmt(ml.pullback.sl)})`;
+        else if(s.entry_price!=null) anjuran+=` · belum punya: boleh masuk sekitar Rp${fmt(s.entry_price)}`;
+      }
+      const anjuranTxt=anjuran?`<div style="font-size:9.5px;color:var(--gold);margin-top:3px">${anjuran}</div>`:'';
       // Entry aslinya sudah lewat -> level yang berguna adalah level HARI INI
       // (dihitung fungsi rencana yang sama dengan halaman Rencana Trading).
       const ml=s.masuk_lagi||null;
@@ -4838,7 +4883,7 @@ async function loadSignalAudit(){
         return `<tr style="cursor:pointer" data-k="${s.kode}">
           <td>${tickerTag(s.kode)}${_riskBadge(s)}${_corpBadge(s)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div>${puncakTxt}</td>
           <td class="hide-xs">${_sourceLabel(s.source)} ${dirBadge}</td>
-          <td>Rp${fmt(s.entry_price)}${masukLagiTxt}</td>
+          <td>Rp${fmt(s.entry_price)}${masukLagiTxt}${anjuranTxt}</td>
           <td style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
           <td style="color:var(--bear);font-family:'JetBrains Mono',monospace;font-size:11px">Rp${fmt(s.sl_price)} <div class="muted" style="font-size:9.5px">(${slSign}${fmt(s.sl_pct,1)}%)</div></td>
           <td style="color:${_auditStatusColor(s)}">${_auditStatusLabel(s)}</td>
@@ -4864,6 +4909,10 @@ async function loadSignalAudit(){
           ${s.puncak_return_pct==null?'':`<div class="zeta-sig-row" style="margin-top:4px">
             <span class="zeta-sig-lbl">Puncak sejak muncul</span>
             <span class="zeta-sig-val" style="color:var(--bull)">${s.puncak_return_pct>=0?'+':''}${fmt(s.puncak_return_pct,1)}%${s.puncak_date?` <span class="muted" style="font-size:9.5px">${s.puncak_date}</span>`:''}</span>
+          </div>`}
+          ${!anjuran?'':`<div class="zeta-sig-row" style="margin-top:4px">
+            <span class="zeta-sig-lbl">Saran</span>
+            <span class="zeta-sig-val" style="color:var(--gold);font-size:11px;text-align:right">${anjuran}</span>
           </div>`}
           ${(!ml||!(ml.pullback||mlDeep))?'':`<div class="zeta-sig-row" style="margin-top:4px">
             <span class="zeta-sig-lbl">Masuk lagi</span>
