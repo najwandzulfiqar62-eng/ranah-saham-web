@@ -621,3 +621,45 @@ def test_puncak_tidak_pernah_memicu_unduhan_dari_permintaan_user(monkeypatch):
     # di sini "apakah dicoba", bukan "apakah melempar".)
     asyncio.run(app_module._tempel_puncak_sejak_sinyal(sinyal, boleh_fetch=True))
     assert ditembak, "pemanas cache justru tidak pernah mencoba mengunduh"
+
+
+def test_sinyal_menyebut_yang_terbang_sesudah_sl_tanpa_mengklaimnya_untung(client, wa_bersih, monkeypatch):
+    """User minta CSMI/GIAA yang kena SL lalu terbang ikut tampil di
+    ringkasan. Ditampilkan -- TAPI tidak boleh dipajang seperti keuntungan:
+    posisinya sudah ditutup rugi, jadi angka itu tidak pernah diraih siapa
+    pun yang mengikuti aturannya."""
+    import core.signal_history as sh
+    import web.app as app_module
+
+    def _report_palsu():
+        return {"stats": {"win_rate": 50.0}, "n_total": 3, "n_open": 1,
+                "signals": [
+                    {"kode": "CSMI", "status": "SL_HIT", "entry_price": 200,
+                     "puncak_return_pct": 88.4, "puncak_date": "2026-08-19",
+                     "emiten_rekap": {"tanggal_pertama": "2026-07-05",
+                                      "entry_pertama": 190.0, "dari_pertama_pct": 74.2}},
+                    {"kode": "GIAA", "status": "SL_HIT", "entry_price": 55,
+                     "puncak_return_pct": 31.0, "puncak_date": "2026-08-11"},
+                    # Di bawah ambang, tidak perlu diramaikan.
+                    {"kode": "SEPI", "status": "SL_HIT", "entry_price": 100,
+                     "puncak_return_pct": 2.0},
+                    {"kode": "JALAN", "status": "OPEN", "entry_price": 400,
+                     "tp_price": 440, "sl_price": 380, "confidence_score": 70},
+                ]}
+
+    async def _lewati_pengayaan(*a, **k):
+        return None
+
+    monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati_pengayaan)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+    assert "Sempat terbang sesudah kena SL* (2)" in hasil
+    assert "CSMI" in hasil and "+88.4%" in hasil
+    assert hasil.index("CSMI") < hasil.index("GIAA"), "urut dari puncak tertinggi"
+    assert "SEPI" not in hasil
+    # Wajib ada penyangkalan yang tegas, bukan sekadar angka mentah.
+    assert "Bukan keuntungan yang diraih" in hasil
+    assert "sinyal pertama 2026-07-05" in hasil
+

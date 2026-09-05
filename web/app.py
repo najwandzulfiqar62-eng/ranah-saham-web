@@ -3773,6 +3773,40 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         if rencana.get(s["kode"]):
             s["masuk_lagi"] = rencana[s["kode"]]
 
+    # Rekap PER EMITEN. Satu saham sering muncul berkali-kali (ERAA: 10 sinyal
+    # dari 358 sampai 595, sebagian kena SL), jadi membaca satu baris saja
+    # tidak menceritakan apa pun soal "kalau ikut sejak awal".
+    #
+    # Dua angka disebut, TIDAK cuma yang paling enak dibaca: dari sinyal
+    # PERTAMA (itulah yang benar-benar dialami orang yang ikut sejak awal)
+    # dan dari entry TERENDAH (permintaan user). Yang kedua memilih kasus
+    # terbaik dari sekian entry, jadi memajangnya sendirian akan melebihkan
+    # -- karena itu selalu berpasangan dengan yang pertama.
+    per_emiten: dict[str, list[dict]] = {}
+    for s in dipakai:
+        per_emiten.setdefault(s["kode"], []).append(s)
+    for kode, daftar in per_emiten.items():
+        bar = peta.get(kode)
+        if not bar or len(daftar) < 2:
+            continue
+        harga_kini = bar[-1][2]
+        urut_waktu = sorted(daftar, key=lambda x: (x.get("entry_filled_at") or x.get("recorded_at")))
+        pertama = urut_waktu[0]
+        terendah = min(daftar, key=lambda x: float(x["entry_price"]))
+        if is_price_scale_anomaly(float(pertama["entry_price"]), harga_kini):
+            continue
+        rekap = {
+            "jumlah_sinyal": len(daftar),
+            "tanggal_pertama": (pertama.get("entry_filled_at") or pertama.get("recorded_at"))[:10],
+            "entry_pertama": float(pertama["entry_price"]),
+            "dari_pertama_pct": round((harga_kini / float(pertama["entry_price"]) - 1) * 100, 2),
+            "entry_terendah": float(terendah["entry_price"]),
+            "dari_terendah_pct": round((harga_kini / float(terendah["entry_price"]) - 1) * 100, 2),
+            "harga_kini": round(harga_kini, 2),
+        }
+        for s in daftar:
+            s["emiten_rekap"] = rekap
+
 
 @app.get("/api/signals/ringkas")
 async def signals_ringkas():
@@ -6871,6 +6905,28 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         baris += ["", f"*{nama_blok}* ({len(kelompok)}) — _{catatan}_", ""]
         for s in kelompok:
             baris += _kartu(s)
+
+    # "Sempat terbang sesudah kena SL". Diminta user karena beberapa emiten
+    # (CSMI, GIAA) naik jauh setelah stop-nya kena. Sengaja TIDAK dipajang
+    # sebagai prestasi: posisinya sudah ditutup rugi, jadi angka itu tidak
+    # pernah diraih siapa pun yang mengikuti aturannya. Yang jujur adalah
+    # menyebutnya apa adanya -- bukti stop-nya kesempitan, dan itulah alasan
+    # lantai SL dinaikkan ke 2xATR.
+    terbang = [s for s in semua
+               if s.get("status") == "SL_HIT" and (s.get("puncak_return_pct") or 0) >= 10]
+    terbang.sort(key=lambda s: s["puncak_return_pct"], reverse=True)
+    if terbang:
+        baris += ["", f"*Sempat terbang sesudah kena SL* ({len(terbang)})",
+                  "_Bukan keuntungan yang diraih — posisinya sudah ditutup rugi. "
+                  "Ini justru bukti stop-nya kesempitan; lantai SL sudah dinaikkan._", ""]
+        for s in terbang[:8]:
+            tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
+            baris.append(f"• *{s['kode']}* — puncak +{s['puncak_return_pct']:.1f}%{tgl}")
+            rekap = s.get("emiten_rekap")
+            if rekap:
+                baris.append(f"   dari sinyal pertama {rekap['tanggal_pertama']} "
+                             f"(Rp{rekap['entry_pertama']:,.0f}".replace(",", ".")
+                             + f"): {rekap['dari_pertama_pct']:+.1f}%")
 
     baris += ["", "_Sinyal yang sudah kena TP1/TP2 TETAP di daftar selama posisinya "
                   "belum ditutup — TP berikutnya masih berlaku. Yang sudah tutup "
