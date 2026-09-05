@@ -6295,6 +6295,54 @@ async def _wa_x15_lines() -> list[str]:
         return ["_Gagal memuat data kepemilikan ≥5% hari ini._"]
 
 
+async def _wa_masuk_lagi_lines() -> list[str]:
+    """Kesempatan MASUK LAGI hari ini, untuk digest harian.
+
+    Permintaan user: "kalau memang masuk ke kategori entry lagi, masukin
+    notifikasi aja". Yang disebut di sini HANYA sinyal berjalan yang harganya
+    sudah kembali menyentuh area masuk terbaiknya -- itulah yang layak
+    membangunkan orang di pagi hari. Sinyal yang harganya masih jauh di atas
+    area itu sengaja TIDAK disebut: mengabarkannya tiap hari cuma melatih
+    orang mengabaikan notifikasi.
+
+    Ambang 2% di atas area dianggap "sudah menyentuh" -- harga jarang berhenti
+    persis di angka, dan menuntut kena persis membuat peluangnya lewat.
+    """
+    from core.signal_history import get_signal_report
+
+    try:
+        laporan = await asyncio.to_thread(get_signal_report)
+        sinyal = [s for s in (laporan.get("signals") or []) if s.get("status") == "OPEN"]
+        await _tempel_puncak_sejak_sinyal(sinyal)
+    except Exception as e:
+        print(f"⚠️ wa-digest: gagal menyiapkan 'masuk lagi': {type(e).__name__}: {e}")
+        return []
+
+    siap = []
+    for s in sinyal:
+        ml = s.get("masuk_lagi") or {}
+        area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
+                      key=lambda a: a["entry"])
+        harga = s.get("floating_price") or s.get("current_price")
+        if not area or harga is None:
+            continue
+        for a in area:
+            if harga <= a["entry"] * 1.02:
+                siap.append((s, a, harga))
+                break
+
+    if not siap:
+        return []
+    siap.sort(key=lambda x: x[0].get("confidence_score") or 0, reverse=True)
+    baris = ["", f"*Kesempatan masuk lagi hari ini* ({len(siap)})"]
+    for s, a, harga in siap:
+        baris.append(f"• *{s['kode']}* di {_rp(harga)} — area {_rp(a['entry'])}, "
+                     f"SL {_rp(a['sl'])}")
+    baris.append("_Harga sudah kembali ke area masuk yang dihitung hari ini. "
+                 "Bukan ajakan membeli._")
+    return baris
+
+
 async def _build_wa_digest_text() -> tuple[str, int]:
     """Return (teks siap kirim, latest_id sinyal saat ini). Pemanggil
     (_send_wa_digest_now) yang bertanggung jawab memajukan cursor -- HANYA
@@ -6323,6 +6371,7 @@ async def _build_wa_digest_text() -> tuple[str, int]:
         lines.append("_Tidak ada sinyal baru sejak ringkasan terakhir._")
     lines.append("")
 
+    lines += await _wa_masuk_lagi_lines()
     lines += await _wa_x15_lines()
 
     lines.append("")

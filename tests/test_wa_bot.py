@@ -719,3 +719,39 @@ def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa
     # Belum entry -> pasang beli, bukan disuruh HOLD.
     assert "*Belum punya*: pasang beli di Rp250, SL Rp235" in hasil
     assert "stop tetap Rp940" in hasil
+
+
+def test_digest_harian_hanya_mengabarkan_yang_sudah_menyentuh_area_masuk(monkeypatch):
+    """Permintaan user: "kalau memang masuk ke kategori entry lagi, masukin
+    notifikasi aja". Yang layak membangunkan orang pagi-pagi hanya sinyal
+    yang harganya SUDAH kembali ke area masuk -- mengabarkan semuanya tiap
+    hari cuma melatih orang mengabaikan notifikasi."""
+    import asyncio
+
+    import core.signal_history as sh
+    import web.app as app_module
+
+    def _report_palsu():
+        return {"signals": [
+            # Harga sudah turun ke area -> layak dikabarkan.
+            {"kode": "SIAP", "status": "OPEN", "entry_price": 600, "sl_price": 560,
+             "confidence_score": 80, "floating_price": 552,
+             "masuk_lagi": {"pullback": {"entry": 575, "sl": 540},
+                            "deep": {"entry": 548, "sl": 515}}},
+            # Masih jauh di atas area -> JANGAN diramaikan.
+            {"kode": "JAUH", "status": "OPEN", "entry_price": 600, "sl_price": 560,
+             "confidence_score": 90, "floating_price": 700,
+             "masuk_lagi": {"pullback": {"entry": 575, "sl": 540}}},
+        ]}
+
+    async def _lewati(*a, **k):
+        return None
+
+    monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati)
+
+    baris = asyncio.run(app_module._wa_masuk_lagi_lines())
+    teks = "\n".join(baris)
+    assert "Kesempatan masuk lagi hari ini* (1)" in teks
+    assert "SIAP" in teks and "Rp548" in teks and "SL Rp515" in teks
+    assert "JAUH" not in teks, "yang harganya masih jauh tidak boleh diramaikan"
