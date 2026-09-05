@@ -188,17 +188,18 @@ def test_sinyal_menyaring_yang_masih_berjalan_dan_mengurut_confidence(client, wa
 
     hasil = _kirim(client, "sinyal").json()["reply"]
     assert "SUDAH" not in hasil, "sinyal yang sudah tutup tidak bisa ditindaklanjuti"
-    assert "2 sinyal aktif" in hasil
+    # Dikelompokkan per EMITEN, bukan per baris sinyal.
+    assert "2 emiten aktif" in hasil
     # Pertanyaan nyata anggota grup ("yg berjalan sm yg belum entry?") harus
     # terjawab oleh daftarnya sendiri, bukan perlu ditanyakan ke admin.
     assert "*Menunggu entry* (1)" in hasil
     assert "*Sedang berjalan* (1)" in hasil
     assert hasil.index("Menunggu entry") < hasil.index("Sedang berjalan")
-    assert "sudah TP1" in hasil                       # progres TP disebut
     assert "TETAP di daftar selama posisinya belum ditutup" in hasil
     assert hasil.index("UNGGUL") < hasil.index("BIASA"), "harus urut confidence"
-    # TP LENGKAP, bukan cuma TP1, dan level yang sudah tercapai ditandai.
-    assert "Rp750" in hasil                        # SL
+    # Yang bisa ditindaklanjuti sekarang disebut terpisah & lengkap.
+    assert "*Sinyal terbaru*" in hasil
+    assert "entry Rp800 · SL Rp750" in hasil
     assert "✅TP1 Rp880" in hasil                   # sudah tercapai
     assert "TP2 Rp960" in hasil and "TP3 Rp1.040" in hasil
     assert "46.8" in hasil or "46,8" in hasil
@@ -232,13 +233,17 @@ def test_sinyal_menyebut_puncak_sejak_muncul(client, wa_bersih, monkeypatch):
     _daftarkan_approved()
 
     hasil = _kirim(client, "sinyal").json()["reply"]
-    assert "Sejak 2026-07-01 (45 hari bursa)" in hasil
-    assert "sekarang +87.2%" in hasil or "sekarang +87.3%" in hasil
-    assert "*puncak +132.5%*" in hasil and "2026-08-20" in hasil
-    # Entry aslinya sudah lewat jauh, jadi yang berguna level HARI INI.
-    assert "Masuk lagi:" in hasil
-    assert "pullback Rp745 (SL Rp690)" in hasil
-    assert "deep Rp700 (SL Rp650)" in hasil
+    assert "Sejak 2026-07-01 di Rp400" in hasil
+    assert "+87.2%" in hasil or "+87.3%" in hasil
+    assert "Puncak *+132.5%*" in hasil and "2026-08-20" in hasil
+    # Puncak terjauh ikut diringkas di atas, beserta penyangkalannya.
+    assert "*Puncak terjauh sejak sinyal muncul*" in hasil
+    assert "bukan hasil yang direalisasikan" in hasil
+    # Entry aslinya sudah lewat jauh, jadi yang berguna level HARI INI --
+    # disampaikan sebagai anjuran, bukan sekadar angka.
+    assert "jangan kejar" in hasil
+    assert "tunggu Rp745 (SL Rp690)" in hasil
+    assert "lebih dalam Rp700" in hasil
 
 
 def test_kode_emiten_membalas_rencana_trading_lengkap(client, wa_bersih, monkeypatch):
@@ -551,7 +556,7 @@ def test_sinyal_dibatasi_20_terbaik(client, wa_bersih, monkeypatch):
     _daftarkan_approved()
 
     hasil = _kirim(client, "sinyal").json()["reply"]
-    assert "20 teratas dari 30 sinyal aktif" in hasil
+    assert "20 teratas dari 30 emiten aktif" in hasil
     assert "SG00" in hasil and "SG19" in hasil     # confidence tertinggi ikut
     assert "SG20" not in hasil and "SG29" not in hasil  # yang terlemah dipotong
 
@@ -655,11 +660,56 @@ def test_sinyal_menyebut_yang_terbang_sesudah_sl_tanpa_mengklaimnya_untung(clien
     _daftarkan_approved()
 
     hasil = _kirim(client, "sinyal").json()["reply"]
-    assert "Sempat terbang sesudah kena SL* (2)" in hasil
+    assert "*Puncak terjauh sejak sinyal muncul*" in hasil
     assert "CSMI" in hasil and "+88.4%" in hasil
     assert hasil.index("CSMI") < hasil.index("GIAA"), "urut dari puncak tertinggi"
-    assert "SEPI" not in hasil
-    # Wajib ada penyangkalan yang tegas, bukan sekadar angka mentah.
-    assert "Bukan keuntungan yang diraih" in hasil
-    assert "sinyal pertama 2026-07-05" in hasil
+    # Wajib jujur: posisinya sudah ditutup rugi, angka itu tidak pernah diraih.
+    assert "posisi sudah ditutup di SL" in hasil
+    assert "bukan hasil yang direalisasikan" in hasil
 
+
+
+def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa_bersih, monkeypatch):
+    """User minta bot bertindak seperti asisten: "ini misalkan udah naik
+    hold jika yg sudah punya barang, atau jika belum bisa entry di berapa".
+    Dua sisi itu keputusannya berbeda, jadi dijawab terpisah."""
+    import core.signal_history as sh
+    import web.app as app_module
+
+    async def _lewati(*a, **k):
+        return None
+
+    def _report_palsu():
+        return {"stats": {"win_rate": 50.0}, "n_total": 3, "n_open": 2,
+                "signals": [
+                    # Sudah TP1 dan harga sudah jalan jauh -> jangan kejar.
+                    {"kode": "TERBANG", "status": "OPEN", "entry_price": 400,
+                     "tp_price": 440, "sl_price": 380, "tp_level_hit": 1,
+                     "confidence_score": 90, "sejak_sinyal_return_pct": 48.0,
+                     "masuk_lagi": {"pullback": {"entry": 520, "sl": 480},
+                                    "deep": {"entry": 500, "sl": 465}}},
+                    # Masih dekat entry -> boleh masuk di sekitar entry.
+                    {"kode": "DEKAT", "status": "OPEN", "entry_price": 1000,
+                     "tp_price": 1080, "sl_price": 940, "confidence_score": 70,
+                     "sejak_sinyal_return_pct": 1.2},
+                    # Belum kena entry sama sekali.
+                    {"kode": "NUNGGU", "status": "PENDING_ENTRY", "entry_price": 250,
+                     "tp_price": 270, "sl_price": 235, "confidence_score": 60},
+                ]}
+
+    monkeypatch.setattr(sh, "get_signal_report", _report_palsu)
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+
+    # Sudah TP1 -> stop digeser ke titik impas (tangga stop yang dipakai audit).
+    assert "*Sudah punya*: HOLD, stop digeser ke titik impas (Rp400)" in hasil
+    # Sudah jalan jauh -> jangan kejar, tunggu level pullback.
+    assert "jangan kejar" in hasil and "tunggu Rp520 (SL Rp480)" in hasil
+    assert "lebih dalam Rp500" in hasil
+    # Masih dekat entry -> boleh masuk di sekitar entry.
+    assert "boleh masuk di sekitar Rp1.000 dengan SL Rp940" in hasil
+    # Belum entry -> pasang beli, bukan disuruh HOLD.
+    assert "*Belum punya*: pasang beli di Rp250, SL Rp235" in hasil
+    assert "stop tetap Rp940" in hasil

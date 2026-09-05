@@ -6794,143 +6794,166 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None, dengan_kepala: bool = True) 
 
 
 def _wa_fmt_sinyal(rep: dict) -> str:
-    """Rekomendasi sinyal TERBAIK yang sedang berjalan, bukan sekadar
-    statistik.
+    """Rekomendasi sinyal, DIKELOMPOKKAN PER EMITEN.
 
-    Yang ditampilkan hanya sinyal yang masih hidup (OPEN/PENDING_ENTRY) --
-    sinyal yang sudah tutup tidak bisa lagi ditindaklanjuti. Urutannya
-    memakai confidence_score yang DISIMPAN bersama sinyalnya (dengan ai_score
-    sebagai cadangan untuk baris lama), jadi "terbaik" di sini berarti sama
-    persis dengan peringkat yang dipakai aplikasi -- bukan penilaian baru.
+    Satu saham bisa punya belasan sinyal (ERAA: 10 baris, dari Rp358 sampai
+    Rp595). Menampilkannya sebagai belasan baris terpisah membuat daftar
+    panjang tapi tidak menjawab apa pun -- permintaan user: "jadi 1 aja loh
+    sinyalnya, entry paling rendah dia di berapa waktu pertama kali muncul,
+    abis itu kalau masuk sinyal lagi kasih tahu entry-nya lagi sama SL-nya".
+
+    Jadi tiap emiten satu kartu: riwayatnya diringkas (sinyal pertama, entry
+    terendah, puncak), lalu yang bisa DITINDAKLANJUTI sekarang -- entry & SL
+    sinyal terbarunya -- disebut terpisah.
     """
     semua = rep.get("signals") or []
     aktif = [s for s in semua if s.get("status") in ("OPEN", "PENDING_ENTRY")]
-    aktif.sort(key=lambda s: (s.get("confidence_score") or s.get("ai_score") or 0), reverse=True)
-    # Daftar lain sengaja tampil utuh, TAPI sinyal berjalan bisa puluhan dan
-    # tiap barisnya memuat entry/TP/SL -- dibatasi 20 teratas supaya masih
-    # terbaca di layar HP. Karena sudah terurut confidence, yang terpotong
-    # memang yang paling lemah, bukan sembarang.
-    total_aktif = len(aktif)
-    aktif = aktif[:20]
 
     stats = rep.get("stats") or {}
-    judul = "*Rekomendasi sinyal terbaik*"
-    if total_aktif > len(aktif):
-        judul += f" — {len(aktif)} teratas dari {total_aktif} sinyal aktif"
-    elif total_aktif:
-        judul += f" — {total_aktif} sinyal aktif"
-    baris = [judul]
+    baris = ["*Rekomendasi sinyal terbaik*"]
     if stats.get("win_rate") is not None:
         baris.append(f"_Win rate tercatat {stats['win_rate']:.1f}% dari "
                      f"{rep.get('n_total', 0)} sinyal._")
+
+    # Ringkasan "puncak terjauh" -- diminta user: yang pucuknya paling jauh
+    # itu saham apa. Dihitung dari SELURUH sinyal (termasuk yang sudah
+    # ditutup), karena justru di sanalah puncak terbesar sering terjadi.
+    puncak_per_kode: dict[str, dict] = {}
+    for s in semua:
+        p = s.get("puncak_return_pct")
+        if p is None:
+            continue
+        lama = puncak_per_kode.get(s["kode"])
+        if lama is None or p > lama["puncak_return_pct"]:
+            puncak_per_kode[s["kode"]] = s
+    terjauh = sorted(puncak_per_kode.values(),
+                     key=lambda x: x["puncak_return_pct"], reverse=True)[:5]
+    if terjauh:
+        baris += ["", "*Puncak terjauh sejak sinyal muncul*"]
+        for s in terjauh:
+            tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
+            catatan = " · posisi sudah ditutup di SL" if s.get("status") == "SL_HIT" else ""
+            baris.append(f"• *{s['kode']}* +{s['puncak_return_pct']:.1f}%{tgl}{catatan}")
+        baris.append("_Puncak = harga tertinggi yang pernah dicapai, bukan hasil "
+                     "yang direalisasikan._")
 
     if not aktif:
         baris += ["", "_Tidak ada sinyal aktif saat ini._", "",
                   "Coba *screener* untuk kandidat saringan Minervini hari ini."]
         return "\n".join(baris)
 
-    def _kartu(s: dict) -> list[str]:
-        skor = s.get("confidence_score") or s.get("ai_score")
+    # Satu kartu per emiten; sinyal TERBARU jadi yang bisa ditindaklanjuti.
+    per_kode: dict[str, list[dict]] = {}
+    for s in aktif:
+        per_kode.setdefault(s["kode"], []).append(s)
+
+    def _skor(s):
+        return s.get("confidence_score") or s.get("ai_score") or 0
+
+    def _waktu(s):
+        return s.get("entry_filled_at") or s.get("recorded_at") or ""
+
+    kelompok = []
+    for kode, daftar in per_kode.items():
+        terbaru = max(daftar, key=_waktu)
+        kelompok.append((kode, terbaru, max(_skor(x) for x in daftar)))
+    kelompok.sort(key=lambda k: k[2], reverse=True)
+
+    total_emiten = len(kelompok)
+    kelompok = kelompok[:20]
+    if total_emiten > len(kelompok):
+        baris[0] += f" — {len(kelompok)} teratas dari {total_emiten} emiten aktif"
+    else:
+        baris[0] += f" — {total_emiten} emiten aktif"
+
+    def _kartu(kode: str, s: dict, skor: float) -> list[str]:
         arah = " (SELL)" if s.get("direction") == "SELL" else ""
-        kepala = f"*{s.get('kode')}*{arah}"
-        if skor is not None:
-            kepala += f" · confidence {float(skor):.0f}"
+        kepala = f"*{kode}*{arah}"
+        if skor:
+            kepala += f" · confidence {skor:.0f}"
+        rekap = s.get("emiten_rekap")
+        if rekap:
+            kepala += f" · {rekap['jumlah_sinyal']} sinyal"
+        isi = [kepala]
+
+        # Riwayat: sejak kapan, dari harga berapa, sudah naik berapa.
+        if rekap:
+            isi.append(f"   Pertama {rekap['tanggal_pertama']} di "
+                       f"{_rp(rekap['entry_pertama'])} → {rekap['dari_pertama_pct']:+.1f}%")
+            if rekap["entry_terendah"] < rekap["entry_pertama"]:
+                isi.append(f"   Entry terendah {_rp(rekap['entry_terendah'])} → "
+                           f"{rekap['dari_terendah_pct']:+.1f}%")
+        elif s.get("mulai_dilacak"):
+            isi.append(f"   Sejak {s['mulai_dilacak']} di {_rp(s.get('entry_price'))}"
+                       + (f" → {s['sejak_sinyal_return_pct']:+.1f}%"
+                          if s.get("sejak_sinyal_return_pct") is not None else ""))
+        if s.get("puncak_return_pct") is not None:
+            tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
+            isi.append(f"   Puncak *{s['puncak_return_pct']:+.1f}%*{tgl}")
+
+        # Yang bisa ditindaklanjuti SEKARANG: sinyal terbarunya.
+        isi.append(f"   *Sinyal terbaru* ({_status_wa(s.get('status'))}): "
+                   f"entry {_rp(s.get('entry_price'))} · SL {_rp(s.get('sl_price'))}")
         tercapai = s.get("tp_level_hit") or 0
-        if tercapai:
-            kepala += f" · sudah TP{tercapai}"
-        isi = [kepala,
-               f"   Entry {_rp(s.get('entry_price'))} · SL {_rp(s.get('sl_price'))}"]
-        # TP LENGKAP (TP1/TP2/TP3), bukan cuma TP1: level yang sudah tercapai
-        # ditandai supaya kelihatan posisinya sedang di tangga yang mana.
         tp = []
         for n, harga in ((1, s.get("tp_price")), (2, s.get("tp2_price")), (3, s.get("tp3_price"))):
-            if harga is None:
-                continue
-            tp.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
+            if harga is not None:
+                tp.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
         if tp:
             isi.append("   " + " · ".join(tp))
-        # "Sejak sinyal muncul": tanggalnya, sudah berapa persen sekarang,
-        # dan PUNCAK tertinggi yang pernah dicapai. Yang terakhir itu yang
-        # menjawab "harusnya udah profit puluhan persen kalau entry dari awal"
-        # dengan angka, bukan perasaan.
-        if s.get("mulai_dilacak"):
-            jejak_waktu = f"   Sejak {s['mulai_dilacak']}"
-            if s.get("hari_sejak_sinyal"):
-                jejak_waktu += f" ({s['hari_sejak_sinyal']} hari bursa)"
-            isi.append(jejak_waktu)
-        sekarang, puncak = s.get("sejak_sinyal_return_pct"), s.get("puncak_return_pct")
-        if sekarang is not None or puncak is not None:
-            bagian = []
-            if sekarang is not None:
-                bagian.append(f"sekarang {sekarang:+.1f}%")
-            if puncak is not None:
-                tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
-                bagian.append(f"*puncak {puncak:+.1f}%*{tgl}")
-            isi.append("   " + " · ".join(bagian))
-        # "Masuk lagi di berapa" -- hanya ditampilkan kalau harganya memang
-        # sudah lari jauh dari entry aslinya (>3%). Kalau harga masih di
-        # sekitar entry, level lamanya masih berlaku dan menambah baris ini
-        # cuma bikin ramai.
+
+        # ANJURAN, bukan cuma angka. Permintaan user: bot harus bertindak
+        # seperti asisten -- "ini misalkan udah naik, hold; jika yang sudah
+        # punya barang; atau jika belum, bisa entry di berapa". Dua sisi itu
+        # dijawab terpisah karena keputusannya memang berbeda.
         ml = s.get("masuk_lagi") or {}
-        if ml and (sekarang or 0) > 3:
+        naik = s.get("sejak_sinyal_return_pct") or (rekap or {}).get("dari_pertama_pct") or 0
+        entry_sinyal, sl_sinyal = s.get("entry_price"), s.get("sl_price")
+
+        if s.get("status") == "PENDING_ENTRY":
+            isi.append(f"   👉 *Belum punya*: pasang beli di {_rp(entry_sinyal)}, "
+                       f"SL {_rp(sl_sinyal)}")
+            isi.append("   👉 *Sudah punya*: belum ada posisi — tunggu harganya turun ke area entry")
+        else:
+            # Stop mengikuti TANGGA yang sudah dipakai audit: sesudah TP1
+            # stop pindah ke titik impas, sesudah TP2 naik ke level TP1.
+            if tercapai >= 2 and s.get("tp_price"):
+                jaga = f"stop dinaikkan ke level TP1 ({_rp(s['tp_price'])})"
+            elif tercapai >= 1:
+                jaga = f"stop digeser ke titik impas ({_rp(entry_sinyal)})"
+            else:
+                jaga = f"stop tetap {_rp(sl_sinyal)}"
+            isi.append(f"   👉 *Sudah punya*: HOLD, {jaga}")
+
             pb, dp = ml.get("pullback"), ml.get("deep")
-            potong = []
-            if pb:
-                potong.append(f"pullback {_rp(pb['entry'])} (SL {_rp(pb['sl'])})")
-            # "Deep" hanya disebut kalau memang LEBIH DALAM dari pullback.
-            # Level deep memakai support S2 yang kadang kebetulan di atas
-            # harga pullback -- memajangnya sebagai "lebih dalam" padahal
-            # lebih tinggi itu menyesatkan.
-            if dp and (not pb or dp["entry"] < pb["entry"]):
-                potong.append(f"deep {_rp(dp['entry'])} (SL {_rp(dp['sl'])})")
-            if potong:
-                isi.append("   Masuk lagi: " + " · ".join(potong))
+            if naik > 3 and pb:
+                lebih_dalam = (f" · lebih dalam {_rp(dp['entry'])}"
+                               if dp and dp["entry"] < pb["entry"] else "")
+                isi.append(f"   👉 *Belum punya*: harga sudah jalan {naik:+.1f}%, "
+                           f"jangan kejar — tunggu {_rp(pb['entry'])} "
+                           f"(SL {_rp(pb['sl'])}){lebih_dalam}")
+            elif entry_sinyal is not None:
+                isi.append(f"   👉 *Belum punya*: masih dekat entry, boleh masuk "
+                           f"di sekitar {_rp(entry_sinyal)} dengan SL {_rp(sl_sinyal)}")
+
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
             jejak += f" · {s['pattern']}"
         isi.append(f"   _{jejak}_")
         return isi
 
-    # Dipisah per kategori. Pertanyaan nyata dari anggota grup: "berarti yg
-    # sedang berjalan sm yg belum entry? atau yg udh kena TP1 jg bisa masuk
-    # kesitu?" -- kalau daftarnya perlu ditanyakan dulu artinya daftarnya
-    # belum menjawab sendiri. Sekarang statusnya jadi judul bagian, bukan
-    # label kecil yang mudah terlewat.
     for nama_blok, status, catatan in (
             ("Menunggu entry", "PENDING_ENTRY", "harga belum menyentuh area entry"),
             ("Sedang berjalan", "OPEN", "sudah entry, posisi masih terbuka")):
-        kelompok = [s for s in aktif if s.get("status") == status]
-        if not kelompok:
+        bagian = [(k, s, sk) for k, s, sk in kelompok if s.get("status") == status]
+        if not bagian:
             continue
-        baris += ["", f"*{nama_blok}* ({len(kelompok)}) — _{catatan}_", ""]
-        for s in kelompok:
-            baris += _kartu(s)
-
-    # "Sempat terbang sesudah kena SL". Diminta user karena beberapa emiten
-    # (CSMI, GIAA) naik jauh setelah stop-nya kena. Sengaja TIDAK dipajang
-    # sebagai prestasi: posisinya sudah ditutup rugi, jadi angka itu tidak
-    # pernah diraih siapa pun yang mengikuti aturannya. Yang jujur adalah
-    # menyebutnya apa adanya -- bukti stop-nya kesempitan, dan itulah alasan
-    # lantai SL dinaikkan ke 2xATR.
-    terbang = [s for s in semua
-               if s.get("status") == "SL_HIT" and (s.get("puncak_return_pct") or 0) >= 10]
-    terbang.sort(key=lambda s: s["puncak_return_pct"], reverse=True)
-    if terbang:
-        baris += ["", f"*Sempat terbang sesudah kena SL* ({len(terbang)})",
-                  "_Bukan keuntungan yang diraih — posisinya sudah ditutup rugi. "
-                  "Ini justru bukti stop-nya kesempitan; lantai SL sudah dinaikkan._", ""]
-        for s in terbang[:8]:
-            tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
-            baris.append(f"• *{s['kode']}* — puncak +{s['puncak_return_pct']:.1f}%{tgl}")
-            rekap = s.get("emiten_rekap")
-            if rekap:
-                baris.append(f"   dari sinyal pertama {rekap['tanggal_pertama']} "
-                             f"(Rp{rekap['entry_pertama']:,.0f}".replace(",", ".")
-                             + f"): {rekap['dari_pertama_pct']:+.1f}%")
+        baris += ["", f"*{nama_blok}* ({len(bagian)}) — _{catatan}_", ""]
+        for kode, s, sk in bagian:
+            baris += _kartu(kode, s, sk)
 
     baris += ["", "_Sinyal yang sudah kena TP1/TP2 TETAP di daftar selama posisinya "
-                  "belum ditutup — TP berikutnya masih berlaku. Yang sudah tutup "
-                  "(TP akhir/SL/kadaluarsa) tidak ditampilkan._",
+                  "belum ditutup — TP berikutnya masih berlaku._",
               "", "Ketik kode emitennya untuk rencana entry lengkap.",
               "_Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
