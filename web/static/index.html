@@ -4823,10 +4823,16 @@ async function loadSignalAudit(){
       // Entry aslinya sudah lewat -> level yang berguna adalah level HARI INI
       // (dihitung fungsi rencana yang sama dengan halaman Rencana Trading).
       const ml=s.masuk_lagi||null;
-      const masukLagiTxt=(!ml||!(ml.pullback||ml.deep))?'':
-        `<div class="muted" style="font-size:9.5px;margin-top:3px">masuk lagi: `
-        +[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',ml.deep?`Rp${fmt(ml.deep.entry)}`:'']
-          .filter(Boolean).join(' / ')+`</div>`;
+      // "Deep" hanya disebut kalau memang LEBIH DALAM dari pullback: level
+      // deep memakai support S2 yang kadang kebetulan di ATAS harga
+      // pullback, dan memajangnya sebagai level yang lebih dalam padahal
+      // lebih tinggi itu menyesatkan.
+      const mlDeep=(ml&&ml.deep&&(!ml.pullback||ml.deep.entry<ml.pullback.entry))?ml.deep:null;
+      const masukLagiTxt=(!ml||!(ml.pullback||mlDeep))?'':
+        `<div class="muted" style="font-size:9.5px;margin-top:3px" title="Level masuk kalau baru mau ikut sekarang — entry sinyal aslinya sudah lewat">masuk lagi: `
+        +[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',mlDeep?`Rp${fmt(mlDeep.entry)}`:'']
+          .filter(Boolean).join(' / ')
+        +(ml.pullback?` <span style="color:var(--bear)">SL Rp${fmt(ml.pullback.sl)}</span>`:'')+`</div>`;
 
       if(auditViewMode === 'table') {
         return `<tr style="cursor:pointer" data-k="${s.kode}">
@@ -4859,9 +4865,9 @@ async function loadSignalAudit(){
             <span class="zeta-sig-lbl">Puncak sejak muncul</span>
             <span class="zeta-sig-val" style="color:var(--bull)">${s.puncak_return_pct>=0?'+':''}${fmt(s.puncak_return_pct,1)}%${s.puncak_date?` <span class="muted" style="font-size:9.5px">${s.puncak_date}</span>`:''}</span>
           </div>`}
-          ${(!ml||!(ml.pullback||ml.deep))?'':`<div class="zeta-sig-row" style="margin-top:4px">
+          ${(!ml||!(ml.pullback||mlDeep))?'':`<div class="zeta-sig-row" style="margin-top:4px">
             <span class="zeta-sig-lbl">Masuk lagi</span>
-            <span class="zeta-sig-val">${[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',ml.deep?`Rp${fmt(ml.deep.entry)}`:''].filter(Boolean).join(' / ')}</span>
+            <span class="zeta-sig-val">${[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',mlDeep?`Rp${fmt(mlDeep.entry)}`:''].filter(Boolean).join(' / ')}${ml.pullback?` <span style="color:var(--bear);font-size:10px">SL Rp${fmt(ml.pullback.sl)}</span>`:''}</span>
           </div>`}
           <div class="zeta-sig-row" style="margin-top:4px;align-items:flex-start">
             <span class="zeta-sig-lbl">Target (TP)</span>

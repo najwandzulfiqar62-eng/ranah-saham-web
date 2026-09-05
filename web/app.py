@@ -3681,20 +3681,27 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
     if not dipakai:
         return
 
-    kunci = "sinyal_puncak:v2"
+    kunci = "sinyal_puncak:v3"
     tersimpan = _cache_get(kunci)
     if tersimpan is None:
         from core.trading_plan import calculate_advanced_plan_from_df
 
         awal = min((s.get("entry_filled_at") or s.get("recorded_at"))[:10] for s in dipakai)
         kode_unik = sorted({s["kode"] for s in dipakai})
+        # Diunduh JAUH sebelum sinyal pertama, bukan tepat dari tanggalnya.
+        # Puncak memang cuma butuh bar sesudah sinyal, TAPI level "masuk lagi"
+        # dihitung calculate_advanced_plan_from_df() yang menuntut >=50 bar
+        # (MA50/ATR/support). Ditemukan nyata: mulai dari tanggal sinyal
+        # terawal cuma menghasilkan 30 bar, jadi SELURUH level "masuk lagi"
+        # diam-diam kosong walau puncaknya terhitung normal.
+        mulai_unduh = (pd.Timestamp(awal) - pd.Timedelta(days=300)).strftime("%Y-%m-%d")
         try:
             data = await async_download_many([k + ".JK" for k in kode_unik],
-                                             start=awal, interval="1d")
+                                             start=mulai_unduh, interval="1d")
         except Exception as e:
             print(f"⚠️ puncak-sinyal: gagal unduh riwayat: {type(e).__name__}: {e}")
             return
-        peta, rencana = {}, {}
+        peta, rencana, gagal_rencana = {}, {}, []
         for k in kode_unik:
             df = data.get(k + ".JK")
             if df is None or len(df) == 0:
@@ -3719,8 +3726,15 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict]) -> None:
                             "tp1": v["tp"]["tp1"]}
                         for n, v in p["scenarios"].items() if n in ("pullback", "deep")
                     }
-            except Exception:
-                pass
+                else:
+                    gagal_rencana.append(f"{k}(data {len(df)} bar)")
+            except Exception as e:
+                gagal_rencana.append(f"{k}({type(e).__name__})")
+        # Kegagalan DIHITUNG lalu dilaporkan sekali, bukan ditelan diam-diam:
+        # persis begitu bug "masuk lagi kosong semua" sempat lolos tanpa jejak.
+        if gagal_rencana:
+            print(f"⚠️ masuk-lagi: {len(gagal_rencana)}/{len(kode_unik)} kode gagal "
+                  f"dihitung -- {', '.join(gagal_rencana[:8])}")
         tersimpan = {"bar": peta, "masuk_lagi": rencana}
         _cache_set(kunci, tersimpan, ttl=3600)
 
@@ -6811,7 +6825,11 @@ def _wa_fmt_sinyal(rep: dict) -> str:
             potong = []
             if pb:
                 potong.append(f"pullback {_rp(pb['entry'])} (SL {_rp(pb['sl'])})")
-            if dp:
+            # "Deep" hanya disebut kalau memang LEBIH DALAM dari pullback.
+            # Level deep memakai support S2 yang kadang kebetulan di atas
+            # harga pullback -- memajangnya sebagai "lebih dalam" padahal
+            # lebih tinggi itu menyesatkan.
+            if dp and (not pb or dp["entry"] < pb["entry"]):
                 potong.append(f"deep {_rp(dp['entry'])} (SL {_rp(dp['sl'])})")
             if potong:
                 isi.append("   Masuk lagi: " + " · ".join(potong))
