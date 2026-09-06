@@ -1805,13 +1805,23 @@ async def _analyze_payload(kode: str):
             raise HTTPException(502, "Gagal mengambil data harga. Coba lagi sebentar.")
         if df is None or len(df) < 50:
             raise HTTPException(404, f"Data {kode} tidak cukup untuk analisis (butuh ≥50 hari).")
-        ai = calculate_ai_score_from_df(df)
-        if ai is None:
+        # Dihitung di THREAD, bukan di event loop. Diukur pada data nyata:
+        # build_smc_summary saja 183 ms, dan jalur ini dipakai halaman
+        # Analisis MAUPUN bot. Dijalankan langsung di fungsi async, tiap
+        # permintaan membekukan SELURUH server selama itu -- beberapa orang
+        # membuka bersamaan langsung terasa mengantre.
+        def _hitung():
+            ai_l = calculate_ai_score_from_df(df)
+            if ai_l is None:
+                return None
+            # RINGKASAN CEPAT (badge di halaman Analisis, dipakai ulang
+            # /api/insight -- lihat _compute_ringkasan_cepat)
+            return ai_l, build_smc_summary(df), _compute_ringkasan_cepat(df, ai_l)
+
+        hasil_hitung = await asyncio.to_thread(_hitung)
+        if hasil_hitung is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
-        smc = build_smc_summary(df)
-        # ===== RINGKASAN CEPAT (badge di atas halaman Analisis, & dipakai
-        # ulang oleh /api/insight -- lihat _compute_ringkasan_cepat) =====
-        ringkasan = _compute_ringkasan_cepat(df, ai)
+        ai, smc, ringkasan = hasil_hitung
         payload = {
             "kode": kode,
             "score": ai.get("score"), "rating": ai.get("rating"),
@@ -2437,11 +2447,16 @@ async def ihsg():
             dl = await _clean("^JKSE", period="2y")
         except Exception:
             raise HTTPException(502, "Gagal mengambil data IHSG.")
-        analysis = analyze_ihsg_with_backtest(dd, dw, dl)
+        # Idem: halaman depan menembak endpoint ini tiap kali dibuka, jadi
+        # justru ini yang paling sering membekukan server.
+        def _hitung_ihsg():
+            a = analyze_ihsg_with_backtest(dd, dw, dl)
+            return (a, build_smc_summary(dd)) if a else (None, None)
+
+        analysis, smc = await asyncio.to_thread(_hitung_ihsg)
         if not analysis:
             raise HTTPException(422, "Gagal menganalisis IHSG.")
         bt = analysis.get("backtest_result") or {}
-        smc = build_smc_summary(dd)
         # ===== RINGKASAN CEPAT untuk IHSG (sama semangat dgn /api/analyze) =====
         # HANYA 2 tambahan yang genuinely masuk akal utk INDEKS (bukan saham
         # individual) -- "Likuiditas"/"Grade"/"Gaya Trading" dari versi saham
@@ -6957,7 +6972,7 @@ async def _wa_report_data(kode: str) -> dict:
         raise HTTPException(502, "Gagal mengambil data harga. Coba lagi sebentar.")
     if df is None or len(df) < 50:
         raise HTTPException(404, f"Data {kode} tidak cukup untuk analisis (butuh ≥50 hari).")
-    ai = calculate_ai_score_from_df(df)
+    ai = await asyncio.to_thread(calculate_ai_score_from_df, df)
     if ai is None:
         raise HTTPException(422, f"Gagal menganalisis {kode}.")
 
@@ -6987,11 +7002,15 @@ async def _wa_report_data(kode: str) -> dict:
         except Exception:
             return None
 
-    vwap_fv = _coba(_vwap_fair_value, df)
-    fixed_entries = _coba(calculate_fixed_entry_levels_from_df, df,
-                          _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    smc = _coba(build_smc_summary, df)
-    rec_badge = _coba(_derive_recommendation, ai, ai_ihsg)
+    # Empat-empatnya sinkron & berat (build_smc_summary saja ~183 ms).
+    def _hitung_berat():
+        return (_coba(_vwap_fair_value, df),
+                _coba(calculate_fixed_entry_levels_from_df, df,
+                      _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                _coba(build_smc_summary, df),
+                _coba(_derive_recommendation, ai, ai_ihsg))
+
+    vwap_fv, fixed_entries, smc, rec_badge = await asyncio.to_thread(_hitung_berat)
 
     insight = {"teknikal": _narrate_technical(ai)}
     try:
