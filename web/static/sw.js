@@ -6,8 +6,11 @@
 // Kalau lupa, user tetap melihat UI versi LAMA walau server sudah menyajikan
 // yang baru (persis yang terjadi pada perbaikan "satu saham, dua teori":
 // backend & file di server sudah benar, tapi shell lama masih dari cache).
-const CACHE = 'ranahsaham-v34';
-const SHELL = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
+const CACHE = 'ranahsaham-v35';
+// '/app.js' WAJIB ikut di-precache: sejak JS dipisah dari index.html, tanpa
+// ini pembukaan pertama (dan offline) kehilangan SELURUH logika aplikasi --
+// halamannya tampil tapi mati total.
+const SHELL = ['/', '/app.js', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
