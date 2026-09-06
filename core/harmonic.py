@@ -278,3 +278,121 @@ def ringkas_harmonic(pola: list[dict]) -> str:
             else f"terbentuk {p['bar_sejak_d']} bar lalu")
     return (f"Pola {p['pola']} {p['arah']} terdeteksi, titik D (area pembalikan) "
             f"di {p['prz']:.0f} — {umur}.")
+
+
+# =========================
+# RENCANA ENTRY DARI GEOMETRI POLA
+# =========================
+# Selama ini entry/SL/TP di aplikasi ini datang dari core/trading_plan.py --
+# support/resistance + lantai ATR. Itu tetap jadi jalur utama. Yang di bawah
+# ini alternatif KHUSUS saat polanya ada: harmonic sudah membawa titik
+# invalidasinya sendiri, jadi SL-nya tidak perlu ditebak dari ATR. Kalau
+# harga menembus titik terendah pola, yang batal bukan cuma posisinya --
+# polanya sendiri yang batal. Itu alasan berhenti yang bisa dijelaskan.
+
+# Target = retracement Fibonacci LEG TERAKHIR (C->D pada pola klasik, B->C
+# pada Shark). Ini aturan target harmonic yang lazim dipakai; sengaja BUKAN
+# diukur ke seluruh pola, karena pada Butterfly/Crab leg terakhirnya sangat
+# panjang sehingga target "sampai titik A" jadi angka yang cuma enak dibaca.
+HARMONIC_TP_FIB = (0.382, 0.618, 1.0)
+
+# Jarak aman di luar titik invalidasi. Pola yang cuma tersenggol ekor candle
+# belum tentu pola yang batal, dan SL yang ditaruh PERSIS di titik pola itu
+# justru yang paling gampang disapu.
+HARMONIC_SL_BUFFER = 0.015
+
+
+def rencana_harmonic(pola: dict, harga_kini: float | None = None,
+                     atr_pct: float | None = None) -> dict | None:
+    """Entry/SL/TP yang diturunkan dari titik-titik polanya sendiri.
+
+    pola: satu elemen keluaran detect_harmonic().
+    harga_kini: untuk menilai apakah areanya masih bisa dipakai.
+    atr_pct: ATR harian dalam persen -- dipakai menegakkan lantai SL yang
+        SAMA dengan core/trading_plan.py, supaya "SL kependekan lalu kena
+        noise harian" tidak masuk lewat pintu belakang.
+
+    Return None kalau titik polanya tidak lengkap.
+    """
+    from core.trading_plan import MIN_SL_PCT, SL_ATR_MULT
+
+    titik = pola.get("titik") or []
+    if len(titik) < 2:
+        return None
+    harga_titik = [t["harga"] for t in titik]
+    bullish = pola.get("arah") == "bullish"
+
+    entry = float(pola["prz"])            # titik penyelesaian pola
+    asal_leg = float(titik[-2]["harga"])  # pangkal leg terakhir
+    if entry <= 0:
+        return None
+
+    # INVALIDASI = titik paling ekstrem pola. Pada Gartley/Bat/Cypher itu
+    # titik X (D berhenti di ATAS X), pada Butterfly/Crab/ABCD justru titik
+    # D sendiri (D memanjang MELEWATI X), pada Shark titik C atau 0. Dicari
+    # dengan min/max supaya benar untuk semuanya tanpa daftar khusus per
+    # pola -- daftar seperti itu pasti ketinggalan saat pola baru ditambah.
+    invalidasi = min(harga_titik) if bullish else max(harga_titik)
+    sl = (invalidasi * (1 - HARMONIC_SL_BUFFER) if bullish
+          else invalidasi * (1 + HARMONIC_SL_BUFFER))
+
+    # Lantai yang sama dengan rencana trading biasa. Pola dengan D pas di
+    # titik terendahnya bisa menghasilkan SL cuma 1,5% di bawah entry --
+    # persis keluhan "kena SL malah terbang" yang sudah pernah diperbaiki
+    # di trading_plan.py. Tidak ada gunanya menutup lubang itu di satu
+    # tempat lalu membiarkannya terbuka di tempat lain.
+    lantai_pct = max(MIN_SL_PCT, SL_ATR_MULT * atr_pct if atr_pct else 0.0)
+    risiko_pct = abs(entry - sl) / entry * 100
+    if risiko_pct < lantai_pct:
+        sl = entry * (1 - lantai_pct / 100) if bullish else entry * (1 + lantai_pct / 100)
+        risiko_pct = lantai_pct
+        dasar_sl = f"lantai {lantai_pct:.1f}%, struktur polanya terlalu rapat"
+    else:
+        # Sebut titik mana yang jadi dasarnya. Dicari lewat indeks nilainya,
+        # bukan ditebak "pasti titik pertama atau terakhir" -- tebakan itu
+        # kebetulan benar untuk pola yang ada sekarang dan akan diam-diam
+        # salah begitu ada pola dengan tata letak titik yang berbeda.
+        dasar_sl = f"di luar titik {titik[harga_titik.index(invalidasi)]['label']}"
+
+    leg = abs(asal_leg - entry)
+    arah_tp = 1 if bullish else -1
+    tp = [round(entry + arah_tp * f * leg, 2) for f in HARMONIC_TP_FIB]
+
+    risiko = abs(entry - sl)
+    # DUA angka risk/reward, bukan satu. TP1 adalah retracement 0,382 -- target
+    # yang sengaja dekat, sehingga R/R terhadapnya hampir selalu terlihat
+    # buruk dan gampang disalahartikan sebagai "polanya jelek". Yang menjawab
+    # "sepadan atau tidak" adalah R/R ke target terakhir.
+    rr = round(abs(tp[0] - entry) / risiko, 2) if risiko > 0 else None
+    rr_akhir = round(abs(tp[-1] - entry) / risiko, 2) if risiko > 0 else None
+
+    hasil = {
+        "entry": round(entry, 2),
+        "sl": round(sl, 2),
+        "sl_pct": round(risiko_pct, 2),
+        "dasar_sl": dasar_sl,
+        "tp": tp,
+        "tp_pct": [round(abs(x / entry - 1) * 100, 2) for x in tp],
+        "rr": rr,
+        "rr_akhir": rr_akhir,
+        # Menahan diri itu bagian dari saran. Pola yang sah pun tidak layak
+        # diambil kalau ruang ke target terakhirnya lebih kecil dari risikonya.
+        "sepadan": (rr_akhir is not None and rr_akhir >= 1.5),
+        "leg_target": f"{titik[-2]['label']}→{titik[-1]['label']}",
+    }
+
+    if harga_kini is not None and harga_kini > 0:
+        hasil["harga_kini"] = round(float(harga_kini), 2)
+        hasil["jarak_ke_entry_pct"] = round((harga_kini / entry - 1) * 100, 2)
+        # Pola yang titik invalidasinya SUDAH ditembus bukan peluang yang
+        # "agak lewat" -- ia sudah batal. Menampilkannya sebagai kandidat
+        # beli adalah cara tercepat mengajak orang masuk ke pola mati.
+        if (bullish and harga_kini < sl) or (not bullish and harga_kini > sl):
+            hasil["status"] = "batal"
+        elif abs(harga_kini / entry - 1) <= 0.03:
+            hasil["status"] = "di area"
+        elif (bullish and harga_kini > entry) or (not bullish and harga_kini < entry):
+            hasil["status"] = "sudah lewat"
+        else:
+            hasil["status"] = "belum sampai"
+    return hasil

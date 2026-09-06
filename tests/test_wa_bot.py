@@ -706,8 +706,13 @@ def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa
 
     hasil = _kirim(client, "sinyal").json()["reply"]
 
-    # Sudah TP1 -> stop digeser ke titik impas (tangga stop yang dipakai audit).
-    assert "*Sudah punya*: HOLD, stop digeser ke titik impas (Rp400)" in hasil
+    # Sudah TP1 dan TP1 itu target terakhir yang dihitung. Saringan hari ini
+    # dingin di lingkungan tes, jadi keputusannya HOLD -- BUKAN "FULL TP".
+    # Menjual seluruh posisi karena DATANYA yang belum siap adalah kerugian
+    # yang disebabkan aplikasinya sendiri.
+    assert "*Sudah punya*: HOLD" in hasil and "sudah habis di TP1" in hasil
+    assert "stop ke titik impas (Rp400)" in hasil
+    assert "FULL TP" not in hasil
     # Area masuk dipimpin yang PALING DALAM (Rp500), pullback jadi
     # alternatif -- diurutkan dari harganya, bukan dari namanya.
     assert "area terbaik Rp500 (SL Rp465)" in hasil
@@ -719,6 +724,9 @@ def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa
     # Belum entry -> pasang beli, bukan disuruh HOLD.
     assert "*Belum punya*: pasang beli di Rp250, SL Rp235" in hasil
     assert "stop tetap Rp940" in hasil
+    # Yang belum kena TP tetap HOLD -- perintah jual TIDAK boleh muncul di
+    # posisi yang masih berjalan normal.
+    assert "*Sudah punya*: HOLD, stop tetap Rp940" in hasil
 
 
 def test_digest_harian_hanya_mengabarkan_yang_sudah_menyentuh_area_masuk(monkeypatch):
@@ -845,7 +853,7 @@ def test_balasan_emiten_menyertakan_status_sinyalnya(client, wa_bersih, monkeypa
     assert "Sinyal pertama 2026-07-04 di Rp358 → +66.2%" in hasil
     assert "Puncak sejak sinyal muncul: *+22.1%*" in hasil
     # Anjuran identik dengan perintah `sinyal`.
-    assert "HOLD, stop digeser ke titik impas (Rp520)" in hasil
+    assert "*Sudah punya*: HOLD" in hasil and "stop ke titik impas (Rp520)" in hasil
     assert "area terbaik Rp548 (SL Rp515)" in hasil
     # Statusnya di ATAS ringkasan analisis, bukan terkubur di bawah.
     assert hasil.index("Status sinyal") < hasil.index("Ringkasan")
@@ -934,3 +942,159 @@ def test_harmonic_membedakan_belum_siap_dari_tidak_ada_pola(client, wa_bersih, m
     hasil = _kirim(client, "harmonic").json()["reply"]
     assert "Sedang disiapkan" in hasil
     assert "Tidak ada pola" not in hasil, "belum siap != tidak ada pola"
+
+
+# =========================
+# KEPUTUSAN POSISI: HOLD / FULL TP / JUAL
+# =========================
+# Permintaan user, dua kalimat yang menentukan seluruh bagian ini:
+#   "kalo emang udah di suruh sell kasih perintah sell juga dong, sama kalo
+#    udah ga masuk kategori lagi ya kasih tau juga biar ga pada masuk"
+#   "kalo punya potensi naik lagi hold, kalo udah engga full tp gitu loh"
+
+def _sinyal(**ubah):
+    """Sinyal untung yang sehat; tiap tes mengubah satu hal saja."""
+    dasar = {"kode": "AAAA", "status": "OPEN", "entry_price": 1000,
+             "tp_price": 1080, "tp2_price": 1150, "sl_price": 940,
+             "tp_level_hit": 1, "sejak_sinyal_return_pct": 12.0,
+             "hari_sejak_sinyal": 8}
+    dasar.update(ubah)
+    return dasar
+
+
+def test_hold_selama_masih_ada_target_di_atasnya():
+    import web.app as app_module
+
+    hasil = " ".join(app_module._anjuran_sinyal(_sinyal(), lolos_hari_ini={"AAAA"}))
+    assert "HOLD" in hasil and "TP2" in hasil
+    assert "FULL TP" not in hasil
+
+
+def test_target_habis_tapi_masih_berpotensi_tetap_hold():
+    """Inti permintaan user: "kalo punya potensi naik lagi hold". Menjual
+    hanya karena daftar targetnya habis berarti melepas pemenang justru saat
+    ia sedang bekerja -- kebalikan dari keluhan yang memulai fitur ini."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=2)  # TP2 = target terakhir, sudah kena
+    peta = {"AAAA": {"kode": "AAAA", "pola": "Bat", "arah": "bullish",
+                     "potensi_pct": 22.0}}
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"},
+                                               harmonic_peta=peta))
+    assert "HOLD" in hasil and "FULL TP" not in hasil
+    # Alasannya WAJIB disebut. "Masih ada potensi" tanpa dasar adalah kalimat
+    # yang paling gampang dipakai menahan posisi rugi sampai jadi rugi besar.
+    assert "Bat" in hasil and "22%" in hasil
+
+
+def test_target_habis_dan_tidak_ada_potensi_jadi_full_tp():
+    """Sisi sebaliknya: "kalo udah engga full tp gitu loh"."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=2)
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"LAIN"},
+                                               harmonic_peta={}))
+    assert "FULL TP" in hasil and "jual SELURUHNYA" in hasil
+    # Perintah jual tanpa alasan tidak bisa diperiksa, dan yang tidak bisa
+    # diperiksa tidak pantas dituruti.
+    assert "tidak lagi lolos saringan hari ini" in hasil
+
+
+def test_harga_menembus_stop_memberi_perintah_jual_bukan_hold():
+    """Bug yang paling merugikan dari versi lama: kartu berbunyi "HOLD"
+    walau harga SUDAH jatuh di bawah stop -- menyuruh menahan posisi yang
+    menurut aturannya sendiri semestinya sudah dilepas."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=0, sejak_sinyal_return_pct=-8.0)  # harga 920 < SL 940
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+    assert "JUAL SEKARANG" in hasil
+    assert "HOLD" not in hasil, "masih menyuruh menahan posisi yang sudah lewat stop"
+    assert "JANGAN entry baru" in hasil
+
+
+def test_sudah_tp1_lalu_balik_ke_bawah_titik_impas_tidak_disebut_kunci_untung():
+    """Sinyal yang sempat menyentuh TP1 lalu turun ke bawah titik impas
+    TIDAK sedang mengunci untung. Menyebutnya begitu membuat orang menahan
+    posisi karena merasa "sayang, ini kan profit" -- padahal sudah habis."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=1, sejak_sinyal_return_pct=-2.0)
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+    assert "JUAL SEKARANG" in hasil
+    assert "kunci untungnya" not in hasil
+
+
+def test_yang_tidak_lolos_saringan_dilarang_dimasuki_tapi_pemegangnya_tidak_dipaksa_keluar():
+    """"biar ga pada masuk" itu soal ENTRY BARU. Pemegang lama yang posisinya
+    masih di atas stop tidak otomatis harus keluar -- dua keputusan berbeda
+    untuk dua orang berbeda."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=0, sejak_sinyal_return_pct=3.0)
+    hasil = app_module._anjuran_sinyal(s, lolos_hari_ini={"LAIN"})
+    gabung = " ".join(hasil)
+    assert "JANGAN entry baru" in gabung
+    assert any("HOLD" in b and "Sudah punya" in b for b in hasil)
+
+
+def test_saringan_dingin_tidak_pernah_mengaku_tidak_lolos():
+    """lolos_hari_ini=None berarti saringannya belum sempat dihitung.
+    Mengatakan "tidak lagi lolos saringan" saat itu terjadi adalah kebohongan
+    yang mahal: orang menjual posisi yang sebenarnya tidak apa-apa."""
+    import web.app as app_module
+
+    hasil = " ".join(app_module._anjuran_sinyal(_sinyal(tp_level_hit=2),
+                                               lolos_hari_ini=None))
+    assert "tidak lagi lolos saringan" not in hasil
+    assert "FULL TP" not in hasil, "menjual hanya karena datanya belum siap"
+
+
+def test_sinyal_arah_jual_memakai_ambang_yang_terbalik():
+    """Sinyal Smart Money berarah SELL untung kalau harga TURUN. Memakai
+    perbandingan yang sama dengan BUY akan memberi perintah tutup posisi
+    tepat ketika posisinya sedang berjalan baik."""
+    import web.app as app_module
+
+    # Entry 1000, SL di ATAS entry (1060). Harga turun ke 920 = sedang untung.
+    s = _sinyal(direction="SELL", tp_price=920, tp2_price=850, sl_price=1060,
+                tp_level_hit=1, sejak_sinyal_return_pct=-8.0)
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+    assert "TUTUP POSISI SEKARANG" not in hasil, "disuruh keluar padahal sedang untung"
+    assert "HOLD" in hasil
+
+
+def test_kena_sl_menjawab_keempat_pilihan_yang_selalu_terlintas():
+    """Pertanyaan user saat entry ulang kena SL: "tetap hold kah, atau SL
+    aja, atau nambah barang di avg berapa, atau nunggu turun masuk lagi
+    dimana". Keempatnya harus dijawab. Membiarkan satu saja menggantung
+    berarti membiarkan orang menebak -- dan tebakan termahal saat sedang
+    rugi adalah gabungan "tahan dulu" + "sekalian tambah"."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=0, sejak_sinyal_return_pct=-8.0,
+                masuk_lagi={"deep": {"entry": 860, "sl": 800},
+                            "pullback": {"entry": 900, "sl": 845}})
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+
+    assert "JUAL SEKARANG" in hasil                      # 1. jangan ditahan
+    assert "JANGAN entry baru" in hasil                  # 2. jangan dikejar
+    assert "Average down TIDAK wajib" in hasil           # 3. bukan otomatis
+    assert "Masuk lagi kalau" in hasil and "Rp860" in hasil   # 4. levelnya disebut
+    # Levelnya saja tidak cukup: tanpa syarat pembalikan, "masuk lagi di 860"
+    # terbaca sebagai perintah beli begitu harga menyentuh angka itu.
+    assert "tanda pembalikan" in hasil
+    assert "nyangkut AAAA" in hasil
+
+
+def test_area_masuk_lagi_memakai_level_terdalam_bukan_yang_pertama_ditulis():
+    """Level 'deep' tidak selalu lebih rendah dari 'pullback' -- ia memakai
+    support S2 yang kadang justru di ATAS. Yang dipakai harus yang harganya
+    paling rendah, dihitung dari angkanya, bukan dari namanya."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=0, sejak_sinyal_return_pct=-8.0,
+                masuk_lagi={"deep": {"entry": 910, "sl": 870},
+                            "pullback": {"entry": 880, "sl": 840}})
+    hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+    assert "Rp880" in hasil and "Rp910" not in hasil

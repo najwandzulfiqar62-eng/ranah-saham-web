@@ -1461,6 +1461,26 @@ async function loadFilter(mode){
   staggerRows(body.querySelector('.ctable'), 12);
 }
 
+// Anjuran dikirim backend sebagai baris teks bermarkup ringan ala WhatsApp
+// (*tebal*, _miring_). Yang dilakukan di sini murni MENAMPILKAN -- tidak ada
+// satu pun keputusan yang diambil ulang, supaya web dan bot tidak akan pernah
+// bisa menjawab berbeda untuk sinyal yang sama.
+function _anjuranHtml(baris){
+  if(!baris||!baris.length) return '';
+  const esc=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const isi=baris.map(b=>{
+    // Warna mengikuti isyarat yang sudah dibawa teksnya sendiri, bukan
+    // pencocokan kata yang gampang meleset saat kalimatnya diubah.
+    const warna=b.startsWith('\u{1F534}')||b.startsWith('\u26d4')?'var(--bear)'
+      :b.startsWith('\u{1F7E2}')||b.startsWith('\u{1F504}')?'var(--bull)'
+      :'var(--gold)';
+    const html=esc(b).replace(/\*([^*]+)\*/g,'<b>$1</b>')
+                     .replace(/_([^_]+)_/g,'<i>$1</i>');
+    return `<div style="color:${warna}">${html}</div>`;
+  }).join('');
+  return `<div style="font-size:9.5px;margin-top:3px;line-height:1.5">${isi}</div>`;
+}
+
 async function loadHarmonic(){
   const body=$('#uniBody');
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai pola harmonic (Gartley/Bat/Butterfly/Crab)… 20–40 detik</p>';
@@ -1485,10 +1505,29 @@ async function loadHarmonic(){
     const umur=it.bar_sejak_d<=2?'baru terbentuk':`${it.bar_sejak_d} hari bursa lalu`;
     const dekat=it.jarak_ke_prz_pct<=8;
     const rasio=Object.entries(it.rasio||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
+    // Badge irisan dua saringan. Minervini menjawab "trennya sudah terbukti
+    // kuat", harmonic menjawab "titik masuknya di mana" -- yang lolos keduanya
+    // punya alasan yang lebih tebal daripada salah satunya saja.
+    const mv=it.minervini;
+    const mvBadge=mv?`<span class="harm-conf" title="Lolos saringan Minervini juga: skor ${fmt(mv.skor,1)}, ${mv.criteria_met}/8 kriteria, RS ${fmt(mv.rs_score,0)}">⭐ Minervini ${fmt(mv.skor,0)}</span>`:'';
+    // Rencana yang diturunkan dari titik polanya sendiri: SL di luar titik
+    // invalidasi (bukan ATR generik), target = retracement Fibonacci leg
+    // terakhir. Inilah yang membuat pola bisa DIPAKAI, bukan cuma dilihat.
+    const r=it.rencana;
+    const rencanaHtml=!r?'':`<div class="harm-plan">
+        <div><span class="harm-lbl">Entry (titik ${it.titik_akhir||'D'})</span><b>Rp${fmt(r.entry)}</b></div>
+        <div><span class="harm-lbl">SL · ${r.dasar_sl}</span>
+             <b style="color:var(--bear)">Rp${fmt(r.sl)} <small>(${fmt(r.sl_pct,1)}%)</small></b></div>
+        <div><span class="harm-lbl">Target ${r.leg_target}</span>
+             <b style="color:var(--bull)">${(r.tp||[]).map(x=>'Rp'+fmt(x)).join(' → ')}</b></div>
+        <div><span class="harm-lbl">Risk/reward TP1 → akhir</span>
+             <b style="color:${r.sepadan?'var(--bull)':'var(--warn,var(--gold))'}">${r.rr!=null?r.rr+'×':'—'} → ${r.rr_akhir!=null?r.rr_akhir+'×':'—'}</b></div>
+      </div>`;
     return `<div class="harm-card" data-k="${it.kode}">
       <div class="harm-head">
         <span class="harm-tk">${tickerTag(it.kode)}</span>
         <span class="harm-pola" style="color:${warna};border-color:${warna}55">${it.pola} · ${it.arah}</span>
+        ${mvBadge}
         <span class="harm-potensi" style="color:${warna}">${naik?'+':''}${fmt(it.potensi_pct,1)}%
           <small>ruang ${naik?'naik':'turun'}</small></span>
       </div>
@@ -1500,12 +1539,13 @@ async function loadHarmonic(){
              <b style="color:${dekat?'var(--bull)':'var(--muted)'}">${dekat?'masih dekat':`${fmt(it.jarak_ke_prz_pct,0)}%`}</b></div>
         <div><span class="harm-lbl">Kecocokan</span><b>${fmt(it.skor,0)}/100</b></div>
       </div>
+      ${rencanaHtml}
       <div class="harm-kaki">${it.tanggal_d} · ${umur}${rasio?` · <span class="harm-rasio">${rasio}</span>`:''}</div>
     </div>`;
   }).join('');
   body.innerHTML=`<section class="panel">
-    <p class="eyebrow">Pola Harmonic · ${items.length} emiten</p>
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik yang tiap kakinya memenuhi rasio Fibonacci; titik terakhir = area pembalikan yang diduga. Memindai ${d.universe} saham likuid (${d.arah||'bullish'}), hanya pola yang terbentuk ≤${d.maks_umur} hari bursa lalu. Diurut dari <b>ruang naik terbesar</b> — tapi hanya untuk yang harganya masih dekat titik baliknya; yang sudah terlanjur lari ditaruh di bawah.</p>
+    <p class="eyebrow">Pola Harmonic · ${items.length} emiten${d.n_confluence?` · ${d.n_confluence} juga lolos Minervini`:''}</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik yang tiap kakinya memenuhi rasio Fibonacci; titik terakhir = area pembalikan yang diduga. Memindai ${d.universe} saham likuid (${d.arah||'bullish'}), hanya pola yang terbentuk ≤${d.maks_umur} hari bursa lalu. Diurut dari <b>ruang naik terbesar</b> — tapi hanya untuk yang harganya masih dekat titik baliknya; yang sudah terlanjur lari ditaruh di bawah.${d.dibuang_batal?` <b>${d.dibuang_batal} pola dibuang</b> karena titik invalidasinya sudah ditembus — pola mati bukan peluang yang terlambat.`:''}</p>
     <div class="harm-list">${baris}</div>
     ${infoNote('Timeframe: bar HARIAN (1 bar = 1 hari bursa), riwayat 1 tahun. Sebuah titik dihitung pivot kalau menjadi tertinggi/terendah di antara 5 bar sebelum & 5 bar sesudahnya. Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik itu. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik itu terbentuk. Shark & Cypher memakai titik jangkar berbeda dan dideteksi dengan rumusnya sendiri. Tap kartu untuk analisis.','Cara membaca')}
   </section>`;
@@ -2294,32 +2334,12 @@ async function loadSignalAudit(){
       // pullback, dan memajangnya sebagai level yang lebih dalam padahal
       // lebih tinggi itu menyesatkan.
       const mlDeep=(ml&&ml.deep&&(!ml.pullback||ml.deep.entry<ml.pullback.entry))?ml.deep:null;
-      // Anjuran, bukan cuma angka: dua situasi yang keputusannya berbeda.
-      // Stop mengikuti TANGGA yang sudah dipakai audit (sesudah TP1 ke titik
-      // impas, sesudah TP2 ke level TP1) -- bukan aturan baru.
-      const _naik=(s.floating_return_pct!=null?s.floating_return_pct:(s.sejak_sinyal_return_pct||0));
-      let anjuran='';
-      if(s.status==='PENDING_ENTRY'){
-        anjuran=`Belum punya: pasang beli Rp${fmt(s.entry_price)} (SL Rp${fmt(s.sl_price)})`;
-      }else if(s.status==='OPEN'){
-        const lv=s.tp_level_hit||0;
-        const jaga=lv>=2&&s.tp_price?`stop naik ke TP1 Rp${fmt(s.tp_price)}`
-          :lv>=1?`stop ke titik impas Rp${fmt(s.entry_price)}`
-          :`stop tetap Rp${fmt(s.sl_price)}`;
-        anjuran=`HOLD — ${jaga}`;
-        // Area masuk diurutkan dari yang PALING DALAM (harga terbaik = risiko
-        // terkecil), dihitung dari harganya sendiri bukan dari namanya --
-        // level "deep" memakai support S2 yang kadang justru di ATAS pullback.
-        const _area=[ml&&ml.deep,ml&&ml.pullback].filter(Boolean).sort((a,b)=>a.entry-b.entry);
-        if(_area.length){
-          anjuran+=` · belum punya: area terbaik Rp${fmt(_area[0].entry)} (SL Rp${fmt(_area[0].sl)})`;
-          if(_area.length>1) anjuran+=`, alternatif Rp${fmt(_area[1].entry)}`;
-          if(_naik>3) anjuran+=` — tunggu harganya turun ke situ, jangan dikejar`;
-        }else if(s.entry_price!=null){
-          anjuran+=` · belum punya: masuk kalau menyentuh Rp${fmt(s.entry_price)}`;
-        }
-      }
-      const anjuranTxt=anjuran?`<div style="font-size:9.5px;color:var(--gold);margin-top:3px">${anjuran}</div>`:'';
+      // Anjuran datang JADI dari backend (field `anjuran`), tidak dihitung
+      // ulang di sini. Versi sebelumnya menyalin aturannya ke JavaScript dan
+      // salinan itu sudah menyimpang: ia menulis "HOLD" bahkan ketika harga
+      // sudah jatuh di bawah stop -- menyuruh menahan posisi yang menurut
+      // aturannya sendiri semestinya sudah dilepas. Satu aturan, satu tempat.
+      const anjuranTxt=_anjuranHtml(s.anjuran);
       const masukLagiTxt=(!ml||!(ml.pullback||mlDeep))?'':
         `<div class="muted" style="font-size:9.5px;margin-top:3px" title="Level masuk kalau baru mau ikut sekarang — entry sinyal aslinya sudah lewat">masuk lagi: `
         +[ml.pullback?`Rp${fmt(ml.pullback.entry)}`:'',mlDeep?`Rp${fmt(mlDeep.entry)}`:'']

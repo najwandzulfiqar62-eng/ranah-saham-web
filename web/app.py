@@ -2719,7 +2719,23 @@ async def screenerpro():
         res = await run_screenerpro([t + ".JK" for t in TOP_PICK_UNIVERSE], market_close=market_close)
     except Exception:
         raise HTTPException(502, "Gagal menjalankan screener pro.")
-    payload = _py({"items": res or [], "universe": len(TOP_PICK_UNIVERSE)})
+    # Arah sebaliknya dari badge di saringan harmonic: di sini yang ditandai
+    # adalah saham Minervini yang KEBETULAN sedang membentuk pola harmonic,
+    # jadi titik masuknya terdefinisi -- bukan sekadar "beli saja sekarang".
+    # Dibaca dari cache saja; kalau pemanas belum sempat mengisinya, badge-nya
+    # tidak muncul dan tidak ada yang tertunda karenanya.
+    hm_peta = {x["kode"]: x for x in
+               ((_cache_get("screener_harmonic:v3:luas:bullish:10") or {}).get("items") or [])}
+    items = list(res or [])
+    n_confluence = 0
+    for it in items:
+        h = hm_peta.get(str(it.get("ticker", "")).replace(".JK", ""))
+        it["harmonic"] = ({"pola": h["pola"], "prz": h["prz"], "skor": h["skor"],
+                           "potensi_pct": h["potensi_pct"], "rencana": h.get("rencana")}
+                          if h else None)
+        n_confluence += 1 if h else 0
+    payload = _py({"items": items, "universe": len(TOP_PICK_UNIVERSE),
+                   "n_confluence": n_confluence})
     _cache_set("screenerpro", payload)
     return payload
 
@@ -2727,7 +2743,8 @@ async def screenerpro():
 @app.get("/api/harmonic/{kode}")
 async def harmonic_kode(kode: str):
     """Pola harmonic (Gartley/Bat/Butterfly/Crab/ABCD) untuk SATU emiten."""
-    from core.harmonic import detect_harmonic, ringkas_harmonic
+    from core.harmonic import detect_harmonic, rencana_harmonic, ringkas_harmonic
+    from core.indicators import calculate_atr
 
     kode = _norm_kode(kode)
     try:
@@ -2737,6 +2754,17 @@ async def harmonic_kode(kode: str):
     if df is None or len(df) < 40:
         raise HTTPException(404, "Data tidak cukup untuk mendeteksi pola harmonic.")
     pola = detect_harmonic(df)
+    # Rencana entry diturunkan dari titik polanya sendiri: SL di luar titik
+    # invalidasi, target = retracement Fibonacci leg terakhir. Ini yang
+    # membuat pola bisa dipakai, bukan cuma dilihat.
+    try:
+        harga_kini = float(df["Close"].iloc[-1])
+        atr = calculate_atr(df)
+        atr_pct = (float(atr) / harga_kini * 100) if atr and harga_kini else None
+    except Exception:
+        harga_kini, atr_pct = None, None
+    for p in pola:
+        p["rencana"] = rencana_harmonic(p, harga_kini=harga_kini, atr_pct=atr_pct)
     return _py({"kode": kode, "pola": pola, "ringkasan": ringkas_harmonic(pola)})
 
 
@@ -2794,7 +2822,7 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
         return _py({"items": [], "universe": len(semesta), "maks_umur": maks_umur,
                     "arah": arah, "lingkup": lingkup, "menyiapkan": True})
 
-    from core.harmonic import detect_harmonic
+    from core.harmonic import detect_harmonic, rencana_harmonic
 
     tickers = [t + ".JK" for t in semesta]
     try:
@@ -2813,6 +2841,8 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
     # keluhan "webnya keluar-keluaran, disuruh login ulang", dan panggilan bot
     # ke /api/wa/command juga ikut tertahan.
     def _pindai():
+        from core.indicators import calculate_atr
+
         hasil_pindai = []
         for t, df in (data or {}).items():
             if df is None or len(df) < 40:
@@ -2822,24 +2852,60 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
                 pola = detect_harmonic(df, maks=1)
             except Exception:
                 continue
-            if pola:
-                hasil_pindai.append((t, df, pola[0]))
+            if not pola:
+                continue
+            # ATR dihitung DI SINI, di dalam thread yang sama. Ia dibutuhkan
+            # rencana_harmonic() untuk menegakkan lantai SL, dan menghitungnya
+            # belakangan berarti mengembalikan seluruh df ~250 bar x 237 emiten
+            # ke event loop hanya untuk satu angka.
+            try:
+                harga_akhir = float(df["Close"].iloc[-1])
+                atr = calculate_atr(df)
+                atr_pct = (float(atr) / harga_akhir * 100) if atr and harga_akhir else None
+            except Exception:
+                harga_akhir, atr_pct = float(df["Close"].iloc[-1]), None
+            hasil_pindai.append((t, harga_akhir, atr_pct, pola[0]))
         return hasil_pindai
 
-    items = []
-    for t, df, p in await asyncio.to_thread(_pindai):
+    # Saringan Minervini dibaca dari CACHE saja -- tidak pernah memicu
+    # hitungan baru. Gunanya menandai irisan kedua saringan: Minervini
+    # menjawab "trennya sudah terbukti kuat", harmonic menjawab "titik
+    # masuknya di mana". Yang lolos keduanya patut ditandai, tapi TIDAK
+    # dipakai memfilter -- irisannya jarang, dan menyaring dengan AND ketat
+    # akan mengosongkan halaman ini di hari biasa.
+    mv_peta = {}
+    for m in ((_cache_get("screenerpro") or {}).get("items") or []):
+        kode_mv = str(m.get("ticker", "")).replace(".JK", "")
+        if kode_mv:
+            mv_peta[kode_mv] = m
+
+    items, dibuang_batal = [], 0
+    for t, harga_akhir, atr_pct, p in await asyncio.to_thread(_pindai):
         if p["bar_sejak_d"] > maks_umur:
             continue
         if arah in ("bullish", "bearish") and p["arah"] != arah:
             continue
-        harga_kini = round(float(df["Close"].iloc[-1]), 2)
+        harga_kini = round(harga_akhir, 2)
         # Seberapa dekat harga SEKARANG ke titik penyelesaian. Pola bagus tapi
         # harganya sudah jauh meninggalkan titik itu berarti peluangnya lewat.
         jarak = abs(harga_kini / p["prz"] - 1) * 100 if p["prz"] else 999.0
+        rencana = rencana_harmonic(p, harga_kini=harga_kini, atr_pct=atr_pct)
+        # Pola yang titik invalidasinya sudah ditembus itu pola MATI, bukan
+        # peluang yang "agak terlambat". Dibuang, tapi jumlahnya dilaporkan --
+        # pembuangan diam-diam persis cara sebuah saringan pelan-pelan
+        # kehilangan isinya tanpa ada yang sadar.
+        if rencana and rencana.get("status") == "batal":
+            dibuang_batal += 1
+            continue
+        kode = t.replace(".JK", "")
+        mv = mv_peta.get(kode)
         items.append({
-            "kode": t.replace(".JK", ""),
+            "kode": kode,
             "harga": harga_kini,
             "jarak_ke_prz_pct": round(jarak, 1),
+            "rencana": rencana,
+            "minervini": ({"skor": mv.get("skor"), "criteria_met": mv.get("criteria_met"),
+                           "rs_score": mv.get("rs_score")} if mv else None),
             **{k: p[k] for k in ("pola", "arah", "skor", "prz", "titik_akhir",
                                  "potensi_pct", "tanggal_d", "bar_sejak_d", "rasio")},
         })
@@ -2849,10 +2915,15 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
     # pola yang harganya masih dekat titik penyelesaiannya (<=8%) -- potensi
     # besar pada saham yang sudah terlanjur lari itu angka yang tidak bisa
     # dipakai. Sisanya diurut menyusul, tidak dibuang.
-    items.sort(key=lambda x: (x["jarak_ke_prz_pct"] > 8,
+    # Yang lolos DUA saringan naik lebih dulu: tren yang sudah terbukti kuat
+    # (Minervini) DAN titik masuk yang terdefinisi (harmonic) itu alasan yang
+    # lebih tebal daripada salah satunya saja.
+    items.sort(key=lambda x: (x["jarak_ke_prz_pct"] > 8, x["minervini"] is None,
                               -x["potensi_pct"], -x["skor"], x["bar_sejak_d"]))
     payload = _py({"items": items, "universe": len(semesta),
-                   "maks_umur": maks_umur, "arah": arah, "lingkup": lingkup})
+                   "maks_umur": maks_umur, "arah": arah, "lingkup": lingkup,
+                   "dibuang_batal": dibuang_batal,
+                   "n_confluence": sum(1 for x in items if x["minervini"])})
     _cache_set_durable(kunci, payload)
     return payload
 
@@ -3804,6 +3875,25 @@ async def signals():
         asyncio.create_task(_warm_corp_actions_bg(active_kodes))
     _attach_corp_action_warnings(report.get("signals", []))
 
+    # ANJURAN ditempel DI SINI, bukan dihitung ulang di JavaScript. Sebelumnya
+    # web punya salinan aturannya sendiri di app.js -- dan salinan itu sudah
+    # menyimpang: ia menulis "HOLD" bahkan ketika harga sudah jatuh di bawah
+    # stop. Dua salinan aturan berarti dua jawaban berbeda untuk pertanyaan
+    # yang sama, dan pembaca tidak punya cara tahu mana yang benar.
+    #
+    # Hanya untuk sinyal yang MASIH BERJALAN: sinyal yang sudah ditutup tidak
+    # butuh anjuran, dan menempelkannya ke 480 baris riwayat cuma menggemukkan
+    # payload -- persis beban yang sudah pernah diukur & dipangkas di sini.
+    try:
+        lolos = _kode_lolos_hari_ini()
+        peta_hm = _peta_harmonic_hari_ini()
+        for x in report.get("signals", []):
+            if x.get("status") in ("OPEN", "PENDING_ENTRY"):
+                x["anjuran"] = _anjuran_sinyal(x, lolos, peta_hm)
+    except Exception as e:
+        # Anjuran hilang jauh lebih ringan daripada halaman Audit gagal muat.
+        print(f"⚠️ anjuran sinyal: {type(e).__name__}: {e}")
+
     return _py(report)
 
 
@@ -4207,6 +4297,17 @@ async def _warm_shared_caches():
     # Saringan harmonic memindai ratusan emiten. Sama seperti dataset berat
     # lain, yang menanggung biayanya pemanas ini -- bukan pengunjung yang
     # kebetulan membuka tabnya lebih dulu.
+    # Minervini dihangatkan SEBELUM harmonic, dan urutannya penting: saringan
+    # harmonic membaca cache Minervini untuk menandai saham yang lolos
+    # KEDUANYA. Kalau harmonic jalan duluan, badge itu tidak pernah terisi
+    # pada putaran yang sama -- fiturnya "kadang muncul kadang tidak", yang
+    # lebih buruk daripada tidak ada sama sekali karena tidak bisa dipercaya.
+    if _cache_get("screenerpro") is None:
+        try:
+            await screenerpro()
+        except Exception as e:
+            print(f"⚠️ cache-warmer screenerpro: {type(e).__name__}: {e}")
+
     if _cache_get("screener_harmonic:v3:luas:bullish:10") is None:
         try:
             await screener_harmonic(boleh_pindai=True)
@@ -6829,15 +6930,47 @@ def _wa_fmt_harmonic_screener(d: dict) -> str:
         return ("*Saringan Harmonic*\n\n_Tidak ada pola harmonic baru di universe "
                 "hari ini._\n\n_Saringan ini menuntut rasio Fibonacci yang ketat, "
                 "jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak._")
-    baris = [f"*Saringan Harmonic* — {len(items)} emiten", ""]
+    kepala = f"*Saringan Harmonic* — {len(items)} emiten"
+    if (d or {}).get("n_confluence"):
+        kepala += f" · {d['n_confluence']} juga lolos Minervini"
+    baris = [kepala, ""]
     for it in items:
         umur = "baru terbentuk" if it["bar_sejak_d"] <= 2 else f"{it['bar_sejak_d']} hari bursa lalu"
-        baris.append(f"• *{it['kode']}* — {it['pola']} ({it['arah']}) · "
+        # Bintang = lolos DUA saringan. Minervini menjawab "trennya sudah
+        # terbukti kuat", harmonic menjawab "titik masuknya di mana".
+        tanda = " ⭐" if it.get("minervini") else ""
+        baris.append(f"• *{it['kode']}*{tanda} — {it['pola']} ({it['arah']}) · "
                      f"kecocokan {it['skor']:.0f}")
-        baris.append(f"   Harga {_rp(it['harga'])} · titik D {_rp(it['prz'])} ({umur})")
+        baris.append(f"   Harga {_rp(it['harga'])} · titik {it.get('titik_akhir') or 'D'} "
+                     f"{_rp(it['prz'])} ({umur})")
+        # Rencana dari geometri polanya sendiri -- inilah yang membuat pola
+        # bisa dipakai, bukan cuma dilihat. Tanpa baris ini pembaca tahu ada
+        # pola tapi tetap tidak tahu harus berbuat apa.
+        r = it.get("rencana") or {}
+        if r.get("tp"):
+            baris.append(f"   Entry {_rp(r['entry'])} · SL {_rp(r['sl'])} "
+                         f"({r['sl_pct']:.1f}%, {r['dasar_sl']})")
+            rr_teks = ""
+            if r.get("rr") and r.get("rr_akhir"):
+                rr_teks = f" · R/R {r['rr']}× → {r['rr_akhir']}×"
+            baris.append(f"   Target {' → '.join(_rp(x) for x in r['tp'])}{rr_teks}")
+            # Pola sah pun tidak otomatis layak diambil. Menyebut ini bagian
+            # dari saran, bukan pengurangnya: saringan yang cuma bisa bilang
+            # "ada peluang" akan selalu terdengar meyakinkan.
+            if r.get("rr_akhir") is not None and not r.get("sepadan"):
+                baris.append(f"   ⚠️ Ruang ke target terakhir cuma {r['rr_akhir']}× "
+                             f"risikonya — tipis untuk pola sebagus ini")
+        if it.get("minervini"):
+            mv = it["minervini"]
+            baris.append(f"   ⭐ Minervini {mv['skor']:.0f} · {mv['criteria_met']}/8 kriteria")
+    if (d or {}).get("dibuang_batal"):
+        baris += ["", f"_{d['dibuang_batal']} pola dibuang karena titik invalidasinya "
+                      f"sudah ditembus — pola mati bukan peluang yang terlambat._"]
     baris += ["", _WA_HARMONIC_TF,
               "", "Ketik `harmonic KODE` untuk rincian titik & rasionya.",
-              "_Deskriptif, bukan ramalan. Bukan ajakan membeli/menjual._"]
+              "_SL diletakkan di luar titik invalidasi pola, target = retracement "
+              "Fibonacci leg terakhir. Deskriptif, bukan ramalan. Bukan ajakan "
+              "membeli/menjual._"]
     return "\n".join(baris)
 
 
@@ -6884,34 +7017,9 @@ async def _wa_blok_sinyal_emiten(kode: str) -> list[str]:
     baris.append(f"• Sinyal berjalan: {_status_wa(terbaru.get('status'))}, entry "
                  f"{_rp(terbaru.get('entry_price'))} · SL {_rp(terbaru.get('sl_price'))}")
 
-    # Anjuran memakai aturan yang SAMA dengan perintah `sinyal`.
-    if terbaru.get("status") == "PENDING_ENTRY":
-        baris.append(f"👉 *Belum punya*: pasang beli di {_rp(terbaru.get('entry_price'))}, "
-                     f"SL {_rp(terbaru.get('sl_price'))}")
-        return baris
-
-    lv = terbaru.get("tp_level_hit") or 0
-    if lv >= 2 and terbaru.get("tp_price"):
-        jaga = f"stop dinaikkan ke level TP1 ({_rp(terbaru['tp_price'])})"
-    elif lv >= 1:
-        jaga = f"stop digeser ke titik impas ({_rp(terbaru.get('entry_price'))})"
-    else:
-        jaga = f"stop tetap {_rp(terbaru.get('sl_price'))}"
-    baris.append(f"👉 *Sudah punya*: HOLD, {jaga}")
-
-    ml = terbaru.get("masuk_lagi") or {}
-    area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
-                  key=lambda a: a["entry"])
-    naik = terbaru.get("sejak_sinyal_return_pct") or 0
-    if area:
-        utama = area[0]
-        teks = f"👉 *Belum punya*: area terbaik {_rp(utama['entry'])} (SL {_rp(utama['sl'])})"
-        if len(area) > 1:
-            teks += f", alternatif lebih dangkal {_rp(area[1]['entry'])}"
-        baris.append(teks)
-        if naik > 3:
-            baris.append(f"_Harga sudah jalan {naik:+.1f}% dari entry — masuk HANYA "
-                         f"kalau harga turun menyentuh area itu._")
+    # Aturan anjurannya sama persis dengan perintah `sinyal` -- bukan karena
+    # ditulis mirip, tapi karena memanggil fungsi yang sama.
+    baris += _anjuran_sinyal(terbaru, _kode_lolos_hari_ini(), _peta_harmonic_hari_ini())
     return baris
 
 
@@ -7356,6 +7464,12 @@ def _wa_fmt_sinyal(rep: dict) -> str:
     else:
         baris[0] += f" — {total_emiten} emiten aktif"
 
+    # Dibaca SEKALI untuk seluruh kartu, bukan per kartu: ini dua pembacaan
+    # cache, dan mengulangnya 20 kali cuma menambah kerja tanpa menambah
+    # kebenaran.
+    lolos_hari_ini = _kode_lolos_hari_ini()
+    harmonic_peta = _peta_harmonic_hari_ini()
+
     def _kartu(kode: str, s: dict, skor: float) -> list[str]:
         arah = " (SELL)" if s.get("direction") == "SELL" else ""
         kepala = f"*{kode}*{arah}"
@@ -7394,49 +7508,10 @@ def _wa_fmt_sinyal(rep: dict) -> str:
 
         # ANJURAN, bukan cuma angka. Permintaan user: bot harus bertindak
         # seperti asisten -- "ini misalkan udah naik, hold; jika yang sudah
-        # punya barang; atau jika belum, bisa entry di berapa". Dua sisi itu
-        # dijawab terpisah karena keputusannya memang berbeda.
-        ml = s.get("masuk_lagi") or {}
-        naik = s.get("sejak_sinyal_return_pct") or (rekap or {}).get("dari_pertama_pct") or 0
-        entry_sinyal, sl_sinyal = s.get("entry_price"), s.get("sl_price")
-
-        if s.get("status") == "PENDING_ENTRY":
-            isi.append(f"   👉 *Belum punya*: pasang beli di {_rp(entry_sinyal)}, "
-                       f"SL {_rp(sl_sinyal)}")
-            isi.append("   👉 *Sudah punya*: belum ada posisi — tunggu harganya turun ke area entry")
-        else:
-            # Stop mengikuti TANGGA yang sudah dipakai audit: sesudah TP1
-            # stop pindah ke titik impas, sesudah TP2 naik ke level TP1.
-            if tercapai >= 2 and s.get("tp_price"):
-                jaga = f"stop dinaikkan ke level TP1 ({_rp(s['tp_price'])})"
-            elif tercapai >= 1:
-                jaga = f"stop digeser ke titik impas ({_rp(entry_sinyal)})"
-            else:
-                jaga = f"stop tetap {_rp(sl_sinyal)}"
-            isi.append(f"   👉 *Sudah punya*: HOLD, {jaga}")
-
-            # Area masuk diurutkan dari yang PALING DALAM: harga terbaik =
-            # risiko paling kecil. Permintaan user: "kalau tembus area entry
-            # berarti cari area terenaknya, yang terbagus, deep gitu".
-            # Urutannya dihitung dari harganya sendiri, bukan dari namanya --
-            # level "deep" memakai support S2 yang kadang justru di ATAS
-            # pullback.
-            area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
-                          key=lambda a: a["entry"])
-            if area:
-                utama = area[0]
-                teks = (f"   👉 *Belum punya*: area terbaik {_rp(utama['entry'])} "
-                        f"(SL {_rp(utama['sl'])})")
-                if len(area) > 1:
-                    teks += f", alternatif lebih dangkal {_rp(area[1]['entry'])}"
-                isi.append(teks)
-                if naik > 3:
-                    isi.append(f"   _Harga sudah jalan {naik:+.1f}% dari entry — masuk "
-                               f"HANYA kalau harga turun menyentuh area itu, jangan "
-                               f"dikejar di harga sekarang._")
-            elif entry_sinyal is not None:
-                isi.append(f"   👉 *Belum punya*: masuk kalau harga menyentuh "
-                           f"{_rp(entry_sinyal)}, SL {_rp(sl_sinyal)}")
+        # punya barang; atau jika belum, bisa entry di berapa". Aturannya
+        # dipusatkan di _anjuran_sinyal() supaya kartu ini dan balasan KODE
+        # EMITEN tidak bisa lagi berbeda diam-diam.
+        isi += [f"   {b}" for b in _anjuran_sinyal(s, lolos_hari_ini, harmonic_peta)]
 
         jejak = _sumber_wa(s.get("source"))
         if s.get("pattern"):
@@ -7465,6 +7540,299 @@ def _status_wa(s: str | None) -> str:
     return {"TP_HIT": "TP tercapai", "SL_HIT": "kena SL", "OPEN": "berjalan",
             "PENDING_ENTRY": "menunggu entry", "EXPIRED": "kadaluarsa",
             "EXPIRED_NO_ENTRY": "entry tidak tercapai"}.get(s or "", s or "—")
+
+
+# =========================
+# ANJURAN POSISI -- SATU ATURAN, DIPAKAI SEMUA TAMPILAN
+# =========================
+# Sebelumnya anjuran ditulis dua kali (kartu `sinyal` dan balasan KODE
+# EMITEN) dengan komentar "aturannya SAMA" sebagai janji belaka. Janji itu
+# tidak bertahan: begitu salah satunya disunting, keduanya diam-diam
+# berbeda -- dan pembaca tidak punya cara tahu yang mana yang benar.
+#
+# Dua hal yang DITAMBAHKAN di sini (permintaan user): perintah JUAL saat
+# rencananya sendiri sudah menyuruh keluar, dan peringatan "jangan entry
+# baru" saat sinyalnya tidak lagi layak dimasuki. Sebelum ini kartu selalu
+# berbunyi "HOLD" -- termasuk ketika harga SUDAH jatuh di bawah stop, yang
+# artinya menyuruh menahan posisi yang menurut aturannya sendiri semestinya
+# sudah dilepas.
+
+
+def _tp_tertinggi(s: dict) -> int:
+    """Level TP tertinggi yang PUNYA harga. Tidak semua sinyal punya TP3;
+    mematok angka 3 akan membuat sinyal ber-TP1-saja tidak pernah dianggap
+    selesai walau targetnya sudah habis."""
+    ada = [n for n, h in ((1, s.get("tp_price")), (2, s.get("tp2_price")),
+                          (3, s.get("tp3_price"))) if h is not None]
+    return max(ada) if ada else 0
+
+
+def harga_tp_ke(s: dict, n: int):
+    """Harga TP level ke-n."""
+    return {1: s.get("tp_price"), 2: s.get("tp2_price"), 3: s.get("tp3_price")}.get(n)
+
+
+def _stop_berlaku(s: dict) -> tuple[float | None, str]:
+    """Stop yang BERLAKU sekarang, mengikuti tangga yang dipakai audit:
+    sesudah TP1 stop pindah ke titik impas, sesudah TP2 naik ke level TP1."""
+    lv = s.get("tp_level_hit") or 0
+    if lv >= 2 and s.get("tp_price") is not None:
+        return s["tp_price"], f"level TP1 ({_rp(s['tp_price'])})"
+    if lv >= 1 and s.get("entry_price") is not None:
+        return s["entry_price"], f"titik impas ({_rp(s['entry_price'])})"
+    return s.get("sl_price"), f"SL {_rp(s.get('sl_price'))}"
+
+
+def _harga_terakhir_sinyal(s: dict) -> float | None:
+    """Harga terakhir, diturunkan dari return yang sudah ditempel
+    _tempel_puncak_sejak_sinyal. Sengaja TIDAK menembak Yahoo: kartu sinyal
+    tidak boleh memicu unduhan (disiplin scaling #1)."""
+    entry, r = s.get("entry_price"), s.get("sejak_sinyal_return_pct")
+    if entry and r is not None:
+        return float(entry) * (1 + float(r) / 100)
+    return None
+
+
+def _alasan_tak_layak_masuk(s: dict, lolos_hari_ini: set | None) -> str | None:
+    """Kenapa sinyal ini TIDAK layak dimasuki sebagai posisi baru.
+
+    lolos_hari_ini: kumpulan kode yang masih lolos saringan hari ini (Top
+    Pick + Minervini, dibaca dari cache). None = cache-nya dingin, dan saat
+    itu terjadi pemeriksaan ini DILEWATI -- mengaku "tidak lolos saringan"
+    padahal saringannya belum jalan itu kebohongan yang mahal.
+    """
+    from core.signal_history import MAX_HOLD_DAYS
+
+    harga = _harga_terakhir_sinyal(s)
+    stop, _ = _stop_berlaku(s)
+    is_sell = s.get("direction") == "SELL"
+    if harga is not None and stop is not None and (harga > stop if is_sell else harga < stop):
+        return "harga sudah menembus stop, setupnya rusak dan bukan sedang diskon"
+
+    # Batas umur HANYA berlaku bagi sinyal yang belum pernah menyentuh TP --
+    # syarat `prev_level == 0` yang sama persis dipakai audit_open_signals()
+    # saat menetapkan EXPIRED. Tanpa syarat itu, pemenang seperti ERAA (yang
+    # SENGAJA dibebaskan dari batas 20 hari karena sudah TP1+) akan ditandai
+    # "jangan masuk" justru karena ia bertahan lama -- menghukum sinyal
+    # terbaik atas keberhasilannya sendiri.
+    # Yang membuat sebuah sinyal tidak layak dimasuki adalah entry-nya yang
+    # BASI, bukan angka umurnya. Level "masuk lagi" dihitung ulang dari data
+    # HARI INI (calculate_advanced_plan_from_df), jadi selama level itu ada,
+    # umur sinyal aslinya tidak membuat apa pun kedaluwarsa -- justru sinyal
+    # tua yang masih punya level segar itu yang paling berguna.
+    ada_level_segar = bool((s.get("masuk_lagi") or {}).get("deep")
+                           or (s.get("masuk_lagi") or {}).get("pullback"))
+    umur = s.get("hari_sejak_sinyal")
+    if (umur is not None and umur > MAX_HOLD_DAYS
+            and (s.get("tp_level_hit") or 0) == 0 and not ada_level_segar):
+        return (f"sinyal sudah {umur} hari tanpa menyentuh TP satu pun dan tidak punya "
+                f"level masuk yang diperbarui; entry lamanya dihitung untuk kondisi "
+                f"pasar yang sudah lewat")
+
+    if lolos_hari_ini is not None and s.get("kode") not in lolos_hari_ini:
+        return "tidak lagi lolos saringan hari ini (Top Pick maupun Minervini)"
+    return None
+
+
+def _peta_harmonic_hari_ini() -> dict:
+    """Pola harmonic per kode dari cache saringan. Murni baca cache."""
+    return {x["kode"]: x for x in
+            ((_cache_get("screener_harmonic:v3:luas:bullish:10") or {}).get("items") or [])}
+
+
+def _sebab_tak_ada_potensi(s: dict, lolos_hari_ini: set | None,
+                           harmonic_peta: dict | None) -> str:
+    """Kenapa tidak ada lagi alasan menahan. Perintah "jual seluruhnya" wajib
+    menyebutkan dasarnya -- perintah tanpa alasan tidak bisa diperiksa, dan
+    yang tidak bisa diperiksa tidak pantas dituruti."""
+    kode = s.get("kode")
+    if lolos_hari_ini is None:
+        return "saringan hari ini belum sempat dihitung, jadi tidak ada yang menopang"
+    sebab = ["tidak lagi lolos saringan hari ini"]
+    if (harmonic_peta or {}).get(kode) is None:
+        sebab.append("tidak ada pola harmonic yang masih menyisakan ruang")
+    return ", ".join(sebab)
+
+
+def _alasan_masih_menahan(s: dict, lolos_hari_ini: set | None,
+                          harmonic_peta: dict | None) -> str | None:
+    """Alasan yang BISA DIPERIKSA untuk menahan posisi yang sudah untung.
+
+    Dipakai supaya perintah jual tidak keluar hanya karena daftar targetnya
+    habis. Kalau tidak ada satu pun alasan yang bisa ditunjuk, fungsi ini
+    mengembalikan None -- dan diamnya itu jujur: "masih ada potensi kok"
+    tanpa dasar adalah kalimat yang paling gampang dipakai menahan posisi
+    rugi sampai jadi rugi besar.
+    """
+    kode = s.get("kode")
+    alasan = []
+
+    if lolos_hari_ini is not None and kode in lolos_hari_ini:
+        alasan.append("trennya masih lolos saringan hari ini")
+
+    h = (harmonic_peta or {}).get(kode)
+    if h and h.get("arah") == "bullish" and (h.get("potensi_pct") or 0) > 5:
+        alasan.append(f"pola {h['pola']} masih menyisakan ruang "
+                      f"+{h['potensi_pct']:.0f}% ke puncak polanya")
+
+    if not alasan:
+        return None
+    return " dan ".join(alasan)
+
+
+def _kode_lolos_hari_ini() -> set | None:
+    """Kode yang masih lolos saringan hari ini. Murni baca cache -- tidak
+    pernah memicu hitungan. None kalau kedua cache dingin."""
+    tp = _cache_get("confidence:raw")
+    mv = (_cache_get("screenerpro") or {}).get("items")
+    if tp is None and mv is None:
+        return None
+    kumpulan = {str(x.get("kode", "")).replace(".JK", "") for x in (tp or [])}
+    kumpulan |= {str(x.get("ticker", "")).replace(".JK", "") for x in (mv or [])}
+    return kumpulan - {""}
+
+
+def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
+                    harmonic_peta: dict | None = None) -> list:
+    """Dua sisi keputusan: yang SUDAH punya barang, dan yang BELUM."""
+    is_sell = s.get("direction") == "SELL"
+    keluar = "TUTUP POSISI" if is_sell else "JUAL"
+    entry, sl = s.get("entry_price"), s.get("sl_price")
+    tercapai = s.get("tp_level_hit") or 0
+    tertinggi = _tp_tertinggi(s)
+    stop, label_stop = _stop_berlaku(s)
+    harga = _harga_terakhir_sinyal(s)
+    baris = []
+
+    if s.get("status") == "PENDING_ENTRY":
+        alasan = _alasan_tak_layak_masuk(s, lolos_hari_ini)
+        if alasan:
+            baris.append(f"⛔ *Batal masuk*: {alasan}")
+            baris.append("👉 *Sudah punya*: belum ada posisi, tidak perlu berbuat apa-apa")
+            return baris
+        baris.append(f"👉 *Belum punya*: pasang beli di {_rp(entry)}, SL {_rp(sl)}")
+        baris.append("👉 *Sudah punya*: belum ada posisi, tunggu harganya turun ke area entry")
+        return baris
+
+    # --- masih punya ruang naik? ---
+    # Inilah yang membedakan asisten dari pengingat aturan. Sebuah posisi
+    # tidak dijual karena daftar targetnya habis; ia dijual karena tidak ada
+    # lagi alasan menahannya. Dua alasan yang bisa DIPERIKSA, bukan dikarang:
+    # sahamnya masih lolos saringan hari ini, dan/atau pola harmonic-nya
+    # masih menyisakan ruang ke puncak pola.
+    potensi = _alasan_masih_menahan(s, lolos_hari_ini, harmonic_peta)
+
+    # --- sisi "sudah punya barang" ---
+    tembus = (harga is not None and stop is not None
+              and (harga > stop if is_sell else harga < stop))
+    if tembus:
+        # Apakah keluar di sini membawa untung ditentukan LETAK STOP-nya
+        # terhadap entry, bukan oleh "TP1 pernah kena". Sinyal yang sempat
+        # menyentuh TP1 lalu balik ke bawah titik impas TIDAK sedang mengunci
+        # untung -- menyebutnya begitu membuat orang menahan posisi karena
+        # merasa "sayang, ini kan profit", padahal profitnya sudah hilang.
+        if entry is not None and stop is not None and (stop < entry if is_sell else stop > entry):
+            ekor = ", kunci untungnya"
+        elif entry is not None and stop is not None and abs(stop - entry) < 1e-9:
+            ekor = ", keluar di titik impas selagi masih bisa"
+        else:
+            ekor = ", jangan ditahan lagi"
+        baris.append(f"🔴 *Sudah punya*: {keluar} SEKARANG — harga "
+                     f"{_rp(harga)} sudah lewat {label_stop}{ekor}")
+        baris.append("_Bukan 'tahan dulu siapa tahu balik': stop yang tersentuh "
+                     "adalah batas yang kamu tetapkan sendiri sebelum emosi ikut "
+                     "menghitung. Melewatinya artinya alasan memegang saham ini "
+                     "sudah tidak berlaku._")
+    elif tercapai >= 1:
+        # KEPUTUSAN, bukan daftar pertimbangan. Posisi yang sudah untung cuma
+        # punya dua nasib yang masuk akal: ditahan karena ruangnya masih ada,
+        # atau direalisasikan penuh karena sudah tidak ada. Menjawab "amankan
+        # sebagian" untuk semua kasus terdengar aman tapi sebenarnya menolak
+        # memutuskan -- dan yang membaca tetap tidak tahu harus berbuat apa.
+        berikut = tercapai + 1 if harga_tp_ke(s, tercapai + 1) is not None else None
+        if berikut:
+            harga_berikut = harga_tp_ke(s, berikut)
+            ruang = ((harga_berikut / harga - 1) * 100) if harga else None
+            sisa = (f", ruang {ruang:+.1f}% dari harga sekarang"
+                    if ruang is not None and ruang > 0 else "")
+            baris.append(f"🟢 *Sudah punya*: HOLD — TP{tercapai} sudah "
+                         f"tercapai, target berikutnya TP{berikut} di "
+                         f"{_rp(harga_berikut)}{sisa}. Naikkan stop ke {label_stop}.")
+        elif potensi or lolos_hari_ini is None:
+            # Saat saringan hari ini belum sempat dihitung (potensi tidak bisa
+            # dinilai), pilihannya HOLD -- bukan FULL TP. Menyuruh menjual
+            # seluruh posisi karena DATANYA yang belum siap adalah kerugian
+            # yang disebabkan aplikasinya sendiri, dan itu tidak bisa
+            # dibenarkan oleh alasan apa pun.
+            sebab_tahan = potensi or ("saringan hari ini belum sempat dihitung, "
+                                      "jadi belum ada dasar untuk menyuruh keluar")
+            baris.append(f"🟢 *Sudah punya*: HOLD — angka targetnya memang "
+                         f"sudah habis di TP{tertinggi}, tapi {sebab_tahan}. Naikkan stop "
+                         f"ke {label_stop} dan biarkan jalan.")
+        else:
+            baris.append(f"🔴 *Sudah punya*: FULL TP — jual SELURUHNYA di "
+                         f"harga sekarang ({_rp(harga)}). TP{tertinggi} adalah target "
+                         f"terakhir dan tidak ada lagi ruang yang bisa ditunjuk: "
+                         f"{_sebab_tak_ada_potensi(s, lolos_hari_ini, harmonic_peta)}.")
+    else:
+        alasan_tahan = f" — {potensi}" if potensi else ""
+        baris.append(f"🟢 *Sudah punya*: HOLD, stop tetap {_rp(sl)}{alasan_tahan}")
+
+    # --- sisi "belum punya barang" ---
+    if tembus:
+        # Empat pilihan yang selalu terlintas saat kena SL -- ditutup satu per
+        # satu, bukan dijawab dengan satu kalimat samar. Yang paling berbahaya
+        # justru gabungan "tetap tahan" + "sekalian tambah": itu cara kerugian
+        # kecil berubah jadi kerugian yang tidak bisa dipulihkan.
+        baris.append("⛔ *Belum punya*: JANGAN entry baru di harga sekarang — "
+                     "yang sedang terjadi bukan diskon, tapi setup yang rusak")
+        baris.append("_Average down TIDAK wajib. Aturan risiko aplikasi ini sendiri: "
+                     "jangan menambah posisi hanya karena harga turun, tanpa tanda "
+                     "pembalikan._")
+        area_lagi = sorted([a for a in ((s.get("masuk_lagi") or {}).get("deep"),
+                                        (s.get("masuk_lagi") or {}).get("pullback")) if a],
+                           key=lambda a: a["entry"])
+        if area_lagi:
+            u = area_lagi[0]
+            baris.append(f"🔄 *Masuk lagi kalau*: harga kembali ke "
+                         f"{_rp(u['entry'])} (SL {_rp(u['sl'])}) DAN sudah ada tanda "
+                         f"pembalikan — dua syarat, bukan salah satu")
+        else:
+            baris.append("🔄 *Masuk lagi*: belum ada level yang layak dipakai; "
+                         "tunggu struktur barunya terbentuk dulu")
+        kode = s.get("kode") or "KODE"
+        baris.append(f"_Sudah terlanjur nyangkut? Ketik `nyangkut {kode} <harga rata-ratamu>` "
+                     f"untuk level menambah yang masuk akal plus kondisi IHSG-nya._")
+        return baris
+
+    alasan = _alasan_tak_layak_masuk(s, lolos_hari_ini)
+    if alasan:
+        baris.append(f"⛔ *Belum punya*: JANGAN entry baru — {alasan}")
+        return baris
+
+    ml = s.get("masuk_lagi") or {}
+    # Area masuk diurutkan dari yang PALING DALAM: harga terbaik = risiko
+    # paling kecil. Urutannya dihitung dari harganya sendiri, bukan dari
+    # namanya -- level "deep" memakai support S2 yang kadang justru di ATAS
+    # pullback.
+    area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
+                  key=lambda a: a["entry"])
+    naik = (s.get("sejak_sinyal_return_pct")
+            or (s.get("emiten_rekap") or {}).get("dari_pertama_pct") or 0)
+    if area:
+        utama = area[0]
+        teks = (f"👉 *Belum punya*: area terbaik {_rp(utama['entry'])} "
+                f"(SL {_rp(utama['sl'])})")
+        if len(area) > 1:
+            teks += f", alternatif lebih dangkal {_rp(area[1]['entry'])}"
+        baris.append(teks)
+        if naik > 3:
+            baris.append(f"_Harga sudah jalan {naik:+.1f}% dari entry, masuk HANYA kalau "
+                         f"harga turun menyentuh area itu, jangan dikejar di harga sekarang._")
+    elif entry is not None:
+        baris.append(f"👉 *Belum punya*: masuk kalau harga menyentuh {_rp(entry)}, "
+                     f"SL {_rp(sl)}")
+    return baris
 
 
 def _sumber_wa(s: str | None) -> str:

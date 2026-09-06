@@ -115,19 +115,29 @@ async def run_screenerpro(tickers: list[str],
     Returns list terurut skor tertinggi ke terendah."""
     data = await async_download_many(tickers, period="1y", interval="1d")
 
-    results = []
-    for ticker, df in data.items():
-        try:
-            df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
-            if len(df) < 200:
-                continue  # perlu 200 bar untuk MA200
+    # SELURUH penilaian dijalankan di THREAD, bukan di event loop. Alasannya
+    # sama persis dengan saringan harmonic: ini kerja sinkron atas ratusan
+    # emiten (MA50/150/200 + RS + MACD per saham), dan selama ia berjalan
+    # langsung di fungsi async, server MEMBEKU -- termasuk /api/access/me,
+    # sehingga frontend menyimpulkan "belum login" dan memunculkan layar
+    # masuk. Itu keluhan "web keluar-keluaran, disuruh login ulang" yang
+    # sudah dilacak ke akar yang sama di tempat lain.
+    def _nilai_semua():
+        hasil = []
+        for ticker, df in data.items():
+            try:
+                df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+                if len(df) < 200:
+                    continue  # perlu 200 bar untuk MA200
 
-            result = _score_minervini(df, ticker.replace(".JK", ""), market_close)
-            if result and result["skor"] >= 65:
-                results.append(result)
-        except Exception:
-            continue
+                result = _score_minervini(df, ticker.replace(".JK", ""), market_close)
+                if result and result["skor"] >= 65:
+                    hasil.append(result)
+            except Exception:
+                continue
+        return hasil
 
+    results = await asyncio.to_thread(_nilai_semua)
     return sorted(results, key=lambda x: x["skor"], reverse=True)
 
 
