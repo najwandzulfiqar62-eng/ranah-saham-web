@@ -5796,3 +5796,50 @@ def test_statistik_pullback_konsisten_dengan_kesimpulannya():
         "menunggu diskon TIDAK lagi kalah dari beli di pasar -- saran 'cicil' "
         "harus ditinjau ulang, bukan dipertahankan")
     assert s["puncak_yang_terlewat_pct"] > 0
+
+
+def test_watchdog_event_loop_melaporkan_penahanan(capsys):
+    """Menebak penyebab lambat sudah dua kali meleset. Watchdog ini yang
+    membuktikan apakah event loop benar-benar tertahan, dan BERAPA LAMA --
+    angka yang bisa dibandingkan antar-waktu, bukan keluhan "webnya lemot"
+    yang tidak bisa ditindaklanjuti."""
+    import asyncio
+    import time as _t
+
+    import web.app as app_module
+
+    async def _jalan():
+        t = asyncio.create_task(app_module._watchdog_event_loop())
+        await asyncio.sleep(0.6)          # bebas: harus senyap
+        _t.sleep(0.9)                     # blokir persis seperti kerja sinkron
+        await asyncio.sleep(0.6)
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+
+    app_module.LOOP_LAG_WARN_MS = 200.0
+    asyncio.run(_jalan())
+    keluaran = capsys.readouterr().out
+    assert "event-loop tertahan" in keluaran, "penahanan 0,9 detik tidak terdeteksi"
+    # Angkanya harus MASUK AKAL, bukan sekadar ada: watchdog yang melaporkan
+    # angka ngawur lebih menyesatkan daripada tidak melapor.
+    # Angkanya BATAS BAWAH, bukan nilai persis: kalau penahanan dimulai di
+    # tengah jendela ukur watchdog, sebagian penahanan itu tidak terhitung.
+    # Yang penting ia tidak melaporkan angka ngawur.
+    import re
+    ms = int(re.search(r"tertahan (\d+) ms", keluaran).group(1))
+    assert 300 <= ms <= 1600, f"lag terlapor {ms} ms, di luar rentang wajar"
+
+
+def test_permintaan_lambat_dicatat_dengan_jalurnya(client, monkeypatch, capsys):
+    """Log harus menyebut JALUR mana yang lambat. "Webnya lemot" tidak bisa
+    ditindaklanjuti; "/api/signals 4,2 detik" bisa."""
+    import web.app as app_module
+
+    monkeypatch.setattr(app_module, "SLOW_REQUEST_WARN_S", -1.0)
+    client.get("/health")
+    keluaran = capsys.readouterr().out
+    assert "lambat" in keluaran, "permintaan lambat tidak dicatat sama sekali"
+    assert "/health" in keluaran, "log tidak menyebut JALUR-nya"

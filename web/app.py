@@ -303,6 +303,7 @@ async def _lifespan(_app: "FastAPI"):
     else:
         print("PERINGATAN akses akun: ACCESS_ADMIN_EMAIL/PASSWORD belum diatur; pendaftaran tidak bisa disetujui.")
     tasks = [
+        asyncio.create_task(_watchdog_event_loop()),
         asyncio.create_task(_signal_auto_loop()),
         asyncio.create_task(_forum_push_loop()),
         asyncio.create_task(_cache_warmer_loop()),
@@ -318,8 +319,72 @@ async def _lifespan(_app: "FastAPI"):
             pass
 
 
+# =========================
+# DIAGNOSTIK: KENAPA SERVERNYA LAMBAT
+# =========================
+# Diukur dari luar (7 Sep 2026): /api/access/me yang isinya 81 byte berayun
+# antara 43 ms dan 4,4 DETIK dalam 100 detik pengamatan. Bedanya 100x, jadi
+# ini bukan jaringan -- ada yang menahan server secara berkala.
+#
+# Menebak penyebabnya sudah dua kali meleset, jadi yang dipasang di sini
+# ALAT UKUR, bukan tebakan ketiga. Keduanya sengaja sangat murah: satu
+# perbandingan waktu per setengah detik, dan satu pengurangan waktu per
+# permintaan. Yang mahal itu terus menebak.
+
+# Ambang lag event loop (ms). Di bawah ini wajar: garbage collector, potongan
+# kerja kecil. Di atasnya berarti ADA yang memblokir, dan itu yang dicari.
+LOOP_LAG_WARN_MS = float(os.getenv("LOOP_LAG_WARN_MS", "250"))
+# Ambang permintaan lambat (detik).
+SLOW_REQUEST_WARN_S = float(os.getenv("SLOW_REQUEST_WARN_S", "1.0"))
+
+
+async def _watchdog_event_loop():
+    """Ukur seberapa TERLAMBAT sebuah penundaan 0,5 detik benar-benar bangun.
+
+    Kalau event loop bebas, ia bangun tepat waktu. Kalau ada kerja sinkron
+    yang menahannya -- pemindaian ratusan emiten, kueri SQLite yang panjang,
+    apa pun -- keterlambatannya persis selama penahanan itu. Ini satu-satunya
+    cara membuktikan "server membeku" tanpa menebak siapa pelakunya.
+
+    Yang dicetak sengaja menyebut ANGKA, bukan peringatan samar: angka bisa
+    dibandingkan antar-waktu dan dikirim ke orang lain.
+    """
+    while True:
+        t0 = time.perf_counter()
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+        # BATAS BAWAH, bukan nilai persis: kalau penahanan mulai di tengah
+        # jendela 0,5 detik ini, bagian sebelumnya tidak terhitung. Disebutkan
+        # supaya angkanya tidak dibaca sebagai pengukuran presisi -- untuk
+        # menemukan pelakunya, yang dibutuhkan memang cuma "ada dan sekian".
+        lag_ms = (time.perf_counter() - t0 - 0.5) * 1000
+        if lag_ms >= LOOP_LAG_WARN_MS:
+            print(f"\u26a0\ufe0f event-loop tertahan {lag_ms:.0f} ms "
+                  f"(ambang {LOOP_LAG_WARN_MS:.0f} ms)", flush=True)
+
+
 app = FastAPI(title="Ranah Saham API", version="1.0", lifespan=_lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def _catat_permintaan_lambat(request, call_next):
+    """Catat jalur mana yang lambat, berikut berapa lamanya.
+
+    Tanpa ini yang diketahui cuma "webnya lemot" -- keluhan yang tidak bisa
+    ditindaklanjuti. Dengan ini, log server langsung menyebut jalur dan
+    durasinya, jadi pelakunya tidak perlu ditebak lagi.
+    """
+    mulai = time.perf_counter()
+    try:
+        return await call_next(request)
+    finally:
+        lama = time.perf_counter() - mulai
+        if lama >= SLOW_REQUEST_WARN_S:
+            print(f"\u26a0\ufe0f lambat {lama:6.2f}s  {request.method} "
+                  f"{request.url.path}", flush=True)
 
 
 @app.exception_handler(Exception)
@@ -2848,11 +2913,12 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
     # frontend menyimpulkan "belum login" dan memunculkan layar masuk. Persis
     # keluhan "webnya keluar-keluaran, disuruh login ulang", dan panggilan bot
     # ke /api/wa/command juga ikut tertahan.
-    def _pindai():
+    def _pindai(sebagian):
         from core.indicators import calculate_atr
 
         hasil_pindai = []
-        for t, df in (data or {}).items():
+        for t in sebagian:
+            df = (data or {}).get(t)
             if df is None or len(df) < 40:
                 continue
             try:
@@ -2886,8 +2952,19 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
         if kode_mv:
             mv_peta[kode_mv] = m
 
+    # DIPECAH jadi potongan kecil, bukan satu lemparan 237 emiten. Alasannya:
+    # asyncio.to_thread TIDAK membebaskan GIL untuk kerja Python murni --
+    # deteksi pola diukur 52,7 ms/emiten, jadi satu pemindaian penuh menahan
+    # GIL sekitar 12 DETIK dan event loop hanya kebagian sisa-sisa. Dengan
+    # potongan 12 emiten (~0,6 detik), di antara potongan ada jeda bersih
+    # tempat permintaan pengunjung dilayani utuh.
+    hasil_pindai = []
+    for i in range(0, len(tickers), 12):
+        hasil_pindai += await asyncio.to_thread(_pindai, tickers[i:i + 12])
+        await asyncio.sleep(0)   # beri event loop giliran yang sungguhan
+
     items, dibuang_batal = [], 0
-    for t, harga_akhir, atr_pct, p in await asyncio.to_thread(_pindai):
+    for t, harga_akhir, atr_pct, p in hasil_pindai:
         if p["bar_sejak_d"] > maks_umur:
             continue
         if arah in ("bullish", "bearish") and p["arah"] != arah:
