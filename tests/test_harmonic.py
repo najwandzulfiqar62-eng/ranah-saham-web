@@ -97,3 +97,49 @@ def test_ringkasan_menyebut_pola_arah_dan_area_pembalikan():
     assert "Gartley" in teks and "bullish" in teks
     assert "area pembalikan" in teks
     assert ringkas_harmonic([]) == "Tidak ada pola harmonic yang terdeteksi."
+
+
+def test_cypher_bullish_dikenali_dengan_jangkar_rasionya_sendiri():
+    """Cypher memakai jangkar BERBEDA: BC diukur ke XA (bukan AB) dan CD
+    diukur ke XC (bukan BC). Pola dibangun dari rasio itu, lalu harus
+    dikenali sebagai Cypher -- bukan tersasar jadi pola lain."""
+    X, A = 100.0, 200.0
+    xa = A - X
+    B = A - 0.50 * xa            # AB = 0.50 XA (dalam 0.382-0.618)
+    C = B + 1.34 * xa            # BC = 1.34 XA -> C melewati A
+    D = C - 0.786 * (C - X)      # CD = 0.786 XC
+    hasil = detect_harmonic(_df_dari_titik([X, A, B, C, D]))
+    assert hasil, "Cypher yang dibangun dari rasionya sendiri harus terdeteksi"
+    p = hasil[0]
+    assert p["pola"] == "Cypher"
+    assert p["arah"] == "bullish"
+    assert p["titik_akhir"] == "D"
+    assert p["prz"] == pytest.approx(D, abs=4)
+
+
+def test_shark_dikenali_dan_titiknya_dilabeli_0_X_A_B_C():
+    """Shark memakai penamaan 0-X-A-B-C (titik akhirnya C, bukan D) dan
+    rasio 88,6% terhadap leg 0X. Labelnya wajib ikut berbeda -- kalau ditulis
+    X-A-B-C-D, pembaca yang mengecek ke sumber aslinya akan tersesat."""
+    O, X = 100.0, 160.0
+    ox = X - O
+    A = X - 0.45 * ox            # turun sebagian
+    xa = X - A
+    B = A + 1.35 * xa            # AB = 1.35 XA -> B melewati X
+    ab = B - A
+    C = B - 1.9 * ab             # BC = 1.9 AB -> C jatuh ke area 0
+    hasil = detect_harmonic(_df_dari_titik([O, X, A, B, C]))
+    assert hasil, "Shark yang dibangun dari rasionya sendiri harus terdeteksi"
+    p = hasil[0]
+    assert p["pola"] == "Shark"
+    assert p["titik_akhir"] == "C"
+    assert [t["label"] for t in p["titik"]] == ["0", "X", "A", "B", "C"]
+
+
+def test_potensi_naik_diukur_ke_puncak_pola_bukan_angka_karangan():
+    df = _df_dari_titik(_gartley_bullish())
+    p = detect_harmonic(df)[0]
+    # Gartley bullish: puncak pola = titik A (200), penyelesaian D ~121.
+    naik_seharusnya = (200.0 / p["prz"] - 1) * 100
+    assert p["potensi_pct"] == pytest.approx(naik_seharusnya, abs=3)
+    assert p["potensi_pct"] > 50

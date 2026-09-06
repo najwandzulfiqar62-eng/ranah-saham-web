@@ -47,6 +47,25 @@ POLA = {
 ABCD_BC = (0.38, 0.89)
 ABCD_CD = (0.80, 1.30)
 
+# CYPHER -- titik jangkarnya BEDA, karena itu tidak bisa ikut tabel POLA di
+# atas. Aturannya (diverifikasi dari sumber publik, lihat catatan modul):
+#   AB = 0,382-0,618 dari XA
+#   BC = 1,272-1,414 dari XA   <-- diukur ke XA, BUKAN ke AB; C melewati A
+#   CD = 0,786 dari XC          <-- diukur ke XC, BUKAN ke BC
+CYPHER_AB = (0.382, 0.618)
+CYPHER_BC_XA = (1.272, 1.414)
+CYPHER_CD_XC = (0.75, 0.82)
+
+# SHARK -- memakai penamaan 0-X-A-B-C (bukan X-A-B-C-D), jadi titik
+# penyelesaiannya adalah C. Aturannya:
+#   AB = 1,13-1,618 dari XA     (B melewati X)
+#   BC = 1,618-2,24 dari AB
+#   C  = 0,886-1,13 dari leg 0X <-- inilah rasio 88,6%/113% yang jadi ciri
+#                                    khasnya; diukur ke 0X, bukan ke 0B
+SHARK_AB_XA = (1.13, 1.618)
+SHARK_BC_AB = (1.618, 2.24)
+SHARK_C_OX = (0.886, 1.13)
+
 
 def _pivot_bergantian(df: pd.DataFrame, left: int, right: int) -> list[dict]:
     """Daftar pivot yang SELALU bergantian high-low-high-low.
@@ -101,6 +120,64 @@ def _cocokkan(ab: float, bc: float, cd: float, ad: float, toleransi: float) -> t
     return terbaik
 
 
+def _cocokkan_cypher(p: list[dict], arah: str, toleransi: float) -> tuple[str, float] | None:
+    """Cypher: X-A-B-C-D, tapi BC diukur ke XA dan CD diukur ke XC.
+
+    Bentuknya berbeda dari pola klasik: C harus MELEWATI A (bukan retracement
+    di bawahnya), lalu D turun 78,6% dari leg X-C.
+    """
+    X, A, B, C, D = p
+    xa = abs(A["harga"] - X["harga"])
+    ab = abs(B["harga"] - A["harga"])
+    bc = abs(C["harga"] - B["harga"])
+    xc = abs(C["harga"] - X["harga"])
+    cd = abs(D["harga"] - C["harga"])
+    if min(xa, ab, bc, xc) <= 0:
+        return None
+    # C wajib melewati A -- ciri utama Cypher.
+    if arah == "bullish" and not C["harga"] > A["harga"]:
+        return None
+    if arah == "bearish" and not C["harga"] < A["harga"]:
+        return None
+    if not (_dalam(ab / xa, CYPHER_AB, toleransi)
+            and _dalam(bc / xa, CYPHER_BC_XA, toleransi)
+            and _dalam(cd / xc, CYPHER_CD_XC, toleransi)):
+        return None
+    meleset = abs(cd / xc - 0.786) / 0.786
+    return "Cypher", round(max(0.0, 100.0 - meleset * 300), 1)
+
+
+def _cocokkan_shark(p: list[dict], arah: str, toleransi: float) -> tuple[str, float] | None:
+    """Shark: penamaan 0-X-A-B-C, titik penyelesaiannya C (bukan D).
+
+    Ciri khasnya rasio 88,6%/113% terhadap leg 0-X. Untuk versi bullish:
+    0(low) -> X(high) -> A(low) -> B(high, melewati X) -> C(low, dekat/di
+    bawah 0). Titik belinya C.
+    """
+    O, X, A, B, C = p
+    ox = abs(X["harga"] - O["harga"])
+    xa = abs(A["harga"] - X["harga"])
+    ab = abs(B["harga"] - A["harga"])
+    bc = abs(C["harga"] - B["harga"])
+    # 88,6%-113% itu RETRACEMENT leg 0X yang diukur DARI X, bukan jarak C ke
+    # titik 0. Salah menaruhnya membuat pola yang benar tidak pernah cocok:
+    # pada Shark yang sah C berhenti dekat 0, sehingga |C-0| justru ~0.
+    c_ox = abs(C["harga"] - X["harga"])
+    if min(ox, xa, ab, bc) <= 0:
+        return None
+    # B wajib melewati X (impuls), C wajib kembali ke area 0.
+    if arah == "bullish" and not B["harga"] > X["harga"]:
+        return None
+    if arah == "bearish" and not B["harga"] < X["harga"]:
+        return None
+    if not (_dalam(ab / xa, SHARK_AB_XA, toleransi)
+            and _dalam(bc / ab, SHARK_BC_AB, toleransi)
+            and _dalam(c_ox / ox, SHARK_C_OX, toleransi)):
+        return None
+    meleset = abs(c_ox / ox - 0.886) / 0.886
+    return "Shark", round(max(0.0, 100.0 - meleset * 200), 1)
+
+
 def detect_harmonic(df: pd.DataFrame, left_bars: int = 5, right_bars: int = 5,
                     toleransi: float = 0.06, maks: int = 3) -> list[dict]:
     """Pola harmonic terbaru pada df OHLC. Terbaru lebih dulu.
@@ -144,7 +221,10 @@ def detect_harmonic(df: pd.DataFrame, left_bars: int = 5, right_bars: int = 5,
         if not bentuk_benar:
             continue
 
-        cocok = _cocokkan(ab / xa, bc / ab, cd / bc, ad / xa, toleransi)
+        jendela = [X, A, B, C, D]
+        cocok = (_cocokkan(ab / xa, bc / ab, cd / bc, ad / xa, toleransi)
+                 or _cocokkan_cypher(jendela, arah, toleransi)
+                 or _cocokkan_shark(jendela, arah, toleransi))
         nama, skor = cocok if cocok else (None, 0.0)
         if nama is None:
             # ABCD: tanpa titik X, jadi diuji pakai A-B-C-D saja.
@@ -152,17 +232,32 @@ def detect_harmonic(df: pd.DataFrame, left_bars: int = 5, right_bars: int = 5,
                 nama, skor = "ABCD", 60.0
             else:
                 continue
+        # Shark memakai penamaan 0-X-A-B-C: titik penyelesaiannya tetap pivot
+        # terakhir, tapi labelnya berbeda supaya tidak menyesatkan pembaca
+        # yang mengecek ke sumber aslinya.
+        label = ("0", "X", "A", "B", "C") if nama == "Shark" else ("X", "A", "B", "C", "D")
+
+        # POTENSI NAIK dari titik penyelesaian ke puncak pola. Untuk pola
+        # bullish inilah "kalau memantul dari titik terbawah, sejauh apa
+        # ruangnya" -- diukur ke titik tertinggi pola, bukan target karangan.
+        harga_titik = [t["harga"] for t in jendela]
+        if arah == "bullish":
+            potensi = (max(harga_titik) / D["harga"] - 1) * 100 if D["harga"] else 0.0
+        else:
+            potensi = (1 - min(harga_titik) / D["harga"]) * 100 if D["harga"] else 0.0
 
         hasil.append({
             "pola": nama,
             "arah": arah,
             "skor": skor,
-            "prz": round(D["harga"], 2),          # titik D = area pembalikan yang diduga
+            "prz": round(D["harga"], 2),          # titik penyelesaian = area pembalikan
+            "titik_akhir": label[4],              # "D" pada umumnya, "C" untuk Shark
+            "potensi_pct": round(potensi, 1),
             "tanggal_d": tanggal[D["i"]],
-            "bar_sejak_d": len(df) - 1 - D["i"],  # 0 = D baru saja terbentuk
+            "bar_sejak_d": len(df) - 1 - D["i"],  # 0 = baru saja terbentuk
             "titik": [
                 {"label": nama_titik, "tanggal": tanggal[p["i"]], "harga": round(p["harga"], 2)}
-                for nama_titik, p in (("X", X), ("A", A), ("B", B), ("C", C), ("D", D))
+                for nama_titik, p in zip(label, jendela)
             ],
             "rasio": {
                 "AB/XA": round(ab / xa, 3), "BC/AB": round(bc / ab, 3),

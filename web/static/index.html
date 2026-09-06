@@ -4128,16 +4128,17 @@ async function loadHarmonic(){
           <div class="muted" style="font-size:10px">${it.arah}</div></td>
       <td>Rp${fmt(it.harga)}</td>
       <td style="color:${warna};font-family:'JetBrains Mono',monospace">Rp${fmt(it.prz)}
-          <div class="muted" style="font-size:9.5px">titik D</div></td>
+          <div class="muted" style="font-size:9.5px">titik ${it.titik_akhir||'D'} · harga ${it.jarak_ke_prz_pct<=8?'masih dekat':`${fmt(it.jarak_ke_prz_pct,0)}% dari sini`}</div></td>
+      <td style="text-align:right;color:var(--bull)"><b>+${fmt(it.potensi_pct,1)}%</b><div class="muted" style="font-size:9.5px">ruang naik</div></td>
       <td style="text-align:right"><b>${fmt(it.skor,0)}</b><div class="muted" style="font-size:9.5px">kecocokan</div></td>
       <td class="hide-xs muted" style="font-size:10px;font-family:'JetBrains Mono',monospace">${rasio}</td>
     </tr>`;
   }).join('');
   body.innerHTML=`<section class="panel">
     <p class="eyebrow">Pola Harmonic · ${items.length} emiten</p>
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik (X-A-B-C-D) yang tiap kakinya memenuhi rasio Fibonacci. Titik D = area pembalikan yang diduga. Memindai ${d.universe} saham likuid, hanya pola yang titik D-nya terbentuk ≤${d.maks_umur} bar lalu.</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik yang tiap kakinya memenuhi rasio Fibonacci; titik terakhir = area pembalikan yang diduga. Memindai ${d.universe} saham likuid (${d.arah||'bullish'}), hanya pola yang terbentuk ≤${d.maks_umur} bar lalu. Diurut dari <b>ruang naik terbesar</b> — tapi hanya untuk yang harganya masih dekat titik baliknya; yang sudah terlanjur lari ditaruh di bawah.</p>
     <div class="table-wrap"><table class="tbl">
-      <thead><tr><th>Emiten</th><th>Pola</th><th>Harga</th><th>Titik D</th><th style="text-align:right">Skor</th><th class="hide-xs">Rasio</th></tr></thead>
+      <thead><tr><th>Emiten</th><th>Pola</th><th>Harga</th><th>Titik balik</th><th style="text-align:right">Potensi</th><th style="text-align:right">Skor</th><th class="hide-xs">Rasio</th></tr></thead>
       <tbody>${baris}</tbody>
     </table></div>
     ${infoNote('Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik D. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik D terbentuk. Shark & Cypher sengaja tidak dideteksi karena memakai titik jangkar berbeda — memaksakannya ke rumus yang sama akan menghasilkan pola yang terlihat valid padahal rasionya salah. Tap baris untuk analisis.','Cara membaca')}

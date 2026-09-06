@@ -2726,17 +2726,21 @@ async def harmonic_kode(kode: str):
 
 
 @app.get("/api/screener/harmonic")
-async def screener_harmonic(maks_umur: int = 10):
+async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish"):
     """Saringan pola harmonic atas universe likuid.
 
-    maks_umur: hanya pola yang titik D-nya terbentuk <= sekian bar lalu.
-    Pola yang D-nya sudah lama terbentuk memang masih 'ada' di grafik, tapi
-    peluang masuknya sudah lewat -- menampilkannya cuma meramaikan daftar.
+    maks_umur: hanya pola yang titik penyelesaiannya terbentuk <= sekian bar
+    lalu. Pola lama memang masih 'ada' di grafik, tapi peluang masuknya sudah
+    lewat -- menampilkannya cuma meramaikan daftar.
+
+    arah: "bullish" (bawaan), "bearish", atau "semua". Bawaannya bullish
+    karena itu yang dicari: pola yang titik penyelesaiannya ada di BAWAH dan
+    ruang naiknya masih lebar.
 
     Mahal (memindai ratusan emiten), jadi di-cache dan dihangatkan lewat
     jalur yang sama dengan screener lain.
     """
-    kunci = f"screener_harmonic:{maks_umur}"
+    kunci = f"screener_harmonic:v2:{arah}:{maks_umur}"
     cached = _cache_get(kunci)
     if cached is not None:
         return cached
@@ -2766,15 +2770,29 @@ async def screener_harmonic(maks_umur: int = 10):
         p = pola[0]
         if p["bar_sejak_d"] > maks_umur:
             continue
+        if arah in ("bullish", "bearish") and p["arah"] != arah:
+            continue
+        harga_kini = round(float(df["Close"].iloc[-1]), 2)
+        # Seberapa dekat harga SEKARANG ke titik penyelesaian. Pola bagus tapi
+        # harganya sudah jauh meninggalkan titik itu berarti peluangnya lewat.
+        jarak = abs(harga_kini / p["prz"] - 1) * 100 if p["prz"] else 999.0
         items.append({
             "kode": t.replace(".JK", ""),
-            "harga": round(float(df["Close"].iloc[-1]), 2),
-            **{k: p[k] for k in ("pola", "arah", "skor", "prz", "tanggal_d", "bar_sejak_d", "rasio")},
+            "harga": harga_kini,
+            "jarak_ke_prz_pct": round(jarak, 1),
+            **{k: p[k] for k in ("pola", "arah", "skor", "prz", "titik_akhir",
+                                 "potensi_pct", "tanggal_d", "bar_sejak_d", "rasio")},
         })
 
-    # Skor dulu (rasio paling pas), baru yang paling baru terbentuk.
-    items.sort(key=lambda x: (-x["skor"], x["bar_sejak_d"]))
-    payload = _py({"items": items, "universe": len(SCREENER_UNIVERSE), "maks_umur": maks_umur})
+    # Urutan diminta user: "cari yg bullish yg kemungkinan bakalan naik kenceng
+    # dari titik terbawah harmonic". Jadi POTENSI NAIK dulu, tapi hanya untuk
+    # pola yang harganya masih dekat titik penyelesaiannya (<=8%) -- potensi
+    # besar pada saham yang sudah terlanjur lari itu angka yang tidak bisa
+    # dipakai. Sisanya diurut menyusul, tidak dibuang.
+    items.sort(key=lambda x: (x["jarak_ke_prz_pct"] > 8,
+                              -x["potensi_pct"], -x["skor"], x["bar_sejak_d"]))
+    payload = _py({"items": items, "universe": len(SCREENER_UNIVERSE),
+                   "maks_umur": maks_umur, "arah": arah})
     _cache_set_durable(kunci, payload)
     return payload
 
