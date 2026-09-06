@@ -438,3 +438,40 @@ def test_cache_lama_tidak_dihapus_kalau_precache_gagal():
     assert "keys()" in blok and "length" in blok, (
         "activate menghapus cache lama tanpa memeriksa apakah cache baru "
         "benar-benar terisi")
+
+
+def test_app_css_dipisah_dan_ikut_di_precache():
+    """CSS di dalam <head> MEMBLOKIR render sepenuhnya: tidak satu piksel pun
+    tampil sebelum ia selesai diurai, dan CSS inline tidak pernah masuk cache
+    stylesheet browser -- jadi 130 KB itu diurai ulang SETIAP kali aplikasi
+    dibuka. Dipisah, index.html turun 218 KB -> 88 KB.
+
+    Konsekuensinya harus dijaga: kalau '/app.css' tidak ikut di-precache,
+    pembukaan pertama (dan offline) menampilkan halaman TELANJANG -- yang bagi
+    pemakai terlihat seperti aplikasi rusak, bukan seperti gaya yang belum
+    sempat termuat."""
+    html = io.open(os.path.join(os.path.dirname(__file__), "..", "web", "static",
+                                "index.html"), encoding="utf-8").read()
+    sw = _baca_sw()
+    assert '<link rel="stylesheet" href="/app.css">' in html
+    assert "'/app.css'" in sw, "app.css tidak ikut di-precache service worker"
+    # Blok <style> yang tersisa HANYA yang critical -- kalau ia tumbuh besar
+    # lagi, manfaat pemisahannya hilang tanpa ada yang sadar.
+    import re as _re
+    sisa = "".join(m.group(1) for m in _re.finditer(r"<style[^>]*>(.*?)</style>", html, _re.S))
+    assert len(sisa) < 2000, (
+        f"CSS inline tumbuh lagi jadi {len(sisa)} byte; ia memblokir render, "
+        f"jadi isinya harus tetap sebatas warna dasar + splash")
+
+
+def test_critical_css_tidak_bergantung_pada_variabel():
+    """Blok critical tampil SEBELUM app.css tiba, jadi var() apa pun di sana
+    belum punya nilai. Warnanya akan jatuh ke bawaan browser -- putih -- dan
+    yang terlihat adalah kedipan putih persis seperti keluhan yang baru
+    ditutup, cuma versi sekejap."""
+    html = io.open(os.path.join(os.path.dirname(__file__), "..", "web", "static",
+                                "index.html"), encoding="utf-8").read()
+    import re as _re
+    sisa = "".join(m.group(1) for m in _re.finditer(r"<style[^>]*>(.*?)</style>", html, _re.S))
+    assert "var(--" not in sisa, "critical CSS memakai var() yang belum ada nilainya"
+    assert "background:#" in sisa, "critical CSS tidak menetapkan warna dasar"
