@@ -1543,7 +1543,10 @@ async function loadHarmonic(){
     <div class="harm-list">${baris}</div>
     ${infoNote('Timeframe: bar HARIAN (1 bar = 1 hari bursa), riwayat 1 tahun. Sebuah titik dihitung pivot kalau menjadi tertinggi/terendah di antara 5 bar sebelum & 5 bar sesudahnya. Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik itu. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik itu terbentuk. Shark & Cypher memakai titik jangkar berbeda dan dideteksi dengan rumusnya sendiri. Tap kartu untuk analisis.','Cara membaca')}
   </section>`;
-  body.querySelectorAll('.harm-card').forEach(el=>el.onclick=()=>analisis(el.dataset.k));
+  // analisis() TIDAK PERNAH ADA -- pemanggilan lama melempar ReferenceError,
+  // jadi "Tap kartu untuk analisis" diam saja. Pola benar yang dipakai di
+  // seluruh berkas: pindah rute dulu, baru jalankan analisisnya.
+  body.querySelectorAll('.harm-card').forEach(el=>el.onclick=()=>{route('analisis');analyze(el.dataset.k)});
 }
 
 // Kenapa kolom Entry berbunyi "cicil", bukan "tunggu di sini". Angkanya
@@ -2396,9 +2399,9 @@ async function loadSignalAudit(){
             <span class="zeta-sig-lbl">Puncak sejak muncul</span>
             <span class="zeta-sig-val" style="color:var(--bull)">${s.puncak_return_pct>=0?'+':''}${fmt(s.puncak_return_pct,1)}%${s.puncak_date?` <span class="muted" style="font-size:9.5px">${s.puncak_date}</span>`:''}</span>
           </div>`}
-          ${!anjuran?'':`<div class="zeta-sig-row" style="margin-top:4px">
+          ${!anjuranTxt?'':`<div class="zeta-sig-row" style="margin-top:4px;align-items:flex-start">
             <span class="zeta-sig-lbl">Saran</span>
-            <span class="zeta-sig-val" style="color:var(--gold);font-size:11px;text-align:right">${anjuran}</span>
+            <div style="text-align:right;flex:1;min-width:0">${anjuranTxt}</div>
           </div>`}
           ${(!ml||!(ml.pullback||mlDeep))?'':`<div class="zeta-sig-row" style="margin-top:4px">
             <span class="zeta-sig-lbl">Masuk lagi</span>
@@ -4335,7 +4338,7 @@ async function loadBerulang(){
       const gerak=(awal==null||akhir==null)?'':
         `<span class="bh-pct">${awal.toFixed(2)}% <span class="bh-arrow">→</span> <b>${akhir.toFixed(2)}%</b></span>`;
       return`<div class="berulang-holder-row">
-        <span class="bh-nama" title="${escapeHtml(h.nama)}">${escapeHtml(h.nama)}</span>
+        <span class="bh-nama" title="${escHtml(h.nama)}">${escHtml(h.nama)}</span>
         <span class="bh-days">${h.days} hari</span>
         ${gerak}
       </div>`;

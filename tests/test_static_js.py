@@ -15,6 +15,7 @@ tidak menjaga apa pun.
 """
 import io
 import os
+import re
 
 import pytest
 
@@ -231,3 +232,113 @@ def test_pemeriksa_kurung_bisa_dipercaya(contoh, seimbang):
                 ok = False
                 break
     assert (ok and not tumpuk) is seimbang
+
+
+# =========================
+# IDENTIFIER DIPAKAI TAPI TIDAK PERNAH DIDEKLARASIKAN
+# =========================
+# Kelas bug yang paling mahal di berkas ini, dan sudah terjadi TIGA kali:
+#   1. `ml` dipakai sebelum dideklarasikan -> seluruh tabel Audit Sinyal kosong
+#   2. `anjuran` masih dipakai kartu HP sesudah variabelnya dihapus -> halaman
+#      Audit Sinyal KOSONG TOTAL di mobile (desktop selamat karena memakai
+#      tampilan tabel, jadi bugnya lolos sampai user memotret layarnya)
+#   3. `analisis()` & `escapeHtml()` yang tidak pernah ada sama sekali
+# Semuanya melempar ReferenceError saat render, dan gejalanya BUKAN pesan
+# error melainkan bagian halaman yang diam-diam hilang.
+
+GLOBAL_JS = set("""
+window document console navigator location history localStorage sessionStorage
+setTimeout clearTimeout setInterval clearInterval requestAnimationFrame fetch
+Math JSON Object Array String Number Boolean Date RegExp Map Set Promise Error
+parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent
+alert confirm prompt Intl URL URLSearchParams FormData Blob AbortController
+undefined null true false NaN Infinity globalThis performance CustomEvent
+Event MutationObserver IntersectionObserver ResizeObserver TextDecoder
+structuredClone queueMicrotask crypto atob btoa Notification caches
+this arguments super new typeof instanceof in of void delete return if else
+for while do switch case break continue function const let var class extends
+try catch finally throw async await yield default export import from as
+""".split())
+
+# Nama yang SUDAH diperiksa manual dan memang tidak apa-apa: global browser
+# yang tidak masuk daftar di atas, plus beberapa celah parser sederhana ini
+# (destructuring bersarang, parameter di posisi yang tidak dikenali). Daftar
+# ini SENGAJA eksplisit -- setiap nama baru yang muncul harus diperiksa
+# manusia, bukan diam-diam ikut lolos.
+DIMAAFKAN = {
+    "matchMedia", "getComputedStyle", "LightweightCharts", "Image", "File",
+    "Uint8Array", "innerHeight",          # global browser
+    "toast",                              # dipasang sbg window.toast
+    "bar", "Discount", "pos", "isR", "isP", "im",   # celah parser
+}
+
+
+def _nama_dideklarasikan(kode: str) -> set:
+    n = set()
+    for m in re.finditer(r"\b(?:const|let|var)\s+([^;\n]*)", kode):
+        potongan, dalam, kini = [], 0, ""
+        for ch in m.group(1):
+            if ch in "([{":
+                dalam += 1
+            elif ch in ")]}":
+                dalam -= 1
+            if ch == "," and dalam == 0:
+                potongan.append(kini)
+                kini = ""
+            else:
+                kini += ch
+        potongan.append(kini)
+        for p in potongan:
+            p = p.split("=")[0].strip()
+            if re.fullmatch(r"[A-Za-z_$][\w$]*", p):
+                n.add(p)
+    # Destructuring: `const [a,b]=...` dan `const {a,b}=...`. Tanpa ini,
+    # SELURUH nama di dalamnya terlihat tidak pernah dideklarasikan -- dan
+    # pemeriksa yang salah tuduh akan diabaikan orang.
+    for pembungkus in (r"\b(?:const|let|var)\s*\[([^\]]*)\]",
+                       r"\b(?:const|let|var)\s*\{([^}]*)\}"):
+        for m in re.finditer(pembungkus, kode):
+            for bagian in m.group(1).split(","):
+                bagian = bagian.split(":")[-1].split("=")[0].strip()
+                if re.fullmatch(r"[A-Za-z_$][\w$]*", bagian):
+                    n.add(bagian)
+    for pola in (r"\bfunction\s+([A-Za-z_$][\w$]*)", r"\bclass\s+([A-Za-z_$][\w$]*)",
+                 r"\bcatch\s*\(\s*([A-Za-z_$][\w$]*)", r"\b([A-Za-z_$][\w$]*)\s*=>"):
+        n |= {m.group(1) for m in re.finditer(pola, kode)}
+    # parameter fungsi
+    for m in re.finditer(r"\(([^()]*)\)\s*(?:=>|\{)", kode):
+        for bagian in m.group(1).split(","):
+            bagian = bagian.split("=")[0].split(":")[0].strip().lstrip(".").strip("{}[] ")
+            for kecil in re.split(r"[,\s]+", bagian):
+                if re.fullmatch(r"[A-Za-z_$][\w$]*", kecil):
+                    n.add(kecil)
+    return n
+
+
+def _identifier_tak_dikenal(sumber: str) -> dict:
+    kode = _buang_teks_dan_komentar(sumber)
+    punya = _nama_dideklarasikan(kode) | GLOBAL_JS
+    hasil = {}
+    for i, baris in enumerate(kode.split("\n"), start=1):
+        for m in re.finditer(r"(?<![.\w$])([A-Za-z_$][\w$]*)\b", baris):
+            nama = m.group(1)
+            if nama in punya or baris[m.end():m.end() + 1] == ":":
+                continue
+            hasil.setdefault(nama, i)
+    return hasil
+
+
+def test_tidak_ada_identifier_yang_tak_pernah_dideklarasikan():
+    tersisa = {n: b for n, b in _identifier_tak_dikenal(_baca()).items()
+               if n not in DIMAAFKAN}
+    assert not tersisa, (
+        "identifier dipakai tapi tidak pernah dideklarasikan (ReferenceError "
+        f"saat render, bagian halaman akan hilang tanpa pesan error): {tersisa}")
+
+
+def test_pemeriksa_identifier_benar_benar_menangkap_kasusnya():
+    """Pemeriksa yang belum pernah dibuktikan bisa lulus karena buta, bukan
+    karena berkasnya bersih. Ini menirukan persis bug yang terjadi: variabel
+    dihapus tapi pemakaiannya di kartu HP tertinggal."""
+    rusak = _baca().replace("${anjuranTxt}", "${anjuranTidakAda}")
+    assert "anjuranTidakAda" in _identifier_tak_dikenal(rusak)
