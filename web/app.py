@@ -2868,11 +2868,10 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
         return hasil_pindai
 
     # Saringan Minervini dibaca dari CACHE saja -- tidak pernah memicu
-    # hitungan baru. Gunanya menandai irisan kedua saringan: Minervini
-    # menjawab "trennya sudah terbukti kuat", harmonic menjawab "titik
-    # masuknya di mana". Yang lolos keduanya patut ditandai, tapi TIDAK
-    # dipakai memfilter -- irisannya jarang, dan menyaring dengan AND ketat
-    # akan mengosongkan halaman ini di hari biasa.
+    # hitungan baru. Field ini TIDAK ditampilkan di tab Harmonic (harmonic
+    # tetap murni harmonic); ia dipakai sumber sinyal "Minervini x Harmonic"
+    # yang berdiri sendiri, supaya irisannya bisa diukur win rate-nya alih-alih
+    # cuma jadi hiasan di dua halaman.
     mv_peta = {}
     for m in ((_cache_get("screenerpro") or {}).get("items") or []):
         kode_mv = str(m.get("ticker", "")).replace(".JK", "")
@@ -2915,10 +2914,7 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
     # pola yang harganya masih dekat titik penyelesaiannya (<=8%) -- potensi
     # besar pada saham yang sudah terlanjur lari itu angka yang tidak bisa
     # dipakai. Sisanya diurut menyusul, tidak dibuang.
-    # Yang lolos DUA saringan naik lebih dulu: tren yang sudah terbukti kuat
-    # (Minervini) DAN titik masuk yang terdefinisi (harmonic) itu alasan yang
-    # lebih tebal daripada salah satunya saja.
-    items.sort(key=lambda x: (x["jarak_ke_prz_pct"] > 8, x["minervini"] is None,
+    items.sort(key=lambda x: (x["jarak_ke_prz_pct"] > 8,
                               -x["potensi_pct"], -x["skor"], x["bar_sejak_d"]))
     payload = _py({"items": items, "universe": len(semesta),
                    "maks_umur": maks_umur, "arah": arah, "lingkup": lingkup,
@@ -3218,6 +3214,13 @@ async def _run_signal_auto_cycle():
         print(f"⚠️ auto-cycle: gagal catat Smart Money: {type(e).__name__}: {e}")
     try:
         await _record_nr7_52w_cycle(confidence_items)
+        # Teori kelima. Diletakkan sesudah NR7 dan bukan sebelumnya karena ia
+        # bergantung pada cache saringan, bukan pada confidence_items -- kalau
+        # gagal, siklus lain tidak boleh ikut batal.
+        try:
+            await _record_minervini_harmonic_cycle()
+        except Exception as e:
+            print(f"\u26a0\ufe0f siklus Minervini x Harmonic: {type(e).__name__}: {e}")
     except Exception as e:
         print(f"⚠️ auto-cycle: gagal catat NR7+52W: {type(e).__name__}: {e}")
     try:
@@ -5954,6 +5957,65 @@ async def _record_nr7_52w_cycle(confidence_items: list[dict]):
     await record_nr7_52w_signals(nr7_items, price_lookup=_signal_entry_price_lookup)
 
 
+async def _record_minervini_harmonic_cycle():
+    """Catat sinyal "Minervini x Harmonic" (source teori independen ke-5).
+
+    TIDAK memindai apa pun sendiri: ia menyilangkan DUA cache yang sudah
+    dihangatkan pemanas (screenerpro & saringan harmonic) atas universe yang
+    SAMA. Jadi biayanya dua pembacaan cache, bukan pemindaian ketiga -- dan
+    kalau salah satunya belum hangat, siklus ini melewat diam-diam alih-alih
+    memaksa hitungan dingin (disiplin scaling #1 yang berlaku di seluruh
+    berkas ini).
+
+    Konsekuensi yang perlu diketahui: karena memakai cache harmonic yang
+    tersaring bullish & <=10 bar, teori ini otomatis mewarisi batas itu.
+    Itu memang batas yang diinginkan (pola tua bukan titik masuk), tapi ia
+    warisan, bukan keputusan terpisah -- kalau cache-nya diubah, teori ini
+    ikut berubah tanpa ada yang menyentuh kodenya.
+    """
+    from core.signal_history import record_minervini_harmonic_signals
+
+    mv_items = (_cache_get("screenerpro") or {}).get("items") or []
+    hm_items = (_cache_get("screener_harmonic:v3:luas:bullish:10") or {}).get("items") or []
+    if not mv_items or not hm_items:
+        return
+
+    mv_peta = {str(m.get("ticker", "")).replace(".JK", ""): m for m in mv_items}
+    kandidat = []
+    for h in hm_items:
+        mv = mv_peta.get(h.get("kode"))
+        r = h.get("rencana") or {}
+        if not mv or not r.get("tp"):
+            continue
+        # Pola yang ruang ke target terakhirnya lebih kecil dari risikonya
+        # tidak dicatat. Sebuah teori yang mencatat setiap peluang yang
+        # kebetulan lolos dua saringan akan punya win rate yang cantik dan
+        # hasil rupiah yang buruk -- itu bukan teori, itu pencatatan.
+        if not r.get("sepadan"):
+            continue
+        tp = r["tp"]
+        kandidat.append({
+            "kode": h["kode"],
+            "pola": h.get("pola"),
+            "mvh_entry": r["entry"],
+            "mvh_sl": r["sl"],
+            "mvh_tp1": tp[0],
+            "mvh_tp2": tp[1] if len(tp) > 1 else None,
+            "mvh_tp3": tp[2] if len(tp) > 2 else None,
+            "mvh_status": r.get("status"),
+            "mv_skor": mv.get("skor"),
+            "recommendation": f"Minervini {mv.get('criteria_met')}/8",
+        })
+
+    if not kandidat:
+        return
+    # Yang paling meyakinkan lebih dulu: skor Minervini tertinggi, lalu
+    # kecocokan rasio polanya.
+    kandidat.sort(key=lambda x: -(x.get("mv_skor") or 0))
+    await record_minervini_harmonic_signals(
+        kandidat, price_lookup=_signal_entry_price_lookup)
+
+
 @app.get("/api/foreign-flow")
 async def api_foreign_flow(scope: str = "core"):
     """Scan volume anomali / smart money.
@@ -6930,16 +6992,10 @@ def _wa_fmt_harmonic_screener(d: dict) -> str:
         return ("*Saringan Harmonic*\n\n_Tidak ada pola harmonic baru di universe "
                 "hari ini._\n\n_Saringan ini menuntut rasio Fibonacci yang ketat, "
                 "jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak._")
-    kepala = f"*Saringan Harmonic* — {len(items)} emiten"
-    if (d or {}).get("n_confluence"):
-        kepala += f" · {d['n_confluence']} juga lolos Minervini"
-    baris = [kepala, ""]
+    baris = [f"*Saringan Harmonic* — {len(items)} emiten", ""]
     for it in items:
         umur = "baru terbentuk" if it["bar_sejak_d"] <= 2 else f"{it['bar_sejak_d']} hari bursa lalu"
-        # Bintang = lolos DUA saringan. Minervini menjawab "trennya sudah
-        # terbukti kuat", harmonic menjawab "titik masuknya di mana".
-        tanda = " ⭐" if it.get("minervini") else ""
-        baris.append(f"• *{it['kode']}*{tanda} — {it['pola']} ({it['arah']}) · "
+        baris.append(f"• *{it['kode']}* — {it['pola']} ({it['arah']}) · "
                      f"kecocokan {it['skor']:.0f}")
         baris.append(f"   Harga {_rp(it['harga'])} · titik {it.get('titik_akhir') or 'D'} "
                      f"{_rp(it['prz'])} ({umur})")
@@ -6960,9 +7016,6 @@ def _wa_fmt_harmonic_screener(d: dict) -> str:
             if r.get("rr_akhir") is not None and not r.get("sepadan"):
                 baris.append(f"   ⚠️ Ruang ke target terakhir cuma {r['rr_akhir']}× "
                              f"risikonya — tipis untuk pola sebagus ini")
-        if it.get("minervini"):
-            mv = it["minervini"]
-            baris.append(f"   ⭐ Minervini {mv['skor']:.0f} · {mv['criteria_met']}/8 kriteria")
     if (d or {}).get("dibuang_batal"):
         baris += ["", f"_{d['dibuang_batal']} pola dibuang karena titik invalidasinya "
                       f"sudah ditembus — pola mati bukan peluang yang terlambat._"]
@@ -7837,7 +7890,8 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
 
 def _sumber_wa(s: str | None) -> str:
     return {"TOP_PICK": "Top Pick", "MACD_CROSS": "MACD", "SMART_MONEY": "Smart Money",
-            "NR7_52W": "NR7+52W"}.get(s or "", s or "Top Pick")
+            "NR7_52W": "NR7+52W",
+            "MINERVINI_HARMONIC": "Minervini \u00d7 Harmonic"}.get(s or "", s or "Top Pick")
 
 
 def _wa_fmt_screener(payload: dict) -> str:

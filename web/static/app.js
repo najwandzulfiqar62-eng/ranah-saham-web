@@ -1505,11 +1505,6 @@ async function loadHarmonic(){
     const umur=it.bar_sejak_d<=2?'baru terbentuk':`${it.bar_sejak_d} hari bursa lalu`;
     const dekat=it.jarak_ke_prz_pct<=8;
     const rasio=Object.entries(it.rasio||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
-    // Badge irisan dua saringan. Minervini menjawab "trennya sudah terbukti
-    // kuat", harmonic menjawab "titik masuknya di mana" -- yang lolos keduanya
-    // punya alasan yang lebih tebal daripada salah satunya saja.
-    const mv=it.minervini;
-    const mvBadge=mv?`<span class="harm-conf" title="Lolos saringan Minervini juga: skor ${fmt(mv.skor,1)}, ${mv.criteria_met}/8 kriteria, RS ${fmt(mv.rs_score,0)}">⭐ Minervini ${fmt(mv.skor,0)}</span>`:'';
     // Rencana yang diturunkan dari titik polanya sendiri: SL di luar titik
     // invalidasi (bukan ATR generik), target = retracement Fibonacci leg
     // terakhir. Inilah yang membuat pola bisa DIPAKAI, bukan cuma dilihat.
@@ -1527,7 +1522,6 @@ async function loadHarmonic(){
       <div class="harm-head">
         <span class="harm-tk">${tickerTag(it.kode)}</span>
         <span class="harm-pola" style="color:${warna};border-color:${warna}55">${it.pola} · ${it.arah}</span>
-        ${mvBadge}
         <span class="harm-potensi" style="color:${warna}">${naik?'+':''}${fmt(it.potensi_pct,1)}%
           <small>ruang ${naik?'naik':'turun'}</small></span>
       </div>
@@ -1544,7 +1538,7 @@ async function loadHarmonic(){
     </div>`;
   }).join('');
   body.innerHTML=`<section class="panel">
-    <p class="eyebrow">Pola Harmonic · ${items.length} emiten${d.n_confluence?` · ${d.n_confluence} juga lolos Minervini`:''}</p>
+    <p class="eyebrow">Pola Harmonic · ${items.length} emiten</p>
     <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik yang tiap kakinya memenuhi rasio Fibonacci; titik terakhir = area pembalikan yang diduga. Memindai ${d.universe} saham likuid (${d.arah||'bullish'}), hanya pola yang terbentuk ≤${d.maks_umur} hari bursa lalu. Diurut dari <b>ruang naik terbesar</b> — tapi hanya untuk yang harganya masih dekat titik baliknya; yang sudah terlanjur lari ditaruh di bawah.${d.dibuang_batal?` <b>${d.dibuang_batal} pola dibuang</b> karena titik invalidasinya sudah ditembus — pola mati bukan peluang yang terlambat.`:''}</p>
     <div class="harm-list">${baris}</div>
     ${infoNote('Timeframe: bar HARIAN (1 bar = 1 hari bursa), riwayat 1 tahun. Sebuah titik dihitung pivot kalau menjadi tertinggi/terendah di antara 5 bar sebelum & 5 bar sesudahnya. Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik itu. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik itu terbentuk. Shark & Cypher memakai titik jangkar berbeda dan dideteksi dengan rumusnya sendiri. Tap kartu untuk analisis.','Cara membaca')}
@@ -1677,7 +1671,7 @@ function _auditStatusLabel(s){
   if(st==='TP_HIT'){const lv=(s&&typeof s==='object')?(s.tp_level_hit||0):0;if(lv===1||lv===2)return `TP${lv} Tercapai`}
   return {TP_HIT:'TP Tercapai',SL_HIT:'Kena SL',EXPIRED:'Kadaluarsa',OPEN:'Berjalan',PENDING_ENTRY:'Menunggu Entry',EXPIRED_NO_ENTRY:'Entry Tidak Tercapai'}[st]||st
 }
-function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money',NR7_52W:'NR7 + 52W High'}[s]||s||'Top Pick'}
+function _sourceLabel(s){return {TOP_PICK:'Top Pick',MACD_CROSS:'MACD Cross',SMART_MONEY:'Smart Money',NR7_52W:'NR7 + 52W High',MINERVINI_HARMONIC:'Minervini × Harmonic'}[s]||s||'Top Pick'}
 // Badge HIGH RISK khusus sinyal NR7+52W High (teori breakout momentum: stop
 // ketat + breakout bisa palsu -- ditandai jelas atas permintaan user).
 function _riskBadge(s){return s&&s.source==='NR7_52W'?`<span title="Breakout momentum: stop ketat & breakout bisa gagal (false breakout)" style="font-size:9px;font-weight:700;color:#E8A13A;border:1px solid #E8A13A66;border-radius:4px;padding:1px 5px;margin-left:5px;letter-spacing:.3px;white-space:nowrap">HIGH RISK</span>`:''}
@@ -2216,7 +2210,7 @@ async function loadSignalAudit(){
     // ulang. Di dalam satu kelompok, urutan mengikuti prioritas sumber
     // supaya konsisten (Top Pick dulu, lalu Smart Money, lalu NR7).
     const _aktif = s => s.status === 'OPEN' || s.status === 'PENDING_ENTRY';
-    const _PRI = {TOP_PICK:0, SMART_MONEY:1, NR7_52W:2};
+    const _PRI = {TOP_PICK:0, SMART_MONEY:1, NR7_52W:2, MINERVINI_HARMONIC:3};
     const base = [];
     const _anchor = {};            // kode -> posisi baris aktif PERTAMA kode itu
     for(const s of signals){
@@ -5911,7 +5905,7 @@ async function _pollNotifications(silent){
     _updateNotifBadge();
   }catch(e){/* diam -- notifikasi bukan fitur kritis, jangan ganggu UX */}
 }
-function _srcLabel(s){return({TOP_PICK:'Top Pick',SMART_MONEY:'Smart Money',MACD_CROSS:'MACD Cross',NR7_52W:'NR7 + 52W High'})[s]||s||'Sinyal'}
+function _srcLabel(s){return({TOP_PICK:'Top Pick',SMART_MONEY:'Smart Money',MACD_CROSS:'MACD Cross',NR7_52W:'NR7 + 52W High',MINERVINI_HARMONIC:'Minervini × Harmonic'})[s]||s||'Sinyal'}
 function _renderNotifPanel(){
   const q=_notifGetQueue();
   const perm=('Notification'in window)&&Notification.permission!=='granted'&&rsGet('rs_notif_browser')!=='1'

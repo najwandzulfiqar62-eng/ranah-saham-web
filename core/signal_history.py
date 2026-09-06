@@ -777,6 +777,34 @@ def _ensure_table():
             ON signal_history(kode)
             WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'NR7_52W'
         ''')
+        # Migrasi kedua puluh (permintaan user: "bikin sinyal baru dengan teori
+        # minervini X harmonic"): source teori independen KELIMA. Seleksinya
+        # Minervini (trend template 8 kriteria -- "trennya sudah terbukti
+        # kuat"), entry/SL/TP-nya dari geometri pola harmonic ("titik masuknya
+        # di mana"). Alasan dijadikan SOURCE, bukan sekadar halaman saringan:
+        # hanya dengan begitu teorinya ikut diaudit dan win rate-nya bisa
+        # diadu head-to-head dengan Top Pick/NR7 -- gabungan dua metode yang
+        # tidak pernah diukur cuma bersandar pada kesan bahwa ia masuk akal.
+        #
+        # Index-nya ter-scope per source, alasan SAMA dengan NR7 (2026-07-22):
+        # saham yang sama boleh punya sinyal aktif di beberapa teori sekaligus,
+        # justru itu syarat perbandingan yang adil. DELETE dulu baru CREATE --
+        # pola yang bug-nya pernah menjatuhkan /api/signals total (lihat
+        # catatan panjang di migrasi ketujuh belas).
+        conn.execute('''
+            DELETE FROM signal_history
+            WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'MINERVINI_HARMONIC'
+            AND id NOT IN (
+                SELECT MIN(id) FROM signal_history
+                WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'MINERVINI_HARMONIC'
+                GROUP BY kode
+            )
+        ''')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_active_mvh
+            ON signal_history(kode)
+            WHERE status IN ('OPEN', 'PENDING_ENTRY') AND source = 'MINERVINI_HARMONIC'
+        ''')
         # Migrasi ketujuh belas: permintaan user langsung ("nentuin entry
         # audit sinyalnya lebih akurat lagi ... momentum saham yg masuk
         # sinyal harus masuk agresif atau masuk area aman dlu") -- kolom
@@ -1420,6 +1448,143 @@ async def record_nr7_52w_signals(items: list[dict], price_lookup=None) -> list[d
             "source": "NR7_52W", "direction": "BUY", "entry_mode": "AGRESIF",
         })
     return saved
+
+
+def _has_open_mvh(kode: str) -> bool:
+    """Dedup KHUSUS source MINERVINI_HARMONIC. Terpisah dari grup main dan
+    dari NR7 dengan alasan yang sama: tiap teori berdiri sendiri, jadi satu
+    saham boleh muncul di beberapa teori sekaligus -- itu justru yang membuat
+    perbandingan win rate antar-teori berarti."""
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT 1 FROM signal_history
+            WHERE kode = ? AND source = 'MINERVINI_HARMONIC'
+              AND (status IN ('OPEN', 'PENDING_ENTRY') OR date(resolved_at) = date('now', 'localtime'))
+            LIMIT 1
+        """, (kode,)).fetchone()
+    return row is not None
+
+
+# Cap harian: sama semangat NR7_52W_MAX_PER_DAY. Irisan dua saringan memang
+# jarang, jadi cap ini nyaris tidak pernah menggigit -- ia ada sebagai batas
+# atas kalau suatu hari pasarnya seragam, bukan sebagai penyaring.
+MVH_MAX_PER_DAY = 8
+
+
+async def record_minervini_harmonic_signals(items: list[dict],
+                                            price_lookup=None) -> list[dict]:
+    """Catat sinyal "Minervini x Harmonic" (source teori independen ke-5).
+
+    Pembagian tugasnya tegas dan itulah inti teorinya:
+      - SELEKSI dari Minervini: saham harus lolos trend template (tren yang
+        sudah terbukti kuat, bukan saham yang kebetulan membentuk pola bagus
+        di tengah tren rusak).
+      - ENTRY/SL/TP dari pola harmonic: entry di titik penyelesaian, SL di
+        LUAR titik invalidasi pola, target = retracement Fibonacci leg
+        terakhir. SL-nya karena itu punya arti struktural -- kalau tersentuh,
+        yang batal bukan cuma posisinya, polanya sendiri yang batal.
+
+    Level diambil apa adanya dari rencana_harmonic() lewat caller, BUKAN
+    dihitung ulang di sini -- supaya yang diaudit identik dengan yang
+    ditentukan teorinya (prinsip yang sama dipakai record_nr7_52w_signals).
+
+    Status awal ditentukan posisi harga terhadap titik pola:
+      - harga masih DI AREA titik itu -> OPEN (masuk sekarang)
+      - harga belum/sudah lewat       -> PENDING_ENTRY di titik polanya
+    Membuat semuanya OPEN akan mencatat entry di harga yang bukan harga
+    teorinya; membuat semuanya PENDING_ENTRY akan melewatkan pola yang
+    justru sedang berada tepat di titiknya.
+
+    Fungsi ini TIDAK melakukan I/O jaringan (mudah ditest); caller yang
+    menyiapkan itemnya.
+    """
+    from core.trading_plan import MIN_SL_PCT
+
+    _ensure_table()
+    if _is_bursa_weekend():
+        return []
+    if not _is_bursa_trading_hours():
+        return []
+
+    kandidat = [
+        it for it in items
+        if _is_finite_pos(it.get("mvh_entry"))
+        and _is_finite_pos(it.get("mvh_sl"))
+        and _is_finite_pos(it.get("mvh_tp1"))
+        and it.get("mvh_sl") < it.get("mvh_entry")   # BUY-only: SL di bawah entry
+        and it.get("mvh_tp1") > it.get("mvh_entry")
+    ][:MVH_MAX_PER_DAY]
+    if not kandidat:
+        return []
+
+    tersimpan = []
+    for it in kandidat:
+        if _has_open_mvh(it["kode"]):
+            continue
+
+        di_area = it.get("mvh_status") == "di area"
+        entry_price = it["mvh_entry"]
+        if di_area and price_lookup is not None:
+            # Masuk di harga pasar, tapi hanya kalau harganya memang masih di
+            # area titik pola. Fail-open ke harga teori kalau lookup gagal.
+            try:
+                live = await price_lookup(it["kode"])
+                if live:
+                    entry_price = live
+            except Exception:
+                pass
+
+        # Persentase dihitung dari entry yang BENAR-BENAR dipakai, sedangkan
+        # level rupiahnya tetap milik polanya. Kalau yang disimpan persentase
+        # dari titik pola sementara entry-nya harga pasar, SL & TP yang diaudit
+        # akan meleset dari garis yang sesungguhnya digambar teori ini.
+        sl_pct = (entry_price - it["mvh_sl"]) / entry_price * 100
+        if sl_pct < MIN_SL_PCT:
+            # Lantai yang sama dengan seluruh aplikasi. Entry pasar yang
+            # kebetulan sudah dekat SL bisa memepetkan jaraknya lagi.
+            sl_pct = MIN_SL_PCT
+        tp_pct = (it["mvh_tp1"] - entry_price) / entry_price * 100
+        tp2_pct = ((it["mvh_tp2"] - entry_price) / entry_price * 100
+                   if _is_finite_pos(it.get("mvh_tp2")) else tp_pct * 2)
+        tp3_pct = ((it["mvh_tp3"] - entry_price) / entry_price * 100
+                   if _is_finite_pos(it.get("mvh_tp3")) else tp_pct * 3)
+        if tp_pct <= 0:
+            continue  # entry pasar sudah melewati target pertama; tidak ada trade
+
+        pattern = f"Minervini + {it.get('pola') or 'Harmonic'}"
+        status = "OPEN" if di_area else "PENDING_ENTRY"
+        entry_mode = "AGRESIF" if di_area else "AREA_AMAN"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if _has_open_mvh(it["kode"]):
+            continue
+        with get_db() as conn:
+            cur = conn.execute("""
+                INSERT OR IGNORE INTO signal_history
+                    (kode, entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
+                     confidence_score, ai_score, recommendation, pattern, source,
+                     recorded_at, direction, entry_mode, status, entry_filled_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'MINERVINI_HARMONIC',
+                        datetime('now', 'localtime'), 'BUY', ?, ?, ?)
+            """, (
+                it["kode"], entry_price, tp_pct, tp2_pct, tp3_pct, sl_pct,
+                it.get("mv_skor"), it.get("ai_score"), it.get("recommendation"),
+                pattern, entry_mode, status, now_str if di_area else None,
+            ))
+            if cur.rowcount == 0:
+                continue
+            new_id = cur.lastrowid
+
+        tersimpan.append({
+            "id": new_id, "kode": it["kode"], "entry_price": entry_price,
+            "tp_pct": tp_pct, "tp2_pct": tp2_pct, "tp3_pct": tp3_pct, "sl_pct": sl_pct,
+            "tp_price": round(entry_price * (1 + tp_pct / 100), 2),
+            "sl_price": round(entry_price * (1 - sl_pct / 100), 2),
+            "confidence_score": it.get("mv_skor"), "pattern": pattern,
+            "source": "MINERVINI_HARMONIC", "direction": "BUY",
+            "entry_mode": entry_mode, "status": status,
+        })
+    return tersimpan
 
 
 async def audit_pending_entries(price_lookup) -> list[dict]:
