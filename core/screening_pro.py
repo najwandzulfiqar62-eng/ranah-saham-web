@@ -122,9 +122,12 @@ async def run_screenerpro(tickers: list[str],
     # sehingga frontend menyimpulkan "belum login" dan memunculkan layar
     # masuk. Itu keluhan "web keluar-keluaran, disuruh login ulang" yang
     # sudah dilacak ke akar yang sama di tempat lain.
-    def _nilai_semua():
+    def _nilai_semua(sebagian):
         hasil = []
-        for ticker, df in data.items():
+        for ticker in sebagian:
+            df = data.get(ticker)
+            if df is None:
+                continue
             try:
                 df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
                 if len(df) < 200:
@@ -141,7 +144,17 @@ async def run_screenerpro(tickers: list[str],
                 continue
         return hasil
 
-    results = await asyncio.to_thread(_nilai_semua)
+    # DIPECAH, alasan sama dengan saringan harmonic: asyncio.to_thread tidak
+    # membebaskan GIL untuk kerja Python murni, jadi menilai 237 emiten dalam
+    # satu tarikan tetap membuat event loop kelaparan selama beberapa detik --
+    # dan selama itu /api/access/me ikut menggantung, yang oleh frontend
+    # dibaca sebagai "sesi tidak valid". Potongan 20 emiten memberi jeda
+    # bersih tempat permintaan pengunjung dilayani utuh.
+    daftar = list(data.keys())
+    results = []
+    for i in range(0, len(daftar), 20):
+        results += await asyncio.to_thread(_nilai_semua, daftar[i:i + 20])
+        await asyncio.sleep(0)
     return sorted(results, key=lambda x: x["skor"], reverse=True)
 
 
