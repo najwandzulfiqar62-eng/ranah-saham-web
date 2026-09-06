@@ -127,6 +127,19 @@
   .access-card h1{font:700 clamp(27px,5vw,35px) "Space Grotesk",sans-serif;line-height:1.08;margin:0 0 10px}.access-card p{margin:0;color:var(--muted);font-size:13px;line-height:1.65}
   .access-tabs{display:flex;gap:6px;padding:5px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;margin:24px 0 16px}.access-tabs button{flex:1;border:0;background:transparent;color:var(--muted);padding:9px;border-radius:7px;font:600 13px Inter,sans-serif;cursor:pointer}.access-tabs button.active{color:var(--text);background:var(--elev);box-shadow:var(--shadow-xs)}
   .access-form{display:grid;gap:14px}.access-form[hidden]{display:none}.access-form label{display:grid;gap:6px;color:var(--muted);font-size:12px;font-weight:600;line-height:1.45}.access-form input,.access-form textarea{box-sizing:border-box;width:100%;background:var(--elev);border:1px solid var(--line);border-radius:9px;padding:12px 13px;color:var(--text);font:14px Inter,sans-serif;outline:none}.access-form input:-webkit-autofill,.access-form input:-webkit-autofill:hover,.access-form input:-webkit-autofill:focus{-webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 1000px var(--elev) inset;caret-color:var(--text)}.access-form textarea{min-height:76px;resize:vertical;line-height:1.45}.access-form input:focus,.access-form textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-soft)}.access-form input[type=file]{padding:9px;background:transparent;font-size:12px}.access-submit{border:0;border-radius:9px;padding:13px 14px;background:linear-gradient(135deg,var(--gold),#9f7314);color:#fff;font:700 13px Inter,sans-serif;cursor:pointer;margin-top:3px}.access-submit:disabled{opacity:.6;cursor:wait}.access-note{margin-top:18px!important;font-size:11px!important}.access-msg{min-height:19px;margin-top:14px!important;font-size:12px!important}.access-msg.err{color:var(--bear)}.access-msg.ok{color:var(--bull)}
+  /* Langkah bergabung di formulir daftar. Dibuat MENONJOL karena inilah yang
+     sebelumnya hilang: formulirnya menuntut bukti anggota tanpa memberi jalan
+     untuk menjadi anggota, jadi orang yang belum masuk grup menemui jalan
+     buntu dan tidak jadi mendaftar sama sekali. */
+  .access-step{display:flex;gap:10px;align-items:flex-start;padding:12px 13px;
+    border:1px solid var(--gold);border-radius:9px;background:var(--gold-soft)}
+  .access-step b{display:block;color:var(--text);font-size:12.5px;margin-bottom:3px}
+  .access-step a{color:var(--gold);font-weight:700;font-size:13px;text-decoration:none}
+  .access-step a:hover{text-decoration:underline}
+  .access-step p{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.45}
+  .access-step-no{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+    width:18px;height:18px;border-radius:50%;background:var(--gold);color:#fff;
+    font:700 10.5px Inter,sans-serif}
   .access-account-btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:7px;padding:7px 9px;font:600 11px Inter,sans-serif;cursor:pointer;white-space:nowrap}.access-account-btn[hidden]{display:none}.access-admin-badge{display:inline-grid;place-items:center;min-width:16px;height:16px;margin-left:5px;padding:0 4px;border-radius:999px;background:var(--bear);color:#fff;font-size:9px;line-height:1}.access-account-btn.access-has-new .access-admin-badge{animation:access-pending-pulse 1s ease-in-out 2}@keyframes access-pending-pulse{50%{transform:scale(1.35);box-shadow:0 0 0 6px rgba(214,90,74,.2)}}.profile-avatar-row{display:flex;align-items:center;gap:13px;padding:10px 0 2px}.profile-avatar-preview{width:58px;height:58px;border-radius:50%;border:1px solid var(--line);object-fit:cover;background:var(--elev)}.profile-avatar-empty{display:grid;place-items:center;font:700 19px "Space Grotesk",sans-serif;color:var(--gold)}.profile-file-note{font-size:11px;color:var(--muted);margin:0}.access-history-title{margin:18px 0 4px;font-size:12px;color:var(--muted)}.access-status{display:inline-block;margin-top:4px;font-size:10px}.access-status.approved{color:var(--bull)}.access-status.rejected{color:var(--bear)}.access-proof-link{display:block;width:max-content;margin-top:4px;font-size:10px;color:var(--gold);text-decoration:underline}
   #accessAdminPanel{display:none;position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.52);padding:24px 20px;box-sizing:border-box;overflow:auto;align-items:flex-start;justify-content:center}.access-admin-card{width:min(100%,620px);max-height:calc(100dvh - 48px);box-sizing:border-box;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;flex:0 0 auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-lg);padding:22px}.access-admin-head{display:flex;align-items:start;justify-content:space-between;gap:14px;margin-bottom:16px}.access-admin-head h2{margin:0;font:700 21px "Space Grotesk",sans-serif}.access-admin-head p{margin:4px 0 0;color:var(--muted);font-size:12px}.access-close{border:0;background:transparent;color:var(--muted);font-size:25px;line-height:1;cursor:pointer}.access-user-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}.access-user-row b{display:block;font-size:13px}.access-user-row span{color:var(--muted);font-size:11px}.access-user-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.access-user-actions button,.access-logout{border:1px solid var(--line);border-radius:7px;padding:7px 9px;background:var(--panel2);color:var(--text);font:600 11px Inter,sans-serif;cursor:pointer}.access-user-actions .approve{border-color:rgba(47,181,126,.55);color:var(--bull)}.access-user-actions .reject,.access-user-actions .delete-history{border-color:rgba(214,90,74,.45);color:var(--bear)}.access-logout{margin-top:16px;color:var(--bear)}
   .access-admin-tabs{display:flex;gap:6px;padding:5px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;margin:0 0 18px}.access-admin-tabs button{flex:1;border:0;border-radius:7px;padding:10px 9px;background:transparent;color:var(--muted);font:600 12px Inter,sans-serif;cursor:pointer}.access-admin-tabs button.active{color:var(--text);background:var(--elev);box-shadow:var(--shadow-xs)}.access-admin-section[hidden]{display:none}.access-admin-section-title{margin:0 0 12px;font:700 14px "Space Grotesk",sans-serif}.access-history-info{margin:16px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:11px;line-height:1.5;background:var(--panel2)}
@@ -1701,12 +1714,32 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
       <label>Email<input name="email" type="email" autocomplete="email" required></label>
       <label>Nomor HP WhatsApp<input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="0812xxxx" required></label>
       <label>Password <small>(minimal 10 karakter)</small><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
-      <label>Screenshot bukti anggota grup WhatsApp Ranah Invest <small>(JPG, PNG, atau WEBP · maks. 4 MB)</small><input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+      <!-- Langkah bergabung ditaruh SEBELUM kolom unggah, bukan sesudahnya.
+           Sebelum ini formulirnya menuntut bukti anggota tanpa memberi satu
+           pun jalan untuk menjadi anggota -- orang yang belum masuk grup
+           menemui jalan buntu di sini dan tidak jadi mendaftar. -->
+      <div class="access-step">
+        <span class="access-step-no">1</span>
+        <div>
+          <b>Belum gabung grupnya?</b>
+          <a href="https://chat.whatsapp.com/DzUyPERGRzzHM61zIixJ9Q" target="_blank" rel="noopener noreferrer">Gabung grup WhatsApp Ranah Invest →</a>
+          <p>Sudah jadi anggota? Lewati saja langkah ini.</p>
+        </div>
+      </div>
+      <label><span class="access-step-no">2</span> Screenshot bukti anggota grup <small>(JPG, PNG, atau WEBP · maks. 4 MB)</small><input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></label>
       <button class="access-submit" type="submit">Kirim permintaan akses</button>
     </form>
     <form class="access-form" id="googleProofForm" enctype="multipart/form-data" hidden>
       <p>Login Google berhasil. Lengkapi verifikasi dengan screenshot anggota grup WhatsApp Ranah Invest agar admin dapat menyetujui akunmu.</p>
-      <label>Screenshot bukti anggota<input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+      <div class="access-step">
+        <span class="access-step-no">1</span>
+        <div>
+          <b>Belum gabung grupnya?</b>
+          <a href="https://chat.whatsapp.com/DzUyPERGRzzHM61zIixJ9Q" target="_blank" rel="noopener noreferrer">Gabung grup WhatsApp Ranah Invest →</a>
+          <p>Sudah jadi anggota? Lewati saja langkah ini.</p>
+        </div>
+      </div>
+      <label><span class="access-step-no">2</span> Screenshot bukti anggota<input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></label>
       <button class="access-submit" type="submit">Kirim bukti verifikasi</button>
     </form>
     <p class="access-msg" id="accessMessage"></p>
