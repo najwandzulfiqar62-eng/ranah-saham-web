@@ -2289,7 +2289,24 @@ async function loadSignalAudit(){
     const isMore = auditLimit < digabung.length;
     const toRender = digabung.slice(0, auditLimit);
 
+    // Satu baris yang gagal TIDAK BOLEH mengosongkan seluruh daftar. Tanpa
+    // penjagaan ini, satu ReferenceError di satu baris membuat SELURUH
+    // halaman Audit Sinyal kosong tanpa pesan apa pun -- sudah terjadi dua
+    // kali (`ml` dipakai sebelum dideklarasikan, lalu `anjuran` yang
+    // variabelnya sudah dihapus). Baris bermasalah diganti penanda kecil
+    // supaya kegagalannya KELIHATAN, bukan menghapus segalanya diam-diam.
     const rows = toRender.map(s => {
+      try { return _auditRowHtml(s); }
+      catch(err){
+        console.error('Audit Sinyal: baris', s && s.kode, 'gagal dirender', err);
+        const nm = escHtml(String((s && s.kode) || '?'));
+        return auditViewMode === 'table'
+          ? `<tr><td colspan="7" class="muted" style="font-size:11px">${nm} — baris ini gagal ditampilkan</td></tr>`
+          : `<div class="zeta-sig-card"><div class="muted" style="font-size:11px">${nm} — baris ini gagal ditampilkan</div></div>`;
+      }
+    }).join('');
+
+    function _auditRowHtml(s){
       const tanggal=(s.recorded_at||'').slice(0,10);
       const isOpen=s.status==='OPEN';
       const isPending=s.status==='PENDING_ENTRY';
@@ -2423,7 +2440,7 @@ async function loadSignalAudit(){
           </div>
         </div>
       </div>`;
-    }).join('');
+    }
 
     // Tiap saringan menyebut jumlahnya. Tanpa angka ini, daftar yang dipotong
     // di 12 baris tidak bisa dibedakan dari daftar yang memang cuma segitu --
@@ -6019,7 +6036,52 @@ function _toggleNotifPanel(){
 })();
 
 /* init */
-if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{})})}
+// Versi aplikasi. HARUS sama dengan CACHE di sw.js -- ada pengujian yang
+// gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
+// mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
+// tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
+const APP_VERSION='v41';
+(()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
+
+if('serviceWorker' in navigator){
+  // MASALAH YANG DITUTUP DI SINI: pendaftaran lama fire-and-forget. Service
+  // worker baru memang mengambil alih (skipWaiting + clients.claim), TAPI
+  // halaman SUDAH terlanjur dirender memakai app.js LAMA dari cache. Di
+  // browser biasa itu selesai sendiri saat tab ditutup; di aplikasi yang
+  // dipasang ke LAYAR UTAMA, iOS menahan aplikasinya tetap hidup, jadi versi
+  // lama bisa bertahan berhari-hari. Gejalanya: sudah deploy berkali-kali,
+  // layarnya tetap rusak, dan tidak ada satu pun tanda kenapa.
+  let _swSudahReload=false;
+  // Kalau BELUM ada controller, ini instalasi PERTAMA -- tidak ada versi lama
+  // yang perlu ditinggalkan, jadi jangan reload (itu cuma bikin kedip).
+  const _adaVersiLama=!!navigator.serviceWorker.controller;
+  const _dibukaPada=Date.now();
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(!_adaVersiLama||_swSudahReload) return;
+    _swSudahReload=true;
+    // Muat ulang HANYA kalau halaman baru saja dibuka. Menarik halaman dari
+    // bawah kaki orang yang sedang membaca itu memperbaiki satu masalah
+    // sambil membuat masalah lain; sesudah itu cukup ditawarkan.
+    if(Date.now()-_dibukaPada<8000){ location.reload(); return; }
+    try{
+      if(typeof toast==='function')
+        toast('Versi baru sudah siap. Muat ulang untuk memakainya.','info',6000);
+    }catch(_){}
+  });
+  window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{})});
+  // Di iOS, aplikasi yang dipasang ke layar utama biasanya DI-RESUME, bukan
+  // dibuka ulang -- dan tanpa navigasi, browser TIDAK PERNAH memeriksa apakah
+  // ada service worker versi baru. Akibatnya versi lama bisa bertahan
+  // berhari-hari walau server sudah lama diperbarui. Pemeriksaan dipaksa tiap
+  // kali aplikasi kembali terlihat; kalau memang tidak ada versi baru,
+  // update() tidak melakukan apa-apa (murah, tanpa unduhan berarti).
+  const _periksaVersi=()=>{
+    if(document.visibilityState!=='visible') return;
+    navigator.serviceWorker.getRegistration().then(r=>{ if(r) r.update(); }).catch(()=>{});
+  };
+  document.addEventListener('visibilitychange',_periksaVersi);
+  window.addEventListener('focus',_periksaVersi);
+}
 loadMarketStrip();
 loadTickerMarquee();
 loadNewsMarquee();

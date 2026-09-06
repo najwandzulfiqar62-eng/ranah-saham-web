@@ -342,3 +342,30 @@ def test_pemeriksa_identifier_benar_benar_menangkap_kasusnya():
     dihapus tapi pemakaiannya di kartu HP tertinggal."""
     rusak = _baca().replace("${anjuranTxt}", "${anjuranTidakAda}")
     assert "anjuranTidakAda" in _identifier_tak_dikenal(rusak)
+
+
+def test_versi_app_js_dan_service_worker_selalu_sama():
+    """Menaikkan CACHE di sw.js tanpa menaikkan APP_VERSION (atau sebaliknya)
+    membuat penanda versi di footer BERBOHONG -- dan penanda versi yang bohong
+    lebih buruk daripada tidak ada, karena ia dipakai untuk memutuskan apakah
+    sebuah perbaikan sudah sampai atau belum."""
+    sw = io.open(os.path.join(os.path.dirname(__file__), "..", "web", "static", "sw.js"),
+                 encoding="utf-8").read()
+    cache = re.search(r"const CACHE\s*=\s*'ranahsaham-(v\d+)'", sw)
+    app = re.search(r"const APP_VERSION\s*=\s*'(v\d+)'", _baca())
+    assert cache and app, "penanda versi tidak ditemukan di salah satu berkas"
+    assert cache.group(1) == app.group(1), (
+        f"sw.js pakai {cache.group(1)} tapi app.js pakai {app.group(1)} -- "
+        f"footer akan menampilkan versi yang salah")
+
+
+def test_aplikasi_layar_utama_ikut_versi_baru():
+    """Tanpa penanganan controllerchange, aplikasi yang dipasang di layar utama
+    terus memakai app.js LAMA sampai benar-benar ditutup -- dan iOS menahannya
+    tetap hidup, jadi versi lama bisa bertahan berhari-hari walau sudah deploy
+    berkali-kali. Persis yang terjadi pada layar Audit Sinyal yang kosong."""
+    src = _baca()
+    assert "controllerchange" in src, "service worker baru tidak pernah diikuti halaman"
+    # Instalasi PERTAMA tidak boleh ikut memicu reload (cuma bikin kedip).
+    assert "navigator.serviceWorker.controller" in src, \
+        "reload tidak dijaga terhadap instalasi pertama"
