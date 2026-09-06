@@ -6080,7 +6080,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v46';
+const APP_VERSION='v47';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
@@ -6122,10 +6122,36 @@ if('serviceWorker' in navigator){
   document.addEventListener('visibilitychange',_periksaVersi);
   window.addEventListener('focus',_periksaVersi);
 }
-loadMarketStrip();
-loadTickerMarquee();
-loadNewsMarquee();
+// URUTAN INI DISENGAJA. Dulu keempatnya ditembakkan bersamaan, jadi isi
+// halaman yang benar-benar dilihat orang berebut jaringan dan CPU dengan tiga
+// strip HIASAN (pita pasar, pita saham berjalan, pita berita). Di HP dengan
+// server yang sedang sibuk, itu yang membuat detik-detik pertama terasa berat:
+// yang ditunggu bukan berandanya, melainkan antrean di depannya.
 loaded.beranda=1; loadHome();
+
+// Hiasan menyusul saat browser sedang senggang. Kalau requestIdleCallback
+// tidak ada (Safari lama), jeda tetap diberikan supaya beranda dapat giliran
+// pertama. Timeout 3 detik menjamin ia tidak tertunda selamanya di perangkat
+// yang tidak pernah benar-benar idle.
+function _muatHiasan(){
+  loadMarketStrip();
+  loadTickerMarquee();
+  loadNewsMarquee();
+}
+if('requestIdleCallback' in window) requestIdleCallback(_muatHiasan,{timeout:3000});
+else setTimeout(_muatHiasan,1200);
+
+// Animasi pita berjalan tanpa henti. Selama aplikasi tidak terlihat, itu
+// membangunkan compositor terus-menerus tanpa ada yang menontonnya -- boros
+// baterai, dan saat aplikasi dibuka kembali antrean frame yang menumpuk
+// terasa sebagai tersendat. Dihentikan lewat kelas di <html> supaya satu
+// aturan CSS mengurus semua pita sekaligus.
+(function(){
+  const setel=()=>document.documentElement.classList.toggle(
+    'anim-berhenti', document.visibilityState!=='visible');
+  document.addEventListener('visibilitychange',setel);
+  setel();
+})();
 
 /* ===== SPLASH SCREEN: fade-out lalu buka landing hero di baliknya =====
    Splash (z-index 100000) menutup landing hero (99999) saat load; setelah

@@ -259,6 +259,7 @@ alert confirm prompt Intl URL URLSearchParams FormData Blob AbortController
 undefined null true false NaN Infinity globalThis performance CustomEvent
 Event MutationObserver IntersectionObserver ResizeObserver TextDecoder
 structuredClone queueMicrotask crypto atob btoa Notification caches
+requestIdleCallback cancelIdleCallback
 this arguments super new typeof instanceof in of void delete return if else
 for while do switch case break continue function const let var class extends
 try catch finally throw async await yield default export import from as

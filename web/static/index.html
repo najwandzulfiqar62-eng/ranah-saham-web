@@ -492,6 +492,12 @@
   .ticker-marquee:hover .ticker-track{animation-play-state:paused}
   @media(prefers-reduced-motion:reduce){.ticker-track{animation:none!important;overflow-x:auto}}
   @keyframes tickerScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  /* Saat aplikasi tidak terlihat, SELURUH animasi dihentikan. Pita
+     berjalan tanpa henti membangunkan compositor terus-menerus tanpa
+     ada yang menontonnya; di aplikasi layar-utama yang jarang benar-
+     benar ditutup, itu berjalan berjam-jam. */
+  html.anim-berhenti *,html.anim-berhenti *::before,html.anim-berhenti *::after{
+    animation-play-state:paused!important}
   .ticker-item{display:inline-flex;align-items:center;gap:7px;padding:8px 20px;font-family:'JetBrains Mono',monospace;
     font-size:12px;color:var(--faint);cursor:pointer;flex-shrink:0}
   .ticker-item b{color:var(--text);font-family:'Space Grotesk',sans-serif;font-weight:700;letter-spacing:.02em}
