@@ -6678,6 +6678,14 @@ def _wa_fmt_berita(items: list[dict] | None, kode: str = "") -> str:
     return "\n".join(baris)
 
 
+# Pertanyaan nyata anggota grup: "harmonic berapa bar wan?" -- bot menyebut
+# "6 bar lalu" tapi tidak pernah menjelaskan bar apa. Satuan yang tidak
+# dijelaskan bikin angkanya tidak bisa dipakai siapa pun.
+_WA_HARMONIC_TF = ("_Timeframe: *bar harian* (1 bar = 1 hari bursa), riwayat 1 tahun. "
+                   "Sebuah titik dihitung pivot kalau jadi tertinggi/terendah di antara "
+                   "5 bar sebelum & 5 bar sesudahnya._")
+
+
 def _wa_fmt_harmonic_kode(kode: str, d: dict) -> str:
     """Pola harmonic satu emiten."""
     pola = d.get("pola") or []
@@ -6688,7 +6696,7 @@ def _wa_fmt_harmonic_kode(kode: str, d: dict) -> str:
     baris = [f"*Harmonic {kode}* — {len(pola)} pola"]
     for p in pola:
         umur = ("baru terbentuk" if p["bar_sejak_d"] <= 2
-                else f"{p['bar_sejak_d']} bar lalu")
+                else f"{p['bar_sejak_d']} hari bursa lalu")
         baris += ["", f"*{p['pola']}* ({p['arah']}) · kecocokan {p['skor']:.0f}/100",
                   f"   Titik D (area pembalikan): {_rp(p['prz'])} — {p['tanggal_d']}, {umur}"]
         titik = " → ".join(f"{t['label']} {_rp(t['harga'])}" for t in p.get("titik", []))
@@ -6697,9 +6705,10 @@ def _wa_fmt_harmonic_kode(kode: str, d: dict) -> str:
         r = p.get("rasio") or {}
         if r:
             baris.append("   " + " · ".join(f"{k} {v}" for k, v in r.items()))
-    baris += ["", "_Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah "
+    baris += ["", _WA_HARMONIC_TF,
+              "", "_Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah "
                   "formasi dengan rasio tertentu, bukan ramalan bahwa harga akan "
-                  "berbalik. Tetap butuh konfirmasi harga di titik D._"]
+                  "berbalik. Tetap butuh konfirmasi harga di titik itu._"]
     return "\n".join(baris)
 
 
@@ -6711,11 +6720,12 @@ def _wa_fmt_harmonic_screener(d: dict) -> str:
                 "jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak._")
     baris = [f"*Saringan Harmonic* — {len(items)} emiten", ""]
     for it in items:
-        umur = "baru" if it["bar_sejak_d"] <= 2 else f"{it['bar_sejak_d']} bar lalu"
+        umur = "baru terbentuk" if it["bar_sejak_d"] <= 2 else f"{it['bar_sejak_d']} hari bursa lalu"
         baris.append(f"• *{it['kode']}* — {it['pola']} ({it['arah']}) · "
                      f"kecocokan {it['skor']:.0f}")
         baris.append(f"   Harga {_rp(it['harga'])} · titik D {_rp(it['prz'])} ({umur})")
-    baris += ["", "Ketik `harmonic KODE` untuk rincian titik & rasionya.",
+    baris += ["", _WA_HARMONIC_TF,
+              "", "Ketik `harmonic KODE` untuk rincian titik & rasionya.",
               "_Deskriptif, bukan ramalan. Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 

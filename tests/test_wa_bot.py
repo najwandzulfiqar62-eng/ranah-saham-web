@@ -892,3 +892,26 @@ def test_perintah_harmonic_saringan_dan_per_emiten(client, wa_bersih, monkeypatc
     assert "X Rp8.000" in rinci and "D Rp8.600" in rinci   # titiknya disebut
     assert "AD/XA 0.88" in rinci                            # rasionya terbuka
     assert "bukan ramalan" in rinci.lower()
+
+
+def test_harmonic_menyebut_timeframe_barnya(client, wa_bersih, monkeypatch):
+    """Pertanyaan nyata anggota grup: "harmonic berapa bar wan?" -- bot
+    menyebut "6 bar lalu" tanpa pernah menjelaskan bar apa. Satuan yang tidak
+    dijelaskan membuat angkanya tidak bisa dipakai siapa pun."""
+    import web.app as app_module
+
+    async def _saringan_palsu(maks_umur: int = 10, arah: str = "bullish"):
+        return {"items": [{"kode": "RAJA", "harga": 810, "pola": "ABCD",
+                           "arah": "bullish", "skor": 60.0, "prz": 785,
+                           "titik_akhir": "D", "potensi_pct": 12.0,
+                           "jarak_ke_prz_pct": 3.2, "tanggal_d": "2026-08-27",
+                           "bar_sejak_d": 6, "rasio": {}}],
+                "universe": 45, "maks_umur": 10, "arah": "bullish"}
+
+    monkeypatch.setattr(app_module, "screener_harmonic", _saringan_palsu)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "harmonic").json()["reply"]
+    assert "bar harian" in hasil and "1 hari bursa" in hasil
+    assert "5 bar sebelum" in hasil          # definisi pivotnya ikut dijelaskan
+    assert "6 hari bursa lalu" in hasil      # satuannya disebut di barisnya juga

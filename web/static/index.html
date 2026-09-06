@@ -4141,7 +4141,7 @@ async function loadHarmonic(){
       <thead><tr><th>Emiten</th><th>Pola</th><th>Harga</th><th>Titik balik</th><th style="text-align:right">Potensi</th><th style="text-align:right">Skor</th><th class="hide-xs">Rasio</th></tr></thead>
       <tbody>${baris}</tbody>
     </table></div>
-    ${infoNote('Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik D. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik D terbentuk. Shark & Cypher sengaja tidak dideteksi karena memakai titik jangkar berbeda — memaksakannya ke rumus yang sama akan menghasilkan pola yang terlihat valid padahal rasionya salah. Tap baris untuk analisis.','Cara membaca')}
+    ${infoNote('Timeframe: bar HARIAN (1 bar = 1 hari bursa), riwayat 1 tahun. Sebuah titik dihitung pivot kalau menjadi tertinggi/terendah di antara 5 bar sebelum & 5 bar sesudahnya. Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik D. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik D terbentuk. Shark & Cypher sengaja tidak dideteksi karena memakai titik jangkar berbeda — memaksakannya ke rumus yang sama akan menghasilkan pola yang terlihat valid padahal rasionya salah. Tap baris untuk analisis.','Cara membaca')}
   </section>`;
   body.querySelectorAll('tr[data-k]').forEach(tr=>tr.onclick=()=>analisis(tr.dataset.k));
 }
