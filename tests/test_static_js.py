@@ -369,3 +369,67 @@ def test_aplikasi_layar_utama_ikut_versi_baru():
     # Instalasi PERTAMA tidak boleh ikut memicu reload (cuma bikin kedip).
     assert "navigator.serviceWorker.controller" in src, \
         "reload tidak dijaga terhadap instalasi pertama"
+
+
+# =========================
+# SERVICE WORKER
+# =========================
+# Halaman putih total yang menggantung lama (dilaporkan user 7 Sep 2026) lahir
+# dari sini, bukan dari kode aplikasinya: service worker yang cache-nya kosong
+# lalu menjawab navigasi dengan `undefined`.
+
+SW_JS = os.path.join(os.path.dirname(__file__), "..", "web", "static", "sw.js")
+
+
+def _baca_sw():
+    return io.open(SW_JS, encoding="utf-8").read()
+
+
+def test_kurung_sw_js_seimbang():
+    bersih = _buang_teks_dan_komentar(_baca_sw())
+    tumpuk = []
+    for baris_ke, baris in enumerate(bersih.split("\n"), start=1):
+        for ch in baris:
+            if ch in BUKA:
+                tumpuk.append((ch, baris_ke))
+            elif ch in TUTUP:
+                assert tumpuk, f"kurung penutup {ch!r} berlebih di baris {baris_ke}"
+                buka, buka_baris = tumpuk.pop()
+                assert buka == PASANGAN[ch], (
+                    f"baris {baris_ke}: {ch!r} tidak cocok dengan {buka!r} "
+                    f"dari baris {buka_baris}")
+    assert not tumpuk, "kurung belum ditutup di sw.js"
+
+
+def test_precache_tidak_all_or_nothing():
+    """addAll() gagal TOTAL kalau SATU aset saja meleset (404, 429 dari rate
+    limit, jaringan putus). Karena install tetap mengaktifkan SW sesudahnya,
+    hasilnya cache KOSONG -- lalu activate menghapus cache lama, dan tidak ada
+    lagi apa pun untuk disajikan."""
+    kode = _buang_teks_dan_komentar(_baca_sw())
+    assert "addAll" not in kode, (
+        "precache kembali memakai addAll: satu aset gagal = cache kosong total")
+    assert ".add(" in kode, "precache per-aset tidak ditemukan"
+
+
+def test_fetch_tidak_pernah_menjawab_undefined():
+    """respondWith yang menerima undefined MENGGAGALKAN navigasi, dan yang
+    dilihat user adalah halaman putih tanpa satu pun petunjuk -- kegagalan
+    paling membingungkan yang bisa dihasilkan service worker."""
+    kode = _buang_teks_dan_komentar(_baca_sw())
+    assert kode.count("new Response") >= 2, (
+        "tidak ada jawaban cadangan; jalur 'cache kosong + jaringan gagal' "
+        "akan selesai dengan undefined")
+    # Yang ini dicari di sumber ASLI: 'navigate' hidup di dalam string, dan
+    # pembersih teks memang membuang isi string.
+    assert "'navigate'" in _baca_sw(), "navigasi tidak dibedakan dari aset biasa"
+
+
+def test_cache_lama_tidak_dihapus_kalau_precache_gagal():
+    """Lebih baik user melihat versi kemarin daripada halaman putih."""
+    kode = _baca_sw()   # sumber asli: nama event hidup di dalam string
+    i = kode.index("addEventListener('activate'")
+    blok = kode[i:i + 1400]
+    assert "keys()" in blok and "length" in blok, (
+        "activate menghapus cache lama tanpa memeriksa apakah cache baru "
+        "benar-benar terisi")
