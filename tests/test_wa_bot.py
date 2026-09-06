@@ -1098,3 +1098,41 @@ def test_area_masuk_lagi_memakai_level_terdalam_bukan_yang_pertama_ditulis():
                             "pullback": {"entry": 880, "sl": 840}})
     hasil = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
     assert "Rp880" in hasil and "Rp910" not in hasil
+
+
+def test_jalur_web_membuang_kalimat_yang_isinya_sama_di_tiap_sinyal():
+    """Anjuran menempel ke SETIAP sinyal aktif di /api/signals. Kalimat
+    penjelasan yang isinya identik ikut terunduh berpuluh kali -- diukur
+    +33,5 KB pada 120 sinyal aktif, beban yang seluruhnya ditanggung pemakai
+    HP tanpa menambah satu pun informasi. Bot WA tetap versi penuh: di sana
+    pesannya dibaca satu per satu."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=0, sejak_sinyal_return_pct=-8.0,
+                masuk_lagi={"deep": {"entry": 860, "sl": 800}})
+
+    penuh = app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"})
+    ringkas = app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}, ringkas=True)
+
+    gab_penuh, gab_ringkas = " ".join(penuh), " ".join(ringkas)
+    # Yang dibuang HANYA penjelasan generik.
+    assert "Average down TIDAK wajib" in gab_penuh
+    assert "Average down TIDAK wajib" not in gab_ringkas
+    assert len(gab_ringkas) < len(gab_penuh)
+
+    # Yang TIDAK boleh hilang: perintahnya sendiri dan angka-angkanya.
+    for wajib in ("JUAL SEKARANG", "JANGAN entry baru", "Masuk lagi kalau", "Rp860"):
+        assert wajib in gab_ringkas, f"versi ringkas kehilangan {wajib!r}"
+
+
+def test_kunci_cache_screener_minervini_berversi():
+    """Bentuk payload berubah (item kini membawa rencana_entry) tapi kunci
+    cache-nya tetap. Akibatnya nyata di produksi: sesudah deploy, kolom Entry
+    KOSONG karena server masih menyajikan payload lama yang bentuknya berbeda
+    -- gejalanya bukan error, melainkan kolom yang diam-diam kosong."""
+    import web.app as app_module
+
+    assert app_module.SCREENERPRO_CACHE_KEY != "screenerpro", (
+        "kunci cache belum diberi versi; perubahan bentuk payload berikutnya "
+        "akan mengulang bug 'kolom kosong sesudah deploy'")
+    assert ":" in app_module.SCREENERPRO_CACHE_KEY

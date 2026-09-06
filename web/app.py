@@ -2698,6 +2698,14 @@ async def smc_chart(kode: str, kind: str):
         raise HTTPException(500, "Gagal membuat chart SMC.")
 
 
+# Kunci cache saringan Minervini. BERVERSI, dan versinya WAJIB dinaikkan tiap
+# kali bentuk itemnya berubah. Tanpa itu, server tetap menyajikan payload lama
+# yang bentuknya berbeda sampai TTL habis -- gejalanya bukan error melainkan
+# kolom yang diam-diam kosong, jadi tidak ada yang tahu penyebabnya. Versi 2
+# menandai ditambahkannya `rencana_entry`.
+SCREENERPRO_CACHE_KEY = "screenerpro:v2"
+
+
 @app.get("/api/screenerpro")
 async def screenerpro():
     """Screener gaya Minervini (8 kriteria trend template + RS vs IHSG +
@@ -2709,7 +2717,7 @@ async def screenerpro():
     Makin banyak
     kandidat yang dipindai = makin besar peluang menemukan saham tren kuat
     yang lolos trend template, bukan cuma dari 45 saham teratas."""
-    cached = _cache_get("screenerpro")
+    cached = _cache_get(SCREENERPRO_CACHE_KEY)
     if cached is not None:
         return cached
     from core.screening_pro import run_screenerpro
@@ -2736,7 +2744,7 @@ async def screenerpro():
         n_confluence += 1 if h else 0
     payload = _py({"items": items, "universe": len(TOP_PICK_UNIVERSE),
                    "n_confluence": n_confluence})
-    _cache_set("screenerpro", payload)
+    _cache_set(SCREENERPRO_CACHE_KEY, payload)
     return payload
 
 
@@ -2873,7 +2881,7 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
     # yang berdiri sendiri, supaya irisannya bisa diukur win rate-nya alih-alih
     # cuma jadi hiasan di dua halaman.
     mv_peta = {}
-    for m in ((_cache_get("screenerpro") or {}).get("items") or []):
+    for m in ((_cache_get(SCREENERPRO_CACHE_KEY) or {}).get("items") or []):
         kode_mv = str(m.get("ticker", "")).replace(".JK", "")
         if kode_mv:
             mv_peta[kode_mv] = m
@@ -3892,7 +3900,7 @@ async def signals():
         peta_hm = _peta_harmonic_hari_ini()
         for x in report.get("signals", []):
             if x.get("status") in ("OPEN", "PENDING_ENTRY"):
-                x["anjuran"] = _anjuran_sinyal(x, lolos, peta_hm)
+                x["anjuran"] = _anjuran_sinyal(x, lolos, peta_hm, ringkas=True)
     except Exception as e:
         # Anjuran hilang jauh lebih ringan daripada halaman Audit gagal muat.
         print(f"⚠️ anjuran sinyal: {type(e).__name__}: {e}")
@@ -4305,7 +4313,7 @@ async def _warm_shared_caches():
     # KEDUANYA. Kalau harmonic jalan duluan, badge itu tidak pernah terisi
     # pada putaran yang sama -- fiturnya "kadang muncul kadang tidak", yang
     # lebih buruk daripada tidak ada sama sekali karena tidak bisa dipercaya.
-    if _cache_get("screenerpro") is None:
+    if _cache_get(SCREENERPRO_CACHE_KEY) is None:
         try:
             await screenerpro()
         except Exception as e:
@@ -5975,7 +5983,7 @@ async def _record_minervini_harmonic_cycle():
     """
     from core.signal_history import record_minervini_harmonic_signals
 
-    mv_items = (_cache_get("screenerpro") or {}).get("items") or []
+    mv_items = (_cache_get(SCREENERPRO_CACHE_KEY) or {}).get("items") or []
     hm_items = (_cache_get("screener_harmonic:v3:luas:bullish:10") or {}).get("items") or []
     if not mv_items or not hm_items:
         return
@@ -7737,7 +7745,7 @@ def _kode_lolos_hari_ini() -> set | None:
     """Kode yang masih lolos saringan hari ini. Murni baca cache -- tidak
     pernah memicu hitungan. None kalau kedua cache dingin."""
     tp = _cache_get("confidence:raw")
-    mv = (_cache_get("screenerpro") or {}).get("items")
+    mv = (_cache_get(SCREENERPRO_CACHE_KEY) or {}).get("items")
     if tp is None and mv is None:
         return None
     kumpulan = {str(x.get("kode", "")).replace(".JK", "") for x in (tp or [])}
@@ -7746,8 +7754,19 @@ def _kode_lolos_hari_ini() -> set | None:
 
 
 def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
-                    harmonic_peta: dict | None = None) -> list:
-    """Dua sisi keputusan: yang SUDAH punya barang, dan yang BELUM."""
+                    harmonic_peta: dict | None = None,
+                    ringkas: bool = False) -> list:
+    """Dua sisi keputusan: yang SUDAH punya barang, dan yang BELUM.
+
+    ringkas=True membuang kalimat penjelasan yang ISINYA SAMA di tiap sinyal
+    (ditandai huruf miring _..._ tanpa angka khas sinyalnya). Dipakai jalur
+    WEB: di sana anjuran ini menempel ke SETIAP baris aktif, jadi kalimat
+    yang sama ikut terunduh berpuluh kali. Diukur: +33,5 KB pada 120 sinyal
+    aktif (+19,7% payload) -- beban yang seluruhnya ditanggung pemakai HP,
+    dan sama sekali tidak menambah informasi karena kalimatnya identik.
+    Penjelasan panjangnya cukup ditampilkan SEKALI oleh halamannya.
+    Bot WA tetap memakai versi penuh: di sana pesannya dibaca satu per satu.
+    """
     is_sell = s.get("direction") == "SELL"
     keluar = "TUTUP POSISI" if is_sell else "JUAL"
     entry, sl = s.get("entry_price"), s.get("sl_price")
@@ -7792,10 +7811,11 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
             ekor = ", jangan ditahan lagi"
         baris.append(f"🔴 *Sudah punya*: {keluar} SEKARANG — harga "
                      f"{_rp(harga)} sudah lewat {label_stop}{ekor}")
-        baris.append("_Bukan 'tahan dulu siapa tahu balik': stop yang tersentuh "
-                     "adalah batas yang kamu tetapkan sendiri sebelum emosi ikut "
-                     "menghitung. Melewatinya artinya alasan memegang saham ini "
-                     "sudah tidak berlaku._")
+        if not ringkas:
+            baris.append("_Bukan 'tahan dulu siapa tahu balik': stop yang tersentuh "
+                         "adalah batas yang kamu tetapkan sendiri sebelum emosi ikut "
+                         "menghitung. Melewatinya artinya alasan memegang saham ini "
+                         "sudah tidak berlaku._")
     elif tercapai >= 1:
         # KEPUTUSAN, bukan daftar pertimbangan. Posisi yang sudah untung cuma
         # punya dua nasib yang masuk akal: ditahan karena ruangnya masih ada,
@@ -7839,9 +7859,10 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
         # kecil berubah jadi kerugian yang tidak bisa dipulihkan.
         baris.append("⛔ *Belum punya*: JANGAN entry baru di harga sekarang — "
                      "yang sedang terjadi bukan diskon, tapi setup yang rusak")
-        baris.append("_Average down TIDAK wajib. Aturan risiko aplikasi ini sendiri: "
-                     "jangan menambah posisi hanya karena harga turun, tanpa tanda "
-                     "pembalikan._")
+        if not ringkas:
+            baris.append("_Average down TIDAK wajib. Aturan risiko aplikasi ini sendiri: "
+                         "jangan menambah posisi hanya karena harga turun, tanpa tanda "
+                         "pembalikan._")
         area_lagi = sorted([a for a in ((s.get("masuk_lagi") or {}).get("deep"),
                                         (s.get("masuk_lagi") or {}).get("pullback")) if a],
                            key=lambda a: a["entry"])
@@ -7854,8 +7875,10 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
             baris.append("🔄 *Masuk lagi*: belum ada level yang layak dipakai; "
                          "tunggu struktur barunya terbentuk dulu")
         kode = s.get("kode") or "KODE"
-        baris.append(f"_Sudah terlanjur nyangkut? Ketik `nyangkut {kode} <harga rata-ratamu>` "
-                     f"untuk level menambah yang masuk akal plus kondisi IHSG-nya._")
+        if not ringkas:
+            baris.append(f"_Sudah terlanjur nyangkut? Ketik `nyangkut {kode} "
+                         f"<harga rata-ratamu>` untuk level menambah yang masuk akal "
+                         f"plus kondisi IHSG-nya._")
         return baris
 
     alasan = _alasan_tak_layak_masuk(s, lolos_hari_ini)
