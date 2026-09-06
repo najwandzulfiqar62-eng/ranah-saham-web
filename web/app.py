@@ -2726,7 +2726,8 @@ async def harmonic_kode(kode: str):
 
 
 @app.get("/api/screener/harmonic")
-async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish"):
+async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
+                            lingkup: str = "luas"):
     """Saringan pola harmonic atas universe likuid.
 
     maks_umur: hanya pola yang titik penyelesaiannya terbentuk <= sekian bar
@@ -2737,17 +2738,23 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish"):
     karena itu yang dicari: pola yang titik penyelesaiannya ada di BAWAH dan
     ruang naiknya masih lebar.
 
+    lingkup: "luas" (bawaan, universe yang SAMA dipakai Top Pick & Minervini)
+    atau "inti" (±45 likuid utama). Bawaannya luas karena pola harmonic itu
+    jarang -- memindai 45 saham saja sering menghasilkan 1-2 pola, dan itu
+    bukan karena polanya tidak ada, melainkan karena yang dilihat kesedikitan.
+
     Mahal (memindai ratusan emiten), jadi di-cache dan dihangatkan lewat
     jalur yang sama dengan screener lain.
     """
-    kunci = f"screener_harmonic:v2:{arah}:{maks_umur}"
+    semesta = SCREENER_UNIVERSE if lingkup == "inti" else TOP_PICK_UNIVERSE
+    kunci = f"screener_harmonic:v3:{lingkup}:{arah}:{maks_umur}"
     cached = _cache_get(kunci)
     if cached is not None:
         return cached
 
     from core.harmonic import detect_harmonic
 
-    tickers = [t + ".JK" for t in SCREENER_UNIVERSE]
+    tickers = [t + ".JK" for t in semesta]
     try:
         data = await async_download_many(tickers, period="1y", interval="1d")
     except Exception:
@@ -2791,8 +2798,8 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish"):
     # dipakai. Sisanya diurut menyusul, tidak dibuang.
     items.sort(key=lambda x: (x["jarak_ke_prz_pct"] > 8,
                               -x["potensi_pct"], -x["skor"], x["bar_sejak_d"]))
-    payload = _py({"items": items, "universe": len(SCREENER_UNIVERSE),
-                   "maks_umur": maks_umur, "arah": arah})
+    payload = _py({"items": items, "universe": len(semesta),
+                   "maks_umur": maks_umur, "arah": arah, "lingkup": lingkup})
     _cache_set_durable(kunci, payload)
     return payload
 
@@ -4136,6 +4143,15 @@ async def _warm_shared_caches():
     # detik; tanpa penjagaan ini, laporan 481 baris dibaca ulang + statistik
     # dihitung ulang 24 kali per jam hanya untuk menemukan cache yang sudah
     # terisi.
+    # Saringan harmonic memindai ratusan emiten. Sama seperti dataset berat
+    # lain, yang menanggung biayanya pemanas ini -- bukan pengunjung yang
+    # kebetulan membuka tabnya lebih dulu.
+    if _cache_get("screener_harmonic:v3:luas:bullish:10") is None:
+        try:
+            await screener_harmonic()
+        except Exception as e:
+            print(f"⚠️ cache-warmer harmonic: {type(e).__name__}: {e}")
+
     if _cache_get("sinyal_puncak:v3") is None:
         try:
             from core.signal_history import get_signal_report
