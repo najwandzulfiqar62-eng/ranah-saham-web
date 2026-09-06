@@ -2060,6 +2060,7 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
         <button class="tab" data-mode="pro" id="m-pro">Pro · Minervini</button>
         <button class="tab" data-mode="signal" id="m-signal">Signal · Breakout</button>
         <button class="tab" data-mode="bsjp" id="m-bsjp">BSJP</button>
+        <button class="tab" data-mode="harmonic" id="m-harmonic">Harmonic</button>
         <button class="tab" data-mode="filter" id="m-filter">Filter</button>
         <button class="tab" data-mode="fundamental" id="m-fundamental">Fundamental</button>
         <button class="tab" data-mode="custom" id="m-custom"><svg class="icon icon-sliders" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/></svg> Custom</button>
@@ -3864,6 +3865,7 @@ function setMode(m){
   else if(m==='pro')loadScreenerPro();
   else if(m==='signal')loadSignal();
   else if(m==='bsjp')loadBsjp();
+  else if(m==='harmonic')loadHarmonic();
   else if(m==='filter')loadFilter(filterMode);
   else if(m==='fundamental')loadFundamentalScreen();
   else if(m==='custom'){
@@ -4104,6 +4106,43 @@ async function loadFilter(mode){
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Harga</th><th>% Hari</th><th>RSI</th><th>Status</th><th class="hide-xs">Catatan</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   staggerRows(body.querySelector('.ctable'), 12);
+}
+
+async function loadHarmonic(){
+  const body=$('#uniBody');
+  body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai pola harmonic (Gartley/Bat/Butterfly/Crab)… 20–40 detik</p>';
+  let d; try{d=await api('/api/screener/harmonic')}catch(e){body.innerHTML=errBox(e.message);return}
+  const items=d.items||[];
+  if(!items.length){
+    body.innerHTML=`<section class="panel">${emptyState('Tidak ada pola harmonic baru di universe hari ini. Saringan ini menuntut rasio Fibonacci yang ketat, jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak.')}</section>`;
+    return;
+  }
+  const baris=items.map(it=>{
+    const naik=it.arah==='bullish';
+    const warna=naik?'var(--bull)':'var(--bear)';
+    const umur=it.bar_sejak_d<=2?'baru terbentuk':`${it.bar_sejak_d} bar lalu`;
+    const rasio=Object.entries(it.rasio||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
+    return `<tr style="cursor:pointer" data-k="${it.kode}">
+      <td>${tickerTag(it.kode)}<div class="muted" style="font-size:10px;margin-top:2px">${it.tanggal_d} · ${umur}</div></td>
+      <td><span style="color:${warna};font-weight:700">${it.pola}</span>
+          <div class="muted" style="font-size:10px">${it.arah}</div></td>
+      <td>Rp${fmt(it.harga)}</td>
+      <td style="color:${warna};font-family:'JetBrains Mono',monospace">Rp${fmt(it.prz)}
+          <div class="muted" style="font-size:9.5px">titik D</div></td>
+      <td style="text-align:right"><b>${fmt(it.skor,0)}</b><div class="muted" style="font-size:9.5px">kecocokan</div></td>
+      <td class="hide-xs muted" style="font-size:10px;font-family:'JetBrains Mono',monospace">${rasio}</td>
+    </tr>`;
+  }).join('');
+  body.innerHTML=`<section class="panel">
+    <p class="eyebrow">Pola Harmonic · ${items.length} emiten</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik (X-A-B-C-D) yang tiap kakinya memenuhi rasio Fibonacci. Titik D = area pembalikan yang diduga. Memindai ${d.universe} saham likuid, hanya pola yang titik D-nya terbentuk ≤${d.maks_umur} bar lalu.</p>
+    <div class="table-wrap"><table class="tbl">
+      <thead><tr><th>Emiten</th><th>Pola</th><th>Harga</th><th>Titik D</th><th style="text-align:right">Skor</th><th class="hide-xs">Rasio</th></tr></thead>
+      <tbody>${baris}</tbody>
+    </table></div>
+    ${infoNote('Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik D. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik D terbentuk. Shark & Cypher sengaja tidak dideteksi karena memakai titik jangkar berbeda — memaksakannya ke rumus yang sama akan menghasilkan pola yang terlihat valid padahal rasionya salah. Tap baris untuk analisis.','Cara membaca')}
+  </section>`;
+  body.querySelectorAll('tr[data-k]').forEach(tr=>tr.onclick=()=>analisis(tr.dataset.k));
 }
 
 async function loadScreenerPro(){

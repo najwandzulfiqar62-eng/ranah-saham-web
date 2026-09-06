@@ -2709,6 +2709,76 @@ async def screenerpro():
     return payload
 
 
+@app.get("/api/harmonic/{kode}")
+async def harmonic_kode(kode: str):
+    """Pola harmonic (Gartley/Bat/Butterfly/Crab/ABCD) untuk SATU emiten."""
+    from core.harmonic import detect_harmonic, ringkas_harmonic
+
+    kode = _norm_kode(kode)
+    try:
+        df = await _clean(kode + ".JK")
+    except Exception:
+        raise HTTPException(502, "Gagal mengambil data harga.")
+    if df is None or len(df) < 40:
+        raise HTTPException(404, "Data tidak cukup untuk mendeteksi pola harmonic.")
+    pola = detect_harmonic(df)
+    return _py({"kode": kode, "pola": pola, "ringkasan": ringkas_harmonic(pola)})
+
+
+@app.get("/api/screener/harmonic")
+async def screener_harmonic(maks_umur: int = 10):
+    """Saringan pola harmonic atas universe likuid.
+
+    maks_umur: hanya pola yang titik D-nya terbentuk <= sekian bar lalu.
+    Pola yang D-nya sudah lama terbentuk memang masih 'ada' di grafik, tapi
+    peluang masuknya sudah lewat -- menampilkannya cuma meramaikan daftar.
+
+    Mahal (memindai ratusan emiten), jadi di-cache dan dihangatkan lewat
+    jalur yang sama dengan screener lain.
+    """
+    kunci = f"screener_harmonic:{maks_umur}"
+    cached = _cache_get(kunci)
+    if cached is not None:
+        return cached
+
+    from core.harmonic import detect_harmonic
+
+    tickers = [t + ".JK" for t in SCREENER_UNIVERSE]
+    try:
+        data = await async_download_many(tickers, period="1y", interval="1d")
+    except Exception:
+        stale = _cache_get_stale(kunci)
+        if stale is not None:
+            return stale
+        raise HTTPException(502, "Gagal memuat data untuk saringan harmonic.")
+
+    items = []
+    for t, df in (data or {}).items():
+        if df is None or len(df) < 40:
+            continue
+        try:
+            df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+            pola = detect_harmonic(df, maks=1)
+        except Exception:
+            continue
+        if not pola:
+            continue
+        p = pola[0]
+        if p["bar_sejak_d"] > maks_umur:
+            continue
+        items.append({
+            "kode": t.replace(".JK", ""),
+            "harga": round(float(df["Close"].iloc[-1]), 2),
+            **{k: p[k] for k in ("pola", "arah", "skor", "prz", "tanggal_d", "bar_sejak_d", "rasio")},
+        })
+
+    # Skor dulu (rasio paling pas), baru yang paling baru terbentuk.
+    items.sort(key=lambda x: (-x["skor"], x["bar_sejak_d"]))
+    payload = _py({"items": items, "universe": len(SCREENER_UNIVERSE), "maks_umur": maks_umur})
+    _cache_set_durable(kunci, payload)
+    return payload
+
+
 # ---------- skor keyakinan (confidence score / Top Pick) ----------
 # REVISI (Juli 2026, permintaan eksplisit user): ranking SEBELUMNYA cuma
 # menggabungkan AI Score + Minervini + Confluence -- semuanya murni
@@ -6463,6 +6533,7 @@ _WA_BANTUAN = (
     "• *sinyal* — rekomendasi sinyal terbaik yang sedang berjalan\n"
     "• *screener* — saringan Minervini (trend template 8 kriteria)\n"
     "• *breakout* — saringan breakout volume\n"
+    "• *harmonic* — saringan pola harmonic (*harmonic KODE* untuk rincian)\n"
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
     "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
     "• *news* — berita pasar terbaru (*news KODE* untuk satu emiten)\n"
@@ -6586,6 +6657,48 @@ def _wa_fmt_berita(items: list[dict] | None, kode: str = "") -> str:
             baris.append(f"  {b['link']}")
     baris += ["", "_Judul dikumpulkan otomatis dari media publik. "
                   "Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_harmonic_kode(kode: str, d: dict) -> str:
+    """Pola harmonic satu emiten."""
+    pola = d.get("pola") or []
+    if not pola:
+        return (f"*Harmonic {kode}*\n\n_Tidak ada pola harmonic yang terdeteksi._\n\n"
+                "_Pola harmonic menuntut rasio Fibonacci yang cukup ketat — "
+                "sebagian besar waktu memang tidak ada, dan itu wajar._")
+    baris = [f"*Harmonic {kode}* — {len(pola)} pola"]
+    for p in pola:
+        umur = ("baru terbentuk" if p["bar_sejak_d"] <= 2
+                else f"{p['bar_sejak_d']} bar lalu")
+        baris += ["", f"*{p['pola']}* ({p['arah']}) · kecocokan {p['skor']:.0f}/100",
+                  f"   Titik D (area pembalikan): {_rp(p['prz'])} — {p['tanggal_d']}, {umur}"]
+        titik = " → ".join(f"{t['label']} {_rp(t['harga'])}" for t in p.get("titik", []))
+        if titik:
+            baris.append(f"   {titik}")
+        r = p.get("rasio") or {}
+        if r:
+            baris.append("   " + " · ".join(f"{k} {v}" for k, v in r.items()))
+    baris += ["", "_Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah "
+                  "formasi dengan rasio tertentu, bukan ramalan bahwa harga akan "
+                  "berbalik. Tetap butuh konfirmasi harga di titik D._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_harmonic_screener(d: dict) -> str:
+    items = (d or {}).get("items") or []
+    if not items:
+        return ("*Saringan Harmonic*\n\n_Tidak ada pola harmonic baru di universe "
+                "hari ini._\n\n_Saringan ini menuntut rasio Fibonacci yang ketat, "
+                "jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak._")
+    baris = [f"*Saringan Harmonic* — {len(items)} emiten", ""]
+    for it in items:
+        umur = "baru" if it["bar_sejak_d"] <= 2 else f"{it['bar_sejak_d']} bar lalu"
+        baris.append(f"• *{it['kode']}* — {it['pola']} ({it['arah']}) · "
+                     f"kecocokan {it['skor']:.0f}")
+        baris.append(f"   Harga {_rp(it['harga'])} · titik D {_rp(it['prz'])} ({umur})")
+    baris += ["", "Ketik `harmonic KODE` untuk rincian titik & rasionya.",
+              "_Deskriptif, bukan ramalan. Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
 
@@ -6795,11 +6908,17 @@ async def _wa_report_data(kode: str) -> dict:
     except Exception:
         pass
 
+    from core.harmonic import detect_harmonic
     from core.report import build_report_data
-    return build_report_data(kode, kode, ai, insight=insight, ai_ihsg=ai_ihsg,
+    rd = build_report_data(kode, kode, ai, insight=insight, ai_ihsg=ai_ihsg,
                              rs_data=rs_data, news_items=berita, smc=smc,
                              vwap_fv=vwap_fv, fixed_entries=fixed_entries,
                              rec_badge=rec_badge)
+    # Pola harmonic ditempel ke struktur laporan yang sama, bukan jalur
+    # terpisah -- supaya bot & web menyebut pola yang sama untuk saham yang
+    # sama. Gagal mendeteksi tidak boleh menggagalkan seluruh laporan.
+    rd["harmonic"] = _coba(detect_harmonic, df) or []
+    return rd
 
 
 def _wa_fmt_emiten(rd: dict, blok_rencana: list[str], blok_sinyal: list[str] | None = None) -> str:
@@ -6872,6 +6991,16 @@ def _wa_fmt_emiten(rd: dict, blok_rencana: list[str], blok_sinyal: list[str] | N
         baris.append(f"• Liquidity pool: {smc.get('liq_high', 0)} di atas / "
                      f"{smc.get('liq_low', 0)} di bawah, {smc.get('liq_unswept', 0)} belum tersapu")
         baris.append("_SMC bersifat deskriptif (struktur & area minat), bukan sinyal pasti arah._")
+
+    harmonic = rd.get("harmonic") or []
+    if harmonic:
+        h = harmonic[0]
+        umur = "baru terbentuk" if h["bar_sejak_d"] <= 2 else f"{h['bar_sejak_d']} bar lalu"
+        baris += ["", "*Pola Harmonic*",
+                  f"• {h['pola']} ({h['arah']}) · kecocokan {h['skor']:.0f}/100",
+                  f"• Titik D (area pembalikan): {_rp(h['prz'])} — {umur}",
+                  "_Deskriptif seperti SMC: formasi dengan rasio tertentu, bukan "
+                  "ramalan bahwa harga pasti berbalik._"]
 
     konteks = rd.get("konteks_ihsg") or rd.get("rs_text")
     if konteks:
@@ -7304,6 +7433,14 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid:
             kode_laporan = calon
 
+    # "harmonic KODE" -> rincian pola satu emiten; "harmonic" sendirian =
+    # saringan seluruh universe.
+    kode_harmonic = ""
+    if len(kata) == 2 and kata[0] in {"harmonic", "harmonik"}:
+        calon = _norm_kode(kata[1])
+        if calon in kode_valid:
+            kode_harmonic = calon
+
     # "nyangkut KODE HARGA" -> panduan posisi merugi + level average down.
     kode_nyangkut, avg_nyangkut = "", 0.0
     if len(kata) == 3 and kata[0] in {"nyangkut", "avgdown", "average"}:
@@ -7324,10 +7461,10 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             kode_berita, minta_berita = calon, True
 
     if (not kode_lacak and not kode_laporan and not minta_berita and not kode_nyangkut
-            and not adalah_kode
+            and not kode_harmonic and not adalah_kode
             and kunci not in {"sinyal", "screener", "minervini", "breakout",
-                              "kepemilikan", "x15", "ihsg", "pasar",
-                              "bantuan", "help", "menu"}):
+                              "kepemilikan", "x15", "ihsg", "pasar", "harmonic",
+                              "harmonik", "bantuan", "help", "menu"}):
         return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -7363,6 +7500,11 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
+        if kode_harmonic:
+            return _wa_fmt_harmonic_kode(kode_harmonic,
+                                         await harmonic_kode(kode_harmonic)), None
+        if kunci in {"harmonic", "harmonik"}:
+            return _wa_fmt_harmonic_screener(await screener_harmonic()), None
         if kode_nyangkut:
             # Konteks pasar ikut diambil: menambah posisi saat IHSG rontok
             # itu keputusan yang berbeda. Kalau gagal, panduannya tetap

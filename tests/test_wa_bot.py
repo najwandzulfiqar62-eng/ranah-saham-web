@@ -850,3 +850,45 @@ def test_balasan_emiten_menyertakan_status_sinyalnya(client, wa_bersih, monkeypa
     # Statusnya di ATAS ringkasan analisis, bukan terkubur di bawah.
     assert hasil.index("Status sinyal") < hasil.index("Ringkasan")
     assert "LAIN" not in hasil, "sinyal emiten lain tidak boleh ikut"
+
+
+def test_perintah_harmonic_saringan_dan_per_emiten(client, wa_bersih, monkeypatch):
+    """`harmonic` = saringan universe, `harmonic KODE` = rincian titik & rasio.
+    Keduanya WAJIB menegaskan pola harmonic itu deskriptif, bukan ramalan --
+    disiplin yang sama sudah dipakai bagian SMC."""
+    import web.app as app_module
+
+    async def _saringan_palsu(maks_umur: int = 10):
+        return {"items": [{"kode": "BBCA", "harga": 9000, "pola": "Gartley",
+                           "arah": "bullish", "skor": 82.0, "prz": 8750,
+                           "tanggal_d": "2026-09-02", "bar_sejak_d": 1,
+                           "rasio": {"AB/XA": 0.62}}],
+                "universe": 45, "maks_umur": 10}
+
+    async def _kode_palsu(kode):
+        return {"kode": kode, "pola": [{
+            "pola": "Bat", "arah": "bullish", "skor": 74.0, "prz": 8600,
+            "tanggal_d": "2026-09-03", "bar_sejak_d": 0,
+            "titik": [{"label": "X", "harga": 8000}, {"label": "A", "harga": 9200},
+                      {"label": "B", "harga": 8700}, {"label": "C", "harga": 9000},
+                      {"label": "D", "harga": 8600}],
+            "rasio": {"AB/XA": 0.42, "BC/AB": 0.6, "CD/BC": 1.9, "AD/XA": 0.88},
+        }], "ringkasan": "Pola Bat bullish terdeteksi."}
+
+    monkeypatch.setattr(app_module, "screener_harmonic", _saringan_palsu)
+    monkeypatch.setattr(app_module, "harmonic_kode", _kode_palsu)
+    monkeypatch.setattr(app_module, "_load_ticker_directory",
+                        lambda: [{"kode": "BBCA", "nama": "Bank Central Asia"}])
+    _daftarkan_approved()
+
+    saringan = _kirim(client, "harmonic").json()["reply"]
+    assert "Saringan Harmonic" in saringan and "BBCA" in saringan
+    assert "Gartley (bullish)" in saringan and "Rp8.750" in saringan
+    assert "bukan ramalan" in saringan.lower()
+
+    app_module._wa_last_reply.clear()
+    rinci = _kirim(client, "harmonic bbca").json()["reply"]
+    assert "*Harmonic BBCA*" in rinci and "Bat" in rinci
+    assert "X Rp8.000" in rinci and "D Rp8.600" in rinci   # titiknya disebut
+    assert "AD/XA 0.88" in rinci                            # rasionya terbuka
+    assert "bukan ramalan" in rinci.lower()
