@@ -3861,7 +3861,29 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         s["puncak_return_pct"] = round((harga_puncak / entry - 1) * 100, 2)
         s["sejak_sinyal_return_pct"] = round((sesudah[-1][2] / entry - 1) * 100, 2)
         s["hari_sejak_sinyal"] = len(sesudah)
-        if rencana.get(s["kode"]):
+    # Field berat (masuk_lagi, emiten_rekap) HANYA ditempel ke sinyal yang
+    # mewakili emitennya. Sebelumnya salinan identik menempel di SETIAP
+    # sinyal: ERAA punya 10 sinyal, jadi 10 salinan rekap yang sama persis.
+    # Diukur pada data nyata, itu 32% dari payload /api/signals (~161 KB dari
+    # 498 KB) -- beban yang seluruhnya percuma, dan paling terasa di HP.
+    # Yang dipilih: sinyal TERBARU, plus sinyal AKTIF terbaru kalau berbeda --
+    # keduanya itu yang dipakai bot & tabel web sebagai baris wakil.
+    def _waktu_sinyal(x):
+        return x.get("entry_filled_at") or x.get("recorded_at") or ""
+
+    wakil: dict[str, set[int]] = {}
+    for s in dipakai:
+        wakil.setdefault(s["kode"], set())
+    for kode, _ in wakil.items():
+        milik = [x for x in dipakai if x["kode"] == kode]
+        pilihan = [max(milik, key=_waktu_sinyal)]
+        aktif_kode = [x for x in milik if x.get("status") in ("OPEN", "PENDING_ENTRY")]
+        if aktif_kode:
+            pilihan.append(max(aktif_kode, key=_waktu_sinyal))
+        wakil[kode] = {id(x) for x in pilihan}
+
+    for s in dipakai:
+        if rencana.get(s["kode"]) and id(s) in wakil.get(s["kode"], set()):
             s["masuk_lagi"] = rencana[s["kode"]]
 
     # Rekap PER EMITEN. Satu saham sering muncul berkali-kali (ERAA: 10 sinyal
@@ -3897,7 +3919,8 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
             "harga_kini": round(harga_kini, 2),
         }
         for s in daftar:
-            s["emiten_rekap"] = rekap
+            if id(s) in wakil.get(kode, set()):
+                s["emiten_rekap"] = rekap
 
 
 @app.get("/api/signals/ringkas")
@@ -4109,12 +4132,17 @@ async def _warm_shared_caches():
     # jadi HANYA dihangatkan di sini. Permintaan user memakai hasil cache-nya
     # saja dan melewati kolom itu kalau belum hangat -- lihat
     # _tempel_puncak_sejak_sinyal(boleh_fetch=...).
-    try:
-        from core.signal_history import get_signal_report
-        laporan = await asyncio.to_thread(get_signal_report)
-        await _tempel_puncak_sejak_sinyal(laporan.get("signals", []), boleh_fetch=True)
-    except Exception as e:
-        print(f"⚠️ cache-warmer puncak-sinyal: {type(e).__name__}: {e}")
+    # Dilewati selama cache-nya masih hangat. Loop ini berjalan tiap 150
+    # detik; tanpa penjagaan ini, laporan 481 baris dibaca ulang + statistik
+    # dihitung ulang 24 kali per jam hanya untuk menemukan cache yang sudah
+    # terisi.
+    if _cache_get("sinyal_puncak:v3") is None:
+        try:
+            from core.signal_history import get_signal_report
+            laporan = await asyncio.to_thread(get_signal_report)
+            await _tempel_puncak_sejak_sinyal(laporan.get("signals", []), boleh_fetch=True)
+        except Exception as e:
+            print(f"⚠️ cache-warmer puncak-sinyal: {type(e).__name__}: {e}")
 
 
 async def _cache_warmer_loop():
