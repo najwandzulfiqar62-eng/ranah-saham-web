@@ -669,6 +669,32 @@
 .x15-top-name{flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .x15-top-chg{font-size:12.5px;font-weight:700;font-family:'JetBrains Mono',monospace;white-space:nowrap;min-width:50px;text-align:right}
 .x15-top-kep{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;white-space:nowrap;min-width:42px;text-align:right}
+/* Audit Sinyal di layar kecil: anjuran & level masuk-lagi gampang bikin sel
+   berdesakan, jadi diberi ruang sendiri dan tidak dipaksa satu baris. */
+@media(max-width:600px){
+  .ctable td{padding-top:9px;padding-bottom:9px;vertical-align:top}
+  .ctable td>div{white-space:normal;line-height:1.35}
+}
+/* Kartu pola harmonic -- menggantikan tabel 7 kolom yang tidak muat di HP */
+.harm-list{display:flex;flex-direction:column;gap:10px}
+.harm-card{border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;transition:border-color .15s}
+.harm-card:hover{border-color:var(--gold)}
+.harm-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.harm-tk{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15px}
+.harm-pola{font-size:10.5px;font-weight:700;border:1px solid;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.harm-potensi{margin-left:auto;font-weight:800;font-size:16px;text-align:right;line-height:1.1;white-space:nowrap}
+.harm-potensi small{display:block;font-size:9px;font-weight:500;color:var(--muted)}
+.harm-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.harm-grid>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.harm-grid b{font-family:'JetBrains Mono',monospace;font-size:12.5px;overflow:hidden;text-overflow:ellipsis}
+.harm-lbl{font-size:9.5px;color:var(--muted);letter-spacing:.02em}
+.harm-kaki{margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft);font-size:10px;color:var(--faint)}
+.harm-rasio{font-family:'JetBrains Mono',monospace}
+@media(max-width:520px){
+  .harm-grid{grid-template-columns:repeat(2,1fr);gap:9px 12px}
+  .harm-potensi{font-size:15px}
+  .harm-rasio{display:block;margin-top:3px}
+}
 /* Akumulasi Berulang dot-line */
 .berulang-card{padding:10px 0;border-bottom:1px solid var(--line-soft)}
 .berulang-card:last-child{border-bottom:none;padding-bottom:0}
@@ -4117,33 +4143,40 @@ async function loadHarmonic(){
     body.innerHTML=`<section class="panel">${emptyState('Tidak ada pola harmonic baru di universe hari ini. Saringan ini menuntut rasio Fibonacci yang ketat, jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak.')}</section>`;
     return;
   }
+  // KARTU, bukan tabel. Tabel 7 kolom tidak muat di layar HP: judul kolom
+  // membungkus, isinya berhimpitan, dan angka pentingnya justru paling sulit
+  // dibaca. Kartu menata dirinya sendiri di lebar berapa pun.
   const baris=items.map(it=>{
     const naik=it.arah==='bullish';
     const warna=naik?'var(--bull)':'var(--bear)';
-    const umur=it.bar_sejak_d<=2?'baru terbentuk':`${it.bar_sejak_d} bar lalu`;
+    const umur=it.bar_sejak_d<=2?'baru terbentuk':`${it.bar_sejak_d} hari bursa lalu`;
+    const dekat=it.jarak_ke_prz_pct<=8;
     const rasio=Object.entries(it.rasio||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
-    return `<tr style="cursor:pointer" data-k="${it.kode}">
-      <td>${tickerTag(it.kode)}<div class="muted" style="font-size:10px;margin-top:2px">${it.tanggal_d} · ${umur}</div></td>
-      <td><span style="color:${warna};font-weight:700">${it.pola}</span>
-          <div class="muted" style="font-size:10px">${it.arah}</div></td>
-      <td>Rp${fmt(it.harga)}</td>
-      <td style="color:${warna};font-family:'JetBrains Mono',monospace">Rp${fmt(it.prz)}
-          <div class="muted" style="font-size:9.5px">titik ${it.titik_akhir||'D'} · harga ${it.jarak_ke_prz_pct<=8?'masih dekat':`${fmt(it.jarak_ke_prz_pct,0)}% dari sini`}</div></td>
-      <td style="text-align:right;color:var(--bull)"><b>+${fmt(it.potensi_pct,1)}%</b><div class="muted" style="font-size:9.5px">ruang naik</div></td>
-      <td style="text-align:right"><b>${fmt(it.skor,0)}</b><div class="muted" style="font-size:9.5px">kecocokan</div></td>
-      <td class="hide-xs muted" style="font-size:10px;font-family:'JetBrains Mono',monospace">${rasio}</td>
-    </tr>`;
+    return `<div class="harm-card" data-k="${it.kode}">
+      <div class="harm-head">
+        <span class="harm-tk">${tickerTag(it.kode)}</span>
+        <span class="harm-pola" style="color:${warna};border-color:${warna}55">${it.pola} · ${it.arah}</span>
+        <span class="harm-potensi" style="color:${warna}">${naik?'+':''}${fmt(it.potensi_pct,1)}%
+          <small>ruang ${naik?'naik':'turun'}</small></span>
+      </div>
+      <div class="harm-grid">
+        <div><span class="harm-lbl">Harga</span><b>Rp${fmt(it.harga)}</b></div>
+        <div><span class="harm-lbl">Titik ${it.titik_akhir||'D'}</span>
+             <b style="color:${warna}">Rp${fmt(it.prz)}</b></div>
+        <div><span class="harm-lbl">Jarak ke titik</span>
+             <b style="color:${dekat?'var(--bull)':'var(--muted)'}">${dekat?'masih dekat':`${fmt(it.jarak_ke_prz_pct,0)}%`}</b></div>
+        <div><span class="harm-lbl">Kecocokan</span><b>${fmt(it.skor,0)}/100</b></div>
+      </div>
+      <div class="harm-kaki">${it.tanggal_d} · ${umur}${rasio?` · <span class="harm-rasio">${rasio}</span>`:''}</div>
+    </div>`;
   }).join('');
   body.innerHTML=`<section class="panel">
     <p class="eyebrow">Pola Harmonic · ${items.length} emiten</p>
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik yang tiap kakinya memenuhi rasio Fibonacci; titik terakhir = area pembalikan yang diduga. Memindai ${d.universe} saham likuid (${d.arah||'bullish'}), hanya pola yang terbentuk ≤${d.maks_umur} bar lalu. Diurut dari <b>ruang naik terbesar</b> — tapi hanya untuk yang harganya masih dekat titik baliknya; yang sudah terlanjur lari ditaruh di bawah.</p>
-    <div class="table-wrap"><table class="tbl">
-      <thead><tr><th>Emiten</th><th>Pola</th><th>Harga</th><th>Titik balik</th><th style="text-align:right">Potensi</th><th style="text-align:right">Skor</th><th class="hide-xs">Rasio</th></tr></thead>
-      <tbody>${baris}</tbody>
-    </table></div>
-    ${infoNote('Timeframe: bar HARIAN (1 bar = 1 hari bursa), riwayat 1 tahun. Sebuah titik dihitung pivot kalau menjadi tertinggi/terendah di antara 5 bar sebelum & 5 bar sesudahnya. Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik D. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik D terbentuk. Shark & Cypher sengaja tidak dideteksi karena memakai titik jangkar berbeda — memaksakannya ke rumus yang sama akan menghasilkan pola yang terlihat valid padahal rasionya salah. Tap baris untuk analisis.','Cara membaca')}
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Formasi 5 titik yang tiap kakinya memenuhi rasio Fibonacci; titik terakhir = area pembalikan yang diduga. Memindai ${d.universe} saham likuid (${d.arah||'bullish'}), hanya pola yang terbentuk ≤${d.maks_umur} hari bursa lalu. Diurut dari <b>ruang naik terbesar</b> — tapi hanya untuk yang harganya masih dekat titik baliknya; yang sudah terlanjur lari ditaruh di bawah.</p>
+    <div class="harm-list">${baris}</div>
+    ${infoNote('Timeframe: bar HARIAN (1 bar = 1 hari bursa), riwayat 1 tahun. Sebuah titik dihitung pivot kalau menjadi tertinggi/terendah di antara 5 bar sebelum & 5 bar sesudahnya. Pola harmonic bersifat DESKRIPTIF: yang dilaporkan adalah formasi dengan rasio tertentu, BUKAN ramalan bahwa harga akan berbalik di titik itu. Di data historis pola selalu terlihat meyakinkan; yang menentukan tetap apa yang terjadi SESUDAH titik itu terbentuk. Shark & Cypher memakai titik jangkar berbeda dan dideteksi dengan rumusnya sendiri. Tap kartu untuk analisis.','Cara membaca')}
   </section>`;
-  body.querySelectorAll('tr[data-k]').forEach(tr=>tr.onclick=()=>analisis(tr.dataset.k));
+  body.querySelectorAll('.harm-card').forEach(el=>el.onclick=()=>analisis(el.dataset.k));
 }
 
 async function loadScreenerPro(){
@@ -4965,8 +4998,8 @@ async function loadSignalAudit(){
           <td>${tickerTag(s.kode)}${_riskBadge(s)}${_corpBadge(s)}<div class="muted" style="font-size:10.5px;margin-top:2px">${tanggal}</div>${puncakTxt}</td>
           <td class="hide-xs">${_sourceLabel(s.source)} ${dirBadge}</td>
           <td>Rp${fmt(s.entry_price)}${masukLagiTxt}${anjuranTxt}</td>
-          <td style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
-          <td style="color:var(--bear);font-family:'JetBrains Mono',monospace;font-size:11px">Rp${fmt(s.sl_price)} <div class="muted" style="font-size:9.5px">(${slSign}${fmt(s.sl_pct,1)}%)</div></td>
+          <td class="hide-xs" style="color:var(--bull);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.4">${tpRow(1,s.tp_price,s.tp_pct)}${tpRow(2,s.tp2_price,s.tp2_pct)}${tpRow(3,s.tp3_price,s.tp3_pct)}</td>
+          <td class="hide-xs" style="color:var(--bear);font-family:'JetBrains Mono',monospace;font-size:11px">Rp${fmt(s.sl_price)} <div class="muted" style="font-size:9.5px">(${slSign}${fmt(s.sl_pct,1)}%)</div></td>
           <td style="color:${_auditStatusColor(s)}">${_auditStatusLabel(s)}</td>
           <td style="text-align:right"><b style="color:${retColor};font-size:14px">${retTxt}</b>${retSub}</td>
         </tr>`;
@@ -5050,7 +5083,7 @@ async function loadSignalAudit(){
     `;
 
     const listHtml = auditViewMode === 'table' ? 
-      `<div style="overflow-x:auto"><table class="ctable" style="width:100%"><thead><tr><th>Saham</th><th class="hide-xs">Sumber</th><th>Entry</th><th>Target TP</th><th>Stop Loss</th><th>Status</th><th style="text-align:right">Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>` : 
+      `<div style="overflow-x:auto"><table class="ctable" style="width:100%"><thead><tr><th>Saham</th><th class="hide-xs">Sumber</th><th>Entry</th><th class="hide-xs">Target TP</th><th class="hide-xs">Stop Loss</th><th>Status</th><th style="text-align:right">Return</th></tr></thead><tbody id="auditTbody">${rows}</tbody></table></div>` : 
       `<div class="decision-grid" id="auditTbody">${rows}</div>`;
 
     // Tombol WAJIB menyebut sisanya. Dulu cuma "Muat Lebih Banyak", jadi
