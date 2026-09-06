@@ -2763,18 +2763,29 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
             return stale
         raise HTTPException(502, "Gagal memuat data untuk saringan harmonic.")
 
+    # SELURUH loop di bawah ini dijalankan di THREAD, bukan di event loop.
+    # Diukur: mendeteksi pola pada 237 emiten makan ~11 detik CPU. Dijalankan
+    # langsung di fungsi async, itu berarti server MEMBEKU 11 detik -- semua
+    # permintaan lain ikut menggantung, termasuk /api/access/me, sehingga
+    # frontend menyimpulkan "belum login" dan memunculkan layar masuk. Persis
+    # keluhan "webnya keluar-keluaran, disuruh login ulang", dan panggilan bot
+    # ke /api/wa/command juga ikut tertahan.
+    def _pindai():
+        hasil_pindai = []
+        for t, df in (data or {}).items():
+            if df is None or len(df) < 40:
+                continue
+            try:
+                df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+                pola = detect_harmonic(df, maks=1)
+            except Exception:
+                continue
+            if pola:
+                hasil_pindai.append((t, df, pola[0]))
+        return hasil_pindai
+
     items = []
-    for t, df in (data or {}).items():
-        if df is None or len(df) < 40:
-            continue
-        try:
-            df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
-            pola = detect_harmonic(df, maks=1)
-        except Exception:
-            continue
-        if not pola:
-            continue
-        p = pola[0]
+    for t, df, p in await asyncio.to_thread(_pindai):
         if p["bar_sejak_d"] > maks_umur:
             continue
         if arah in ("bullish", "bearish") and p["arah"] != arah:
@@ -3803,35 +3814,43 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         except Exception as e:
             print(f"⚠️ puncak-sinyal: gagal unduh riwayat: {type(e).__name__}: {e}")
             return
-        peta, rencana, gagal_rencana = {}, {}, []
-        for k in kode_unik:
-            df = data.get(k + ".JK")
-            if df is None or len(df) == 0:
-                continue
-            try:
-                df = fix_yf_columns(df)
-                peta[k] = [(str(idx)[:10], float(h), float(c))
-                           for idx, h, c in zip(df.index, df["High"], df["Close"])
-                           if pd.notna(h) and pd.notna(c)]
-            except Exception:
-                continue
+        # Idem screener harmonic: perhitungan per kode dijalankan di THREAD,
+        # jangan di event loop. Lebih ringan dari harmonic, tapi tetap kerja
+        # sinkron atas ~200 kode -- dan pemblokiran event loop tidak punya
+        # ambang aman, hanya lebih lama atau lebih sebentar.
+        def _olah():
+            peta_l, rencana_l, gagal_l = {}, {}, []
+            for k in kode_unik:
+                df = data.get(k + ".JK")
+                if df is None or len(df) == 0:
+                    continue
+                try:
+                    df = fix_yf_columns(df)
+                    peta_l[k] = [(str(idx)[:10], float(h), float(c))
+                                 for idx, h, c in zip(df.index, df["High"], df["Close"])
+                                 if pd.notna(h) and pd.notna(c)]
+                except Exception:
+                    continue
             # Level "masuk lagi" dihitung dari HARGA SEKARANG memakai fungsi
             # rencana yang SAMA dengan halaman Rencana Trading -- pertanyaan
             # user: "kalau kita mau entry lagi dari kenaikan awal muncul
             # sinyal, enak di berapa". Entry sinyal aslinya sudah lewat, jadi
             # angka yang berguna adalah level hari ini, bukan level lama.
-            try:
-                p = calculate_advanced_plan_from_df(df, k)
-                if p and p.get("scenarios"):
-                    rencana[k] = {
-                        n: {"entry": v["entry"], "sl": v["sl"], "risk_pct": v["risk_pct"],
-                            "tp1": v["tp"]["tp1"]}
-                        for n, v in p["scenarios"].items() if n in ("pullback", "deep")
-                    }
-                else:
-                    gagal_rencana.append(f"{k}(data {len(df)} bar)")
-            except Exception as e:
-                gagal_rencana.append(f"{k}({type(e).__name__})")
+                try:
+                    p = calculate_advanced_plan_from_df(df, k)
+                    if p and p.get("scenarios"):
+                        rencana_l[k] = {
+                            n: {"entry": v["entry"], "sl": v["sl"], "risk_pct": v["risk_pct"],
+                                "tp1": v["tp"]["tp1"]}
+                            for n, v in p["scenarios"].items() if n in ("pullback", "deep")
+                        }
+                    else:
+                        gagal_l.append(f"{k}(data {len(df)} bar)")
+                except Exception as e:
+                    gagal_l.append(f"{k}({type(e).__name__})")
+            return peta_l, rencana_l, gagal_l
+
+        peta, rencana, gagal_rencana = await asyncio.to_thread(_olah)
         # Kegagalan DIHITUNG lalu dilaporkan sekali, bukan ditelan diam-diam:
         # persis begitu bug "masuk lagi kosong semua" sempat lolos tanpa jejak.
         if gagal_rencana:
