@@ -3985,7 +3985,135 @@ async def signals():
         # Anjuran hilang jauh lebih ringan daripada halaman Audit gagal muat.
         print(f"⚠️ anjuran sinyal: {type(e).__name__}: {e}")
 
+    # Panel simulasi lantai SL. Murni hitungan dari cache riwayat yang SUDAH
+    # ada (tidak ada unduhan baru), hasilnya di-cache sejam, dan kalau cache
+    # riwayatnya belum hangat panel ini cukup tidak muncul -- satu panel absen
+    # jauh lebih ringan daripada halaman Audit yang menggantung.
+    try:
+        sim = _cache_get("simulasi_sl:v1")
+        if sim is None:
+            riwayat = (_cache_get("sinyal_puncak:v4") or {}).get("bar")
+            if riwayat:
+                sim = await asyncio.to_thread(_simulasi_lantai_sl,
+                                              report.get("signals", []), riwayat)
+                if sim:
+                    _cache_set("simulasi_sl:v1", sim, ttl=SIMULASI_SL_TTL)
+        if sim:
+            report["simulasi_sl"] = sim
+    except Exception as e:
+        print(f"⚠️ simulasi lantai SL: {type(e).__name__}: {e}")
+
     return _py(report)
+
+
+# =========================
+# SIMULASI LANTAI SL -- PANEL TERPISAH, BUKAN PENGGANTI CATATAN
+# =========================
+# Sinyal lama ditutup memakai lantai SL 3% DATAR. Aturan yang berlaku sekarang
+# max(3%, 2xATR%), jauh lebih lebar untuk saham bergejolak: GIAA ditutup di
+# stop 3,3% padahal aturan hari ini akan memberinya 6,5%.
+#
+# Yang TIDAK dilakukan di sini: menghapus kerugian karena harganya kemudian
+# pulih. Itu bias melihat ke belakang -- perpanjang jendelanya cukup lama dan
+# SETIAP stop akan terlihat salah, sehingga angkanya berhenti berarti apa pun.
+#
+# Yang dilakukan: menerapkan aturan sekarang ke SELURUH sinyal selesai secara
+# SERAGAM, lalu menampilkannya BERDAMPINGAN dengan catatan asli. Sebagian
+# sinyal justru jadi lebih buruk (stop lebih lebar = rugi lebih besar saat
+# benar-benar kena) -- justru itu yang membedakan audit dari karangan.
+SIMULASI_SL_TTL = 3600
+
+
+def _atr_pct_dari_bar(bar: list, sampai: str, periode: int = 14) -> float | None:
+    """ATR% dari bar SEBELUM tanggal sinyal, memakai true range yang sama
+    dengan calculate_atr(). Dihitung dari cache yang sudah ada supaya simulasi
+    ini tidak menambah satu pun unduhan."""
+    sebelum = [b for b in bar if b[0] < sampai]
+    if len(sebelum) < periode + 1:
+        return None
+    tr = []
+    for i in range(1, len(sebelum)):
+        _, hi, cl, lo = sebelum[i]
+        prev_cl = sebelum[i - 1][2]
+        tr.append(max(hi - lo, abs(hi - prev_cl), abs(lo - prev_cl)))
+    if len(tr) < periode:
+        return None
+    atr = sum(tr[-periode:]) / periode
+    harga = sebelum[-1][2]
+    return (atr / harga * 100) if harga else None
+
+
+def _simulasi_lantai_sl(signals: list, peta: dict) -> dict | None:
+    """Audit ulang sinyal selesai memakai lantai SL yang berlaku SEKARANG."""
+    from core.signal_history import MAX_HOLD_DAYS
+    from core.trading_plan import MIN_SL_PCT, SL_ATR_MULT
+
+    menang = kalah = gantung = 0
+    lama_menang = lama_kalah = 0
+    jadi_menang, jadi_kalah = [], []
+
+    for x in signals:
+        if x.get("status") not in ("TP_HIT", "SL_HIT", "EXPIRED"):
+            continue
+        if x.get("direction") == "SELL":
+            continue          # aturan lantai ini BUY-only; jangan dipaksakan
+        entry = x.get("entry_price")
+        bar = peta.get(x.get("kode"))
+        if not entry or not bar:
+            continue
+        mulai = (x.get("entry_filled_at") or x.get("recorded_at") or "")[:10]
+        if not mulai:
+            continue
+
+        hasil_lama = "menang" if (x["status"] == "TP_HIT"
+                                  or (x.get("tp_level_hit") or 0) >= 1) else "kalah"
+        lama_menang += hasil_lama == "menang"
+        lama_kalah += hasil_lama == "kalah"
+
+        atr_pct = _atr_pct_dari_bar(bar, mulai)
+        lantai = max(MIN_SL_PCT, SL_ATR_MULT * atr_pct if atr_pct else 0.0)
+        sl_baru = entry * (1 - lantai / 100)
+        tp1 = entry * (1 + (x.get("tp_pct") or 0) / 100)
+
+        jendela = [b for b in bar if b[0] > mulai][:MAX_HOLD_DAYS]
+        hasil = "gantung"
+        for _, hi, _cl, lo in jendela:
+            kena_tp, kena_sl = hi >= tp1, lo <= sl_baru
+            if kena_sl:
+                # Dalam satu bar, yang buruk dianggap lebih dulu. Menganggap
+                # TP duluan akan mengarang keuntungan dari ketidaktahuan
+                # urutan intrabar -- persis cara backtest jadi terlalu indah.
+                hasil = "kalah"
+                break
+            if kena_tp:
+                hasil = "menang"
+                break
+
+        if hasil == "menang":
+            menang += 1
+        elif hasil == "kalah":
+            kalah += 1
+        else:
+            gantung += 1
+
+        if hasil == "menang" and hasil_lama == "kalah":
+            jadi_menang.append({"kode": x["kode"], "sl_lama": x.get("sl_pct"),
+                                "sl_baru": round(lantai, 1)})
+        elif hasil == "kalah" and hasil_lama == "menang":
+            jadi_kalah.append({"kode": x["kode"], "sl_lama": x.get("sl_pct"),
+                               "sl_baru": round(lantai, 1)})
+
+    total_baru = menang + kalah
+    total_lama = lama_menang + lama_kalah
+    if not total_baru or not total_lama:
+        return None
+    return {
+        "n": total_baru, "menang": menang, "kalah": kalah, "gantung": gantung,
+        "win_rate": round(menang / total_baru * 100, 1),
+        "win_rate_tercatat": round(lama_menang / total_lama * 100, 1),
+        "jadi_menang": jadi_menang[:15], "jadi_kalah": jadi_kalah[:15],
+        "n_jadi_menang": len(jadi_menang), "n_jadi_kalah": len(jadi_kalah),
+    }
 
 
 async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = False) -> None:
@@ -4010,7 +4138,10 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
     if not dipakai:
         return
 
-    kunci = "sinyal_puncak:v3"
+    # v4: tiap bar kini membawa LOW juga (lihat catatan di bawah). Kunci
+    # WAJIB naik saat bentuk berubah -- cache lama yang bentuknya beda
+    # akan tetap disajikan sampai TTL habis dan kolomnya diam-diam kosong.
+    kunci = "sinyal_puncak:v4"
     tersimpan = _cache_get(kunci)
     if tersimpan is None and not boleh_fetch:
         # Disiplin repo ini (scaling #1): permintaan USER tidak boleh memicu
@@ -4049,9 +4180,13 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
                     continue
                 try:
                     df = fix_yf_columns(df)
-                    peta_l[k] = [(str(idx)[:10], float(h), float(c))
-                                 for idx, h, c in zip(df.index, df["High"], df["Close"])
-                                 if pd.notna(h) and pd.notna(c)]
+                    # LOW ikut disimpan: simulasi lantai SL butuh harga
+                    # terendah, dan riwayat ini sudah terunduh di sini. Satu
+                    # unduhan melayani dua kebutuhan, bukan dua unduhan.
+                    peta_l[k] = [(str(idx)[:10], float(h), float(c), float(lo))
+                                 for idx, h, c, lo in zip(df.index, df["High"],
+                                                          df["Close"], df["Low"])
+                                 if pd.notna(h) and pd.notna(c) and pd.notna(lo)]
                 except Exception:
                     continue
             # Level "masuk lagi" dihitung dari HARGA SEKARANG memakai fungsi
@@ -4103,7 +4238,7 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         # tersaring -- CSMI (2,5x dari entry) hilang seluruhnya.
         if is_price_scale_anomaly(entry, sesudah[-1][2], ratio_up=PEAK_ANOMALY_RATIO_UP):
             continue
-        tgl_puncak, harga_puncak, _ = max(sesudah, key=lambda b: b[1])
+        tgl_puncak, harga_puncak = max(sesudah, key=lambda b: b[1])[:2]
         s["mulai_dilacak"] = mulai
         s["puncak_price"] = round(harga_puncak, 2)
         s["puncak_date"] = tgl_puncak

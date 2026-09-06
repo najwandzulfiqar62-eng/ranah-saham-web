@@ -5843,3 +5843,77 @@ def test_permintaan_lambat_dicatat_dengan_jalurnya(client, monkeypatch, capsys):
     keluaran = capsys.readouterr().out
     assert "lambat" in keluaran, "permintaan lambat tidak dicatat sama sekali"
     assert "/health" in keluaran, "log tidak menyebut JALUR-nya"
+
+
+def _bar_naik(mulai="2026-07-01", n=60, harga0=100.0, langkah=0.0, ayun=0.0):
+    """Bar (tanggal, high, close, low) seperti yang disimpan cache riwayat."""
+    import datetime as dt
+    bar, d, h = [], dt.date.fromisoformat(mulai), harga0
+    for i in range(n):
+        h = h * (1 + langkah)
+        bar.append((d.isoformat(), h * (1 + ayun), h, h * (1 - ayun)))
+        d += dt.timedelta(days=1)
+    return bar
+
+
+def test_simulasi_lantai_sl_menerapkan_aturan_ke_semua_bukan_yang_menguntungkan():
+    """Aturan diterapkan SERAGAM: yang lolos berkat stop lebih lebar DAN yang
+    justru jadi rugi lebih besar sama-sama dihitung. Kalau hanya yang
+    menguntungkan yang diambil, yang dihasilkan bukan audit melainkan karangan."""
+    import web.app as app_module
+
+    # Saham bergejolak (ayun 4%/hari): lantai 2xATR jauh di atas 3%.
+    bar = _bar_naik(n=40, harga0=100.0, langkah=0.004, ayun=0.04)
+    peta = {"GOYANG": bar}
+    # Direkam di tengah, entry di harga saat itu, TP1 +3%.
+    mulai = bar[30][0]
+    sinyal = [{
+        "kode": "GOYANG", "status": "SL_HIT", "direction": "BUY",
+        "entry_price": bar[30][2], "sl_pct": 3.0, "tp_pct": 3.0,
+        "tp_level_hit": 0, "recorded_at": mulai + " 09:00:00",
+    }]
+    hasil = app_module._simulasi_lantai_sl(sinyal, peta)
+    assert hasil is not None
+    # Stop 3% pada saham yang berayun 4% per hari pasti tersapu; lantai ATR
+    # memberi ruang yang jauh lebih lebar.
+    assert hasil["n"] == 1
+    assert hasil["win_rate_tercatat"] == 0.0
+    if hasil["n_jadi_menang"]:
+        assert hasil["jadi_menang"][0]["sl_baru"] > hasil["jadi_menang"][0]["sl_lama"]
+
+
+def test_simulasi_menganggap_sl_lebih_dulu_dalam_satu_bar():
+    """Kalau satu bar menyentuh TP dan SL sekaligus, urutan intrabar tidak
+    diketahui. Menganggap TP duluan akan mengarang keuntungan dari
+    ketidaktahuan -- persis cara backtest jadi terlalu indah untuk dipercaya."""
+    import web.app as app_module
+
+    # Satu bar dengan rentang sangat lebar: high jauh di atas TP, low jauh
+    # di bawah stop mana pun.
+    bar = _bar_naik(n=30, harga0=100.0, langkah=0.0, ayun=0.001)
+    mulai = bar[20][0]
+    bar[21] = (bar[21][0], 200.0, 100.0, 10.0)
+    sinyal = [{"kode": "LEBAR", "status": "TP_HIT", "direction": "BUY",
+               "entry_price": 100.0, "sl_pct": 3.0, "tp_pct": 3.0,
+               "tp_level_hit": 1, "recorded_at": mulai + " 09:00:00"}]
+    hasil = app_module._simulasi_lantai_sl(sinyal, {"LEBAR": bar})
+    assert hasil["kalah"] == 1 and hasil["menang"] == 0
+
+
+def test_simulasi_tidak_menyentuh_win_rate_tercatat():
+    """Panel ini BERDAMPINGAN dengan catatan, bukan menggantikannya. Kerugian
+    yang benar-benar terjadi tetap tercatat sebagai kerugian."""
+    import web.app as app_module
+
+    bar = _bar_naik(n=40, harga0=100.0, langkah=0.004, ayun=0.04)
+    sinyal = [{"kode": "GOYANG", "status": "SL_HIT", "direction": "BUY",
+               "entry_price": bar[30][2], "sl_pct": 3.0, "tp_pct": 3.0,
+               "tp_level_hit": 0, "recorded_at": bar[30][0] + " 09:00:00"}]
+    hasil = app_module._simulasi_lantai_sl(sinyal, {"GOYANG": bar})
+    # Angka tercatat dilaporkan APA ADANYA, terpisah dari hasil simulasi.
+    assert hasil["win_rate_tercatat"] == 0.0, "catatan asli ikut berubah"
+    # Dua angka berdiri sendiri-sendiri, dan keduanya WAJIB ada -- panel yang
+    # cuma menampilkan angka simulasi akan terbaca sebagai koreksi catatan,
+    # padahal ia pembanding.
+    assert isinstance(hasil["win_rate"], (int, float))
+    assert set(("win_rate", "win_rate_tercatat")) <= set(hasil)

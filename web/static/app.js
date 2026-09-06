@@ -2102,6 +2102,25 @@ async function loadSignalAudit(){
             <div class="zeta-value ${worstRet!=null&&worstRet>=0?'green':'red'}" style="font-size:20px">${worstRet==null?'–':`${worstCode} ${worstRet>=0?'+':''}${fmt(worstRet,1)}%`}</div>
             <div class="zeta-sub">${worstDate||'Belum ada sinyal selesai'}${worstPuncak!=null&&worstPuncak>0?` · puncak setelahnya +${fmt(worstPuncak,1)}%`:''}</div>
           </div>
+          ${!d.simulasi_sl?'':`<div class="zeta-card" style="padding:12px 16px;grid-column:1/-1;border-color:var(--gold)">
+            <div class="zeta-label">Simulasi — kalau lantai SL sekarang dipakai sejak awal</div>
+            <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;margin-top:4px">
+              <div><span class="muted" style="font-size:11px">tercatat</span>
+                <b style="font-size:20px;margin-left:6px">${fmt(d.simulasi_sl.win_rate_tercatat,1)}%</b></div>
+              <div style="color:var(--muted)">→</div>
+              <div><span class="muted" style="font-size:11px">simulasi</span>
+                <b style="font-size:20px;color:var(--gold);margin-left:6px">${fmt(d.simulasi_sl.win_rate,1)}%</b></div>
+              <div class="muted" style="font-size:11px">${d.simulasi_sl.menang}W / ${d.simulasi_sl.kalah}L dari ${d.simulasi_sl.n} sinyal</div>
+            </div>
+            <div class="zeta-sub" style="margin-top:8px">
+              Sinyal lama ditutup memakai lantai SL <b>3% datar</b>; aturan sekarang <b>max(3%, 2×ATR)</b> — jauh lebih lebar untuk saham bergejolak.
+              Aturan itu diterapkan ulang ke seluruh sinyal selesai secara seragam:
+              <b style="color:var(--bull)">${d.simulasi_sl.n_jadi_menang} berubah menang</b>,
+              <b style="color:var(--bear)">${d.simulasi_sl.n_jadi_kalah} berubah kalah</b>${d.simulasi_sl.gantung?` · ${d.simulasi_sl.gantung} belum tuntas`:''}.
+              ${d.simulasi_sl.jadi_menang.length?`<br>Berubah menang: ${d.simulasi_sl.jadi_menang.map(x=>`${escHtml(x.kode)} ${fmt(x.sl_lama,1)}%→${fmt(x.sl_baru,1)}%`).join(' · ')}`:''}
+              <br><b>Angka ini simulasi, bukan hasil yang direalisasikan.</b> Win rate resmi di atas sengaja TIDAK diubah — kerugian yang benar-benar terjadi tetap tercatat sebagai kerugian.
+            </div>
+          </div>`}
           ${!slTerbang.length?'':`<div class="zeta-card" style="padding:12px 16px">
             <div class="zeta-label">Kena SL lalu terbang</div>
             <div class="zeta-value" style="font-size:20px;color:var(--gold)" data-animate="${slTerbang.length}|0">0</div>
@@ -6061,7 +6080,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v44';
+const APP_VERSION='v45';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
