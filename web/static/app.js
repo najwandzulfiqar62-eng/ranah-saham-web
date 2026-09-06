@@ -1461,24 +1461,24 @@ async function loadFilter(mode){
   staggerRows(body.querySelector('.ctable'), 12);
 }
 
-// Anjuran dikirim backend sebagai baris teks bermarkup ringan ala WhatsApp
-// (*tebal*, _miring_). Yang dilakukan di sini murni MENAMPILKAN -- tidak ada
-// satu pun keputusan yang diambil ulang, supaya web dan bot tidak akan pernah
-// bisa menjawab berbeda untuk sinyal yang sama.
-function _anjuranHtml(baris){
-  if(!baris||!baris.length) return '';
-  const esc=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const isi=baris.map(b=>{
-    // Warna mengikuti isyarat yang sudah dibawa teksnya sendiri, bukan
-    // pencocokan kata yang gampang meleset saat kalimatnya diubah.
-    const warna=b.startsWith('\u{1F534}')||b.startsWith('\u26d4')?'var(--bear)'
-      :b.startsWith('\u{1F7E2}')||b.startsWith('\u{1F504}')?'var(--bull)'
-      :'var(--gold)';
-    const html=esc(b).replace(/\*([^*]+)\*/g,'<b>$1</b>')
-                     .replace(/_([^_]+)_/g,'<i>$1</i>');
-    return `<div style="color:${warna}">${html}</div>`;
-  }).join('');
-  return `<div style="font-size:9.5px;margin-top:3px;line-height:1.5">${isi}</div>`;
+// Anjuran datang dari backend dalam bentuk PADAT: {aksi, nada, baris[]}.
+// Yang dilakukan di sini murni menampilkan -- tidak ada keputusan yang
+// diambil ulang, jadi web dan bot tidak mungkin menjawab berbeda.
+//
+// Sengaja TANPA emoji dan tanpa kalimat mengobrol. Ini kolom yang dibaca
+// sambil memindai puluhan baris di layar selebar telapak tangan; versi
+// sebelumnya menjejalkan prosa panjang ke sana dan membungkus satu-dua kata
+// per baris -- terbaca sebagai kekacauan, bukan sebagai saran.
+function _anjuranHtml(a){
+  if(!a||!a.aksi) return '';
+  const warna = a.nada==='bear' ? 'var(--bear)'
+              : a.nada==='bull' ? 'var(--bull)'
+              : 'var(--gold)';
+  const baris=(a.baris||[]).map(b=>`<div>${escHtml(b)}</div>`).join('');
+  return `<div class="sig-aksi">`
+    +`<span class="sig-badge" style="color:${warna};border-color:${warna}55">${escHtml(a.aksi)}</span>`
+    +(baris?`<div class="sig-aksi-baris">${baris}</div>`:'')
+    +`</div>`;
 }
 
 async function loadHarmonic(){
@@ -6040,7 +6040,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v42';
+const APP_VERSION='v43';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

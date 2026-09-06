@@ -202,8 +202,12 @@ def test_anjuran_html_membersihkan_html_dari_teks_backend():
     src = _baca()
     awal = src.index("function _anjuranHtml(")
     badan = src[awal:awal + 1200]
-    assert "replace(/&/g" in badan and "replace(/</g" in badan, \
+    # escHtml() memakai textContent->innerHTML, jadi seluruh teks backend aman
+    # disisipkan. Yang dijaga di sini: tidak ada potongan yang lolos tanpa
+    # melewatinya.
+    assert badan.count("escHtml(") >= 2, \
         "_anjuranHtml menyisipkan teks tanpa meng-escape HTML"
+    assert "${a.aksi}" not in badan, "aksi disisipkan mentah tanpa escHtml"
 
 
 @pytest.mark.parametrize("contoh,seimbang", [

@@ -3900,7 +3900,10 @@ async def signals():
         peta_hm = _peta_harmonic_hari_ini()
         for x in report.get("signals", []):
             if x.get("status") in ("OPEN", "PENDING_ENTRY"):
-                x["anjuran"] = _anjuran_sinyal(x, lolos, peta_hm, ringkas=True)
+                # Bentuk PADAT, bukan prosa. Prosa panjang dijejalkan ke kolom
+                # tabel selebar ~100px di HP membungkus satu-dua kata per
+                # baris -- terbaca sebagai kekacauan, bukan sebagai saran.
+                x["anjuran"] = _anjuran_ringkas(x, lolos, peta_hm)
     except Exception as e:
         # Anjuran hilang jauh lebih ringan daripada halaman Audit gagal muat.
         print(f"⚠️ anjuran sinyal: {type(e).__name__}: {e}")
@@ -7753,19 +7756,87 @@ def _kode_lolos_hari_ini() -> set | None:
     return kumpulan - {""}
 
 
+def _rp_pendek(x) -> str:
+    """Rupiah tanpa kata 'Rp' -- di tabel, kolomnya sendiri sudah bilang harga."""
+    return _rp(x).replace("Rp", "") if x is not None else "-"
+
+
+def _anjuran_ringkas(s: dict, lolos_hari_ini: set | None = None,
+                     harmonic_peta: dict | None = None) -> dict:
+    """Bentuk PADAT untuk web: satu kata aksi + maksimal dua baris pendek.
+
+    Keputusannya diambil fungsi yang SAMA dengan versi panjang (lihat
+    _keputusan_dasar di bawah), jadi web dan bot tidak mungkin menyimpulkan
+    hal berbeda -- yang berbeda cuma seberapa banyak kata yang dipakai.
+
+    Tanpa emoji dan tanpa gaya mengobrol: ini kolom tabel yang dibaca sambil
+    memindai puluhan baris, bukan pesan yang dibaca satu per satu.
+    """
+    is_sell = s.get("direction") == "SELL"
+    entry, sl = s.get("entry_price"), s.get("sl_price")
+    tercapai = s.get("tp_level_hit") or 0
+    tertinggi = _tp_tertinggi(s)
+    stop, label_stop = _stop_berlaku(s)
+    harga = _harga_terakhir_sinyal(s)
+    potensi = _alasan_masih_menahan(s, lolos_hari_ini, harmonic_peta)
+    alasan = _alasan_tak_layak_masuk(s, lolos_hari_ini)
+    baris = []
+
+    if s.get("status") == "PENDING_ENTRY":
+        if alasan:
+            return {"aksi": "BATAL", "nada": "bear",
+                    "baris": ["Tidak lagi layak dimasuki"]}
+        return {"aksi": "TUNGGU", "nada": "netral",
+                "baris": [f"Beli {_rp_pendek(entry)} · SL {_rp_pendek(sl)}"]}
+
+    tembus = (harga is not None and stop is not None
+              and (harga > stop if is_sell else harga < stop))
+    if tembus:
+        baris.append(f"Harga {_rp_pendek(harga)} lewat stop {_rp_pendek(stop)}")
+        area = sorted([a for a in ((s.get("masuk_lagi") or {}).get("deep"),
+                                   (s.get("masuk_lagi") or {}).get("pullback")) if a],
+                      key=lambda a: a["entry"])
+        if area:
+            baris.append(f"Masuk lagi {_rp_pendek(area[0]['entry'])} bila ada pembalikan")
+        return {"aksi": "TUTUP" if is_sell else "JUAL", "nada": "bear", "baris": baris}
+
+    if tercapai >= 1:
+        berikut = tercapai + 1 if harga_tp_ke(s, tercapai + 1) is not None else None
+        if berikut:
+            baris.append(f"TP{tercapai} kena · target TP{berikut} "
+                         f"{_rp_pendek(harga_tp_ke(s, berikut))}")
+            baris.append(f"Stop naik ke {_rp_pendek(stop)}")
+            return {"aksi": "HOLD", "nada": "bull", "baris": baris}
+        if potensi or lolos_hari_ini is None:
+            baris.append(f"Target habis di TP{tertinggi}, tren masih kuat")
+            baris.append(f"Stop naik ke {_rp_pendek(stop)}")
+            return {"aksi": "HOLD", "nada": "bull", "baris": baris}
+        return {"aksi": "TP PENUH", "nada": "bear",
+                "baris": [f"Jual seluruhnya di {_rp_pendek(harga)}",
+                          "Target habis, tren tidak lagi lolos saringan"]}
+
+    baris.append(f"Stop {_rp_pendek(sl)}")
+    if alasan:
+        baris.append("Jangan entry baru")
+        return {"aksi": "HOLD", "nada": "netral", "baris": baris}
+    area = sorted([a for a in ((s.get("masuk_lagi") or {}).get("deep"),
+                               (s.get("masuk_lagi") or {}).get("pullback")) if a],
+                  key=lambda a: a["entry"])
+    if area:
+        baris.append(f"Beli lagi {_rp_pendek(area[0]['entry'])} "
+                     f"· SL {_rp_pendek(area[0]['sl'])}")
+    elif entry is not None:
+        baris.append(f"Beli lagi {_rp_pendek(entry)} · SL {_rp_pendek(sl)}")
+    return {"aksi": "HOLD", "nada": "bull", "baris": baris}
+
+
 def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
-                    harmonic_peta: dict | None = None,
-                    ringkas: bool = False) -> list:
+                    harmonic_peta: dict | None = None) -> list:
     """Dua sisi keputusan: yang SUDAH punya barang, dan yang BELUM.
 
-    ringkas=True membuang kalimat penjelasan yang ISINYA SAMA di tiap sinyal
-    (ditandai huruf miring _..._ tanpa angka khas sinyalnya). Dipakai jalur
-    WEB: di sana anjuran ini menempel ke SETIAP baris aktif, jadi kalimat
-    yang sama ikut terunduh berpuluh kali. Diukur: +33,5 KB pada 120 sinyal
-    aktif (+19,7% payload) -- beban yang seluruhnya ditanggung pemakai HP,
-    dan sama sekali tidak menambah informasi karena kalimatnya identik.
-    Penjelasan panjangnya cukup ditampilkan SEKALI oleh halamannya.
-    Bot WA tetap memakai versi penuh: di sana pesannya dibaca satu per satu.
+    Versi PANJANG, khusus bot WhatsApp: di sana pesannya dibaca satu per satu
+    dan ruangnya tidak terbatas. Web memakai _anjuran_ringkas() -- keputusannya
+    sama, kata-katanya jauh lebih sedikit.
     """
     is_sell = s.get("direction") == "SELL"
     keluar = "TUTUP POSISI" if is_sell else "JUAL"
@@ -7811,8 +7882,7 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
             ekor = ", jangan ditahan lagi"
         baris.append(f"🔴 *Sudah punya*: {keluar} SEKARANG — harga "
                      f"{_rp(harga)} sudah lewat {label_stop}{ekor}")
-        if not ringkas:
-            baris.append("_Bukan 'tahan dulu siapa tahu balik': stop yang tersentuh "
+        baris.append("_Bukan 'tahan dulu siapa tahu balik': stop yang tersentuh "
                          "adalah batas yang kamu tetapkan sendiri sebelum emosi ikut "
                          "menghitung. Melewatinya artinya alasan memegang saham ini "
                          "sudah tidak berlaku._")
@@ -7859,8 +7929,7 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
         # kecil berubah jadi kerugian yang tidak bisa dipulihkan.
         baris.append("⛔ *Belum punya*: JANGAN entry baru di harga sekarang — "
                      "yang sedang terjadi bukan diskon, tapi setup yang rusak")
-        if not ringkas:
-            baris.append("_Average down TIDAK wajib. Aturan risiko aplikasi ini sendiri: "
+        baris.append("_Average down TIDAK wajib. Aturan risiko aplikasi ini sendiri: "
                          "jangan menambah posisi hanya karena harga turun, tanpa tanda "
                          "pembalikan._")
         area_lagi = sorted([a for a in ((s.get("masuk_lagi") or {}).get("deep"),
@@ -7875,8 +7944,7 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
             baris.append("🔄 *Masuk lagi*: belum ada level yang layak dipakai; "
                          "tunggu struktur barunya terbentuk dulu")
         kode = s.get("kode") or "KODE"
-        if not ringkas:
-            baris.append(f"_Sudah terlanjur nyangkut? Ketik `nyangkut {kode} "
+        baris.append(f"_Sudah terlanjur nyangkut? Ketik `nyangkut {kode} "
                          f"<harga rata-ratamu>` untuk level menambah yang masuk akal "
                          f"plus kondisi IHSG-nya._")
         return baris

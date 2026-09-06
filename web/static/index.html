@@ -698,6 +698,16 @@
 /* Penanda versi di footer: cukup terbaca untuk dipotret, cukup redup
    untuk tidak mengganggu. */
 .footer-ver{font-size:10.5px;color:var(--faint);letter-spacing:.04em;margin-top:6px}
+/* Anjuran di tabel/kartu Audit Sinyal. Lencana satu kata supaya keputusannya
+   terbaca dari sudut mata saat memindai daftar; rinciannya kecil di bawahnya.
+   Ukuran baris sengaja tidak mengecil lagi dari 10px -- di bawah itu angka
+   rupiah jadi tidak terbaca di layar HP, dan angka itulah yang dicari. */
+.sig-aksi{margin-top:5px}
+.sig-badge{display:inline-block;font:700 9.5px Inter,sans-serif;letter-spacing:.06em;
+  border:1px solid;border-radius:4px;padding:2px 6px;white-space:nowrap}
+.sig-aksi-baris{margin-top:4px;font-size:10px;line-height:1.5;color:var(--muted);
+  font-family:'JetBrains Mono',monospace}
+.sig-aksi-baris div{overflow-wrap:anywhere}
 /* Badge irisan dua saringan: lolos Minervini DAN punya pola harmonic. */
 .harm-conf{font-size:10px;font-weight:700;color:var(--gold);border:1px solid var(--gold);
   border-radius:5px;padding:2px 6px;white-space:nowrap}

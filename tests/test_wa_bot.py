@@ -1100,29 +1100,32 @@ def test_area_masuk_lagi_memakai_level_terdalam_bukan_yang_pertama_ditulis():
     assert "Rp880" in hasil and "Rp910" not in hasil
 
 
-def test_jalur_web_membuang_kalimat_yang_isinya_sama_di_tiap_sinyal():
-    """Anjuran menempel ke SETIAP sinyal aktif di /api/signals. Kalimat
-    penjelasan yang isinya identik ikut terunduh berpuluh kali -- diukur
-    +33,5 KB pada 120 sinyal aktif, beban yang seluruhnya ditanggung pemakai
-    HP tanpa menambah satu pun informasi. Bot WA tetap versi penuh: di sana
-    pesannya dibaca satu per satu."""
+def test_web_dapat_bentuk_padat_bot_dapat_versi_panjang():
+    """Dua pembaca, dua kebutuhan. Bot dibaca satu pesan per waktu, jadi kalimat
+    utuh justru membantu. Web memindai puluhan baris di kolom selebar telapak
+    tangan -- prosa di sana membungkus satu-dua kata per baris dan terbaca
+    sebagai kekacauan, bukan sebagai saran. Yang WAJIB sama: keputusannya."""
     import web.app as app_module
 
     s = _sinyal(tp_level_hit=0, sejak_sinyal_return_pct=-8.0,
                 masuk_lagi={"deep": {"entry": 860, "sl": 800}})
+    panjang = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+    padat = app_module._anjuran_ringkas(s, lolos_hari_ini={"AAAA"})
 
-    penuh = app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"})
-    ringkas = app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}, ringkas=True)
+    # Keputusan yang sama: dua-duanya menyuruh keluar.
+    assert "JUAL SEKARANG" in panjang
+    assert padat["aksi"] == "JUAL"
 
-    gab_penuh, gab_ringkas = " ".join(penuh), " ".join(ringkas)
-    # Yang dibuang HANYA penjelasan generik.
-    assert "Average down TIDAK wajib" in gab_penuh
-    assert "Average down TIDAK wajib" not in gab_ringkas
-    assert len(gab_ringkas) < len(gab_penuh)
-
-    # Yang TIDAK boleh hilang: perintahnya sendiri dan angka-angkanya.
-    for wajib in ("JUAL SEKARANG", "JANGAN entry baru", "Masuk lagi kalau", "Rp860"):
-        assert wajib in gab_ringkas, f"versi ringkas kehilangan {wajib!r}"
+    # Bentuk padat: tanpa emoji, tanpa markup, dan benar-benar pendek.
+    gabung = " ".join(padat["baris"])
+    assert len(padat["baris"]) <= 2
+    assert all(len(b) <= 60 for b in padat["baris"]), padat["baris"]
+    for dilarang in ("*", "_", "ð", "ð´", "â"):
+        assert dilarang not in gabung and dilarang not in padat["aksi"], (
+            f"bentuk padat masih membawa {dilarang!r} -- itu gaya pesan chat, "
+            f"bukan kolom tabel")
+    # Angka yang dicari tetap ada.
+    assert "860" in gabung
 
 
 def test_kunci_cache_screener_minervini_berversi():
