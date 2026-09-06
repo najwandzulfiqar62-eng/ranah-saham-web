@@ -1467,7 +1467,13 @@ async function loadHarmonic(){
   let d; try{d=await api('/api/screener/harmonic')}catch(e){body.innerHTML=errBox(e.message);return}
   const items=d.items||[];
   if(!items.length){
-    body.innerHTML=`<section class="panel">${emptyState('Tidak ada pola harmonic baru di universe hari ini. Saringan ini menuntut rasio Fibonacci yang ketat, jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak.')}</section>`;
+    // Bedakan "belum siap" dari "memang tidak ada". Pemindaian 237 emiten
+    // butuh puluhan detik dan dikerjakan di latar; menampilkannya sebagai
+    // "tidak ada pola" itu bohong, dan sebagai error itu bikin panik.
+    const pesan = d.menyiapkan
+      ? 'Saringan harmonic sedang disiapkan di latar (memindai ratusan emiten, butuh sekitar semenit). Muat ulang sebentar lagi — data akan muncul sendiri.'
+      : 'Tidak ada pola harmonic baru di universe hari ini. Saringan ini menuntut rasio Fibonacci yang ketat, jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak.';
+    body.innerHTML=`<section class="panel">${emptyState(pesan)}</section>`;
     return;
   }
   // KARTU, bukan tabel. Tabel 7 kolom tidak muat di layar HP: judul kolom

@@ -5710,3 +5710,41 @@ def test_lantai_sl_mengikuti_volatilitas_bukan_angka_datar():
     # sadar ("targetnya jauh"), bukan efek samping tak sengaja.
     assert bergejolak["tp1_pct"] >= bergejolak["risk_pct"] - 0.11
     assert bergejolak["tp3_pct"] > tenang["tp3_pct"]
+
+
+def test_endpoint_harmonic_tidak_menerima_perintah_memindai_dari_query(client, monkeypatch):
+    """Pemindaian harmonic memakan ~44 detik untuk 237 emiten dan hanya boleh
+    dijalankan cache warmer di latar. Kalau `boleh_pindai` bocor menjadi
+    parameter query, siapa pun tinggal memanggil ?boleh_pindai=true dan
+    memicunya kembali -- lubangnya sebesar masalah yang ditutup."""
+    import web.app as app_module
+
+    skema = client.get("/openapi.json").json()
+    parameter = skema["paths"]["/api/screener/harmonic"]["get"].get("parameters", [])
+    nama = [p["name"] for p in parameter]
+    # Sebut yang sah juga: tanpa ini, daftar kosong (mis. salah jalur skema)
+    # akan membuat pengujian ini lulus tanpa membuktikan apa pun.
+    assert set(nama) == {"maks_umur", "arah", "lingkup"}, nama
+
+    async def _jangan_pernah_diunduh(*a, **k):
+        raise AssertionError("permintaan pengunjung memicu unduhan harmonic dingin")
+
+    monkeypatch.setattr(app_module, "async_download_many", _jangan_pernah_diunduh)
+
+    # Endpoint-nya di balik gerbang akses, jadi harus masuk dulu -- kalau
+    # tidak, yang teruji cuma gerbangnya, bukan perilaku saringannya.
+    import os
+
+    from core.access import ensure_access_tables, ensure_bootstrap_admin
+
+    ensure_access_tables()
+    ensure_bootstrap_admin()
+    masuk = client.post("/api/access/login", json={
+        "email": os.environ["ACCESS_ADMIN_EMAIL"],
+        "password": os.environ["ACCESS_ADMIN_PASSWORD"],
+    })
+    assert masuk.status_code == 200, masuk.text
+
+    d = client.get("/api/screener/harmonic?boleh_pindai=true").json()
+    assert d.get("menyiapkan") is True
+    assert d["items"] == []

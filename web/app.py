@@ -2741,8 +2741,21 @@ async def harmonic_kode(kode: str):
 
 
 @app.get("/api/screener/harmonic")
+async def screener_harmonic_http(maks_umur: int = 10, arah: str = "bullish",
+                                 lingkup: str = "luas"):
+    """Pintu HTTP untuk saringan harmonic.
+
+    `boleh_pindai` SENGAJA tidak ikut di sini. Kalau ia jadi parameter query,
+    siapa pun tinggal memanggil ?boleh_pindai=true dan memicu kembali
+    pemindaian 44 detik yang justru baru saja dicegah -- lubangnya persis
+    sebesar masalah yang ditutup. Hak memindai hanya milik pemanggil
+    internal, yaitu cache warmer.
+    """
+    return await screener_harmonic(maks_umur, arah, lingkup)
+
+
 async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
-                            lingkup: str = "luas"):
+                            lingkup: str = "luas", boleh_pindai: bool = False):
     """Saringan pola harmonic atas universe likuid.
 
     maks_umur: hanya pola yang titik penyelesaiannya terbentuk <= sekian bar
@@ -2766,6 +2779,20 @@ async def screener_harmonic(maks_umur: int = 10, arah: str = "bullish",
     cached = _cache_get(kunci)
     if cached is not None:
         return cached
+
+    # Permintaan pengunjung TIDAK PERNAH memicu pemindaian dingin. Diukur:
+    # memindai 237 emiten butuh 44 detik -- jauh melewati batas sabar browser
+    # mana pun, sehingga yang muncul di layar bukan "sedang dihitung"
+    # melainkan "Gagal memuat data". Persis yang dilaporkan user.
+    # Yang memindai hanya _cache_warmer_loop (boleh_pindai=True); saat cache
+    # masih dingin, endpoint ini menjawab SEKETIKA dengan penanda 'menyiapkan'
+    # supaya UI bisa mengatakan yang sebenarnya, bukan menampilkan error.
+    if not boleh_pindai:
+        stale = _cache_get_stale(kunci)
+        if stale is not None:
+            return stale
+        return _py({"items": [], "universe": len(semesta), "maks_umur": maks_umur,
+                    "arah": arah, "lingkup": lingkup, "menyiapkan": True})
 
     from core.harmonic import detect_harmonic
 
@@ -4182,7 +4209,7 @@ async def _warm_shared_caches():
     # kebetulan membuka tabnya lebih dulu.
     if _cache_get("screener_harmonic:v3:luas:bullish:10") is None:
         try:
-            await screener_harmonic()
+            await screener_harmonic(boleh_pindai=True)
         except Exception as e:
             print(f"⚠️ cache-warmer harmonic: {type(e).__name__}: {e}")
 
@@ -6793,6 +6820,12 @@ def _wa_fmt_harmonic_kode(kode: str, d: dict) -> str:
 def _wa_fmt_harmonic_screener(d: dict) -> str:
     items = (d or {}).get("items") or []
     if not items:
+        # "Belum siap" dan "memang tidak ada" itu dua hal berbeda. Menyamakan
+        # keduanya membuat orang menyimpulkan pasarnya sepi, padahal
+        # hitungannya yang belum jalan.
+        if (d or {}).get("menyiapkan"):
+            return ("*Saringan Harmonic*\n\n_Sedang disiapkan di latar (memindai "
+                    "ratusan emiten, butuh sekitar semenit). Coba lagi sebentar._")
         return ("*Saringan Harmonic*\n\n_Tidak ada pola harmonic baru di universe "
                 "hari ini._\n\n_Saringan ini menuntut rasio Fibonacci yang ketat, "
                 "jadi hari tanpa hasil itu wajar — bukan tanda datanya rusak._")

@@ -915,3 +915,22 @@ def test_harmonic_menyebut_timeframe_barnya(client, wa_bersih, monkeypatch):
     assert "bar harian" in hasil and "1 hari bursa" in hasil
     assert "5 bar sebelum" in hasil          # definisi pivotnya ikut dijelaskan
     assert "6 hari bursa lalu" in hasil      # satuannya disebut di barisnya juga
+
+
+def test_harmonic_membedakan_belum_siap_dari_tidak_ada_pola(client, wa_bersih, monkeypatch):
+    """Memindai 237 emiten butuh ~44 detik, jadi dikerjakan di latar. Saat
+    hasilnya belum siap, mengatakan "tidak ada pola" itu bohong (orang
+    menyimpulkan pasarnya sepi) dan menampilkan error bikin panik."""
+    import web.app as app_module
+
+    async def _belum_siap(maks_umur: int = 10, arah: str = "bullish",
+                          lingkup: str = "luas", boleh_pindai: bool = False):
+        return {"items": [], "universe": 237, "maks_umur": 10, "arah": arah,
+                "lingkup": lingkup, "menyiapkan": True}
+
+    monkeypatch.setattr(app_module, "screener_harmonic", _belum_siap)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "harmonic").json()["reply"]
+    assert "Sedang disiapkan" in hasil
+    assert "Tidak ada pola" not in hasil, "belum siap != tidak ada pola"
