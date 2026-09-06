@@ -2030,6 +2030,22 @@ async function loadSignalAudit(){
       if(worstRet==null||ret<worstRet){worstRet=ret;worstCode=t.kode;worstDate=dt;}
       if(dt)dailyReturns[dt]=(dailyReturns[dt]||0)+ret;
     });
+    // "Kena SL lalu terbang": sinyal yang ditutup rugi, TAPI harganya
+    // kemudian naik jauh melewati entry. Angka ini TIDAK mengubah win rate
+    // sedikit pun -- itu tetap rekaman apa yang benar-benar terjadi. Yang
+    // dilakukannya menjawab pertanyaan lain yang sama pentingnya: apakah
+    // stop-nya terlalu rapat? Kalau banyak sinyal muncul di sini, yang perlu
+    // diperbaiki ATURANNYA, bukan catatannya.
+    const slTerbang=signals.filter(t=>t.status==='SL_HIT'
+        && t.puncak_return_pct!=null && t.puncak_return_pct>=10);
+    const slTerbangPuncak=slTerbang.length
+      ? slTerbang.reduce((a,t)=>a+t.puncak_return_pct,0)/slTerbang.length : null;
+    const slTerbangTop=slTerbang.slice().sort((a,b)=>b.puncak_return_pct-a.puncak_return_pct)[0];
+    // Puncak sesudah SL untuk sinyal TERBURUK -- supaya "-13,8%" tidak
+    // terbaca sebagai keseluruhan cerita kalau ternyata sahamnya lalu naik.
+    const worstSig=closedSig.find(t=>t.kode===worstCode&&_lockedRet(t)===worstRet);
+    const worstPuncak=worstSig&&worstSig.puncak_return_pct!=null?worstSig.puncak_return_pct:null;
+
     // Profit factor null = belum ada loss sama sekali -> tampil "∞",
     // BUKAN angka karangan macam 99 (itu klaim palsu).
     const profitFactor=sumLossRet>0?sumWinRet/sumLossRet:null;
@@ -2084,8 +2100,13 @@ async function loadSignalAudit(){
           <div class="zeta-card" style="padding:12px 16px">
             <div class="zeta-label">Terburuk</div>
             <div class="zeta-value ${worstRet!=null&&worstRet>=0?'green':'red'}" style="font-size:20px">${worstRet==null?'–':`${worstCode} ${worstRet>=0?'+':''}${fmt(worstRet,1)}%`}</div>
-            <div class="zeta-sub">${worstDate||'Belum ada sinyal selesai'}</div>
+            <div class="zeta-sub">${worstDate||'Belum ada sinyal selesai'}${worstPuncak!=null&&worstPuncak>0?` · puncak setelahnya +${fmt(worstPuncak,1)}%`:''}</div>
           </div>
+          ${!slTerbang.length?'':`<div class="zeta-card" style="padding:12px 16px">
+            <div class="zeta-label">Kena SL lalu terbang</div>
+            <div class="zeta-value" style="font-size:20px;color:var(--gold)" data-animate="${slTerbang.length}|0">0</div>
+            <div class="zeta-sub">Puncak rata-rata +${fmt(slTerbangPuncak,1)}% setelah SL${slTerbangTop?` · tertinggi ${slTerbangTop.kode} +${fmt(slTerbangTop.puncak_return_pct,1)}%`:''}. Win rate TIDAK diubah — ini pertanyaan tentang lebar stop, bukan tentang catatannya.</div>
+          </div>`}
           <div class="zeta-card" style="padding:12px 16px">
             <div class="zeta-label">Hari Aktif</div>
             <div class="zeta-value white" style="font-size:20px" data-animate="${sortedDates.length}|0">0</div>
@@ -6040,7 +6061,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v43';
+const APP_VERSION='v44';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
