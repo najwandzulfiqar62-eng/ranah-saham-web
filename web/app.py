@@ -7934,6 +7934,27 @@ def _wa_fmt_minervini(payload) -> str:
         if it.get("vol_ratio") is not None:
             rinci += f" · vol {it['vol_ratio']}x"
         baris.append(rinci)
+        # Jawaban untuk "masuk screener itu entrynya di mana". Disajikan
+        # sebagai CICILAN, bukan "tunggu di sini" -- lihat alasan terukurnya
+        # di catatan penutup.
+        re_ = it.get("rencana_entry")
+        if re_:
+            baris.append(f"   👉 Beli sebagian di {_rp(re_['harga_pemicu'])}, "
+                         f"sisanya di {_rp(re_['cicil_di'])} "
+                         f"({re_['diskon_pct']:.1f}%) · SL {_rp(re_['cicil_sl'])}")
+    st = ((items[0].get("rencana_entry") or {}).get("stats")
+          if items and items[0].get("rencana_entry") else None)
+    if st:
+        baris += ["", "*Kenapa dicicil, bukan ditunggu*",
+                  f"_Dari {st['n']} kali saham baru masuk saringan ini: "
+                  f"{st['turun_di_bawah_pemicu_pct']:.0f}% memang turun dulu "
+                  f"(median {st['median_turun_pct']:.1f}%), jadi menunggu itu masuk akal._",
+                  f"_Tapi kalau SELURUH posisi ditunggu di diskon: hasil rata-rata 20 hari "
+                  f"turun dari +{st['hasil_beli_pasar_pct']:.2f}% jadi "
+                  f"+{st['hasil_limit_35_pct']:.2f}%, karena {st['terlewat_pct']:.0f}% peluang "
+                  f"tidak pernah menyentuh diskonnya — dan justru yang itu puncaknya "
+                  f"rata-rata +{st['puncak_yang_terlewat_pct']:.0f}%. Yang memberi diskon "
+                  f"cenderung yang lebih lemah._"]
     baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
               "_Hasil saringan otomatis, bukan ajakan membeli/menjual._"]
     return "\n".join(baris)

@@ -1546,6 +1546,24 @@ async function loadHarmonic(){
   body.querySelectorAll('.harm-card').forEach(el=>el.onclick=()=>analisis(el.dataset.k));
 }
 
+// Kenapa kolom Entry berbunyi "cicil", bukan "tunggu di sini". Angkanya
+// datang dari backend (PULLBACK_STATS, hasil pengukuran 848 kejadian), tidak
+// ditulis ulang di sini -- kalau pengukurannya diperbarui, kalimat ini ikut.
+function _catatanEntryMinervini(items){
+  const st=(items||[]).map(r=>r.rencana_entry&&r.rencana_entry.stats).find(Boolean);
+  if(!st) return '';
+  return infoNote(`Dari ${st.n} kali saham BARU masuk saringan ini (2 tahun): `
+    +`${fmt(st.turun_di_bawah_pemicu_pct,1)}% memang turun dulu di bawah harga pemicunya, `
+    +`median ${fmt(st.median_turun_pct,1)}%. Jadi menunggu itu masuk akal. `
+    +`TAPI kalau SELURUH posisi ditunggu di diskon, hasil rata-rata 20 hari bursa justru `
+    +`turun dari +${fmt(st.hasil_beli_pasar_pct,2)}% jadi +${fmt(st.hasil_limit_35_pct,2)}% `
+    +`\u2014 karena ${fmt(st.terlewat_pct,0)}% peluang tidak pernah menyentuh diskonnya, `
+    +`dan justru yang itu puncaknya rata-rata +${fmt(st.puncak_yang_terlewat_pct,0)}%. `
+    +`Saham yang memberi diskon cenderung yang lebih lemah. Karena itu kolom Entry `
+    +`menyarankan CICILAN: sebagian di harga sekarang supaya tidak ketinggalan, `
+    +`sisanya di level support di bawah.`,'Entry: kenapa dicicil');
+}
+
 async function loadScreenerPro(){
   const body=$('#uniBody');
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai ±178 saham likuid (Minervini)… 20–40 detik</p>';
@@ -1558,12 +1576,19 @@ async function loadScreenerPro(){
     <td><span class="minibar"><i style="width:${r.skor}%;background:linear-gradient(90deg,var(--bear),var(--gold),var(--bull))"></i></span>${fmt(r.skor,1)}</td>
     <td style="color:var(--gold);font-size:12px" title="${r.criteria_met}/8 kriteria">${bar} ${r.criteria_met}/8</td>
     <td>Rp${fmt(r.harga)}</td>
-    <td>${fmt(r.rs_score,0)}</td>
-    <td>${fmt(r.rsi,1)}</td>
-    <td class="${r.pct_from_52w_high>=-10?'up':'down'}">${fmt(r.pct_from_52w_high,1)}%</td></tr>`}).join('');
+    <td class="hide-xs">${fmt(r.rs_score,0)}</td>
+    <td class="hide-xs">${fmt(r.rsi,1)}</td>
+    <td class="${r.pct_from_52w_high>=-10?'up':'down'}">${fmt(r.pct_from_52w_high,1)}%</td>
+    <td style="font-size:11px;line-height:1.45">${r.rencana_entry
+      ? `<b>Rp${fmt(r.rencana_entry.harga_pemicu)}</b> <span class="muted">sebagian</span><br>
+         <b style="color:var(--gold)">Rp${fmt(r.rencana_entry.cicil_di)}</b>
+         <span class="muted">sisanya (${fmt(r.rencana_entry.diskon_pct,1)}%)</span><br>
+         <span style="color:var(--bear);font-size:10px">SL Rp${fmt(r.rencana_entry.cicil_sl)}</span>`
+      : '<span class="muted">\u2014</span>'}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
     <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Memindai ±178 saham likuid, hanya skor ≥65. Tap baris untuk analisis.</p>
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th>RSI</th><th>vs 52W High</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
+    ${_catatanEntryMinervini(items)}
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th class="hide-xs">RSI</th><th class="hide-xs">vs 52W High</th><th>Entry</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   staggerRows(body.querySelector('.ctable'), 12);
 }

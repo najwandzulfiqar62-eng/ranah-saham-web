@@ -5748,3 +5748,51 @@ def test_endpoint_harmonic_tidak_menerima_perintah_memindai_dari_query(client, m
     d = client.get("/api/screener/harmonic?boleh_pindai=true").json()
     assert d.get("menyiapkan") is True
     assert d["items"] == []
+
+
+def test_screener_minervini_menyertakan_rencana_entry_cicilan():
+    """Permintaan user: "masuk screener itu kamu tentuin entrynya dimana".
+
+    Levelnya WAJIB datang dari support sungguhan (lewat rencana trading yang
+    sama dipakai seluruh aplikasi), bukan potongan persen tetap: diskon 3,5%
+    di saham yang gerak hariannya 6% itu bukan diskon, itu noise. Dan ia harus
+    di BAWAH harga sekarang -- level "cicilan" yang ternyata di atas harga
+    bukan cicilan, itu mengejar."""
+    import numpy as np
+    import pandas as pd
+
+    from core.screening_pro import PULLBACK_STATS, _rencana_entry
+
+    rng = np.random.default_rng(7)
+    n = 260
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    close = 1000 * np.cumprod(1 + rng.normal(0.002, 0.015, n))
+    df = pd.DataFrame({
+        "Open": close * 0.999,
+        "High": close * 1.01,
+        "Low": close * 0.99,
+        "Close": close,
+        "Volume": rng.integers(1_000_000, 5_000_000, n).astype(float),
+    }, index=idx)
+
+    r = _rencana_entry(df)
+    if r is None:
+        pytest.skip("data uji tidak menghasilkan skenario pullback")
+    assert r["cicil_di"] < r["harga_pemicu"], "level cicilan di ATAS harga sekarang"
+    assert r["cicil_sl"] < r["cicil_di"], "SL tidak di bawah level entry"
+    assert r["diskon_pct"] < 0
+    # Statistiknya ikut supaya tampilan bisa menjelaskan KENAPA dicicil.
+    assert r["stats"] is PULLBACK_STATS
+
+
+def test_statistik_pullback_konsisten_dengan_kesimpulannya():
+    """Angka-angka ini yang menjadi dasar saran "cicil, jangan tunggu penuh".
+    Kalau suatu saat diperbarui dan hubungannya terbalik, sarannya harus ikut
+    berubah -- jangan sampai kalimatnya bertahan padahal datanya sudah lain."""
+    from core.screening_pro import PULLBACK_STATS as s
+
+    assert s["turun_di_bawah_pemicu_pct"] > 90, "premis 'biasanya turun dulu' tidak lagi berlaku"
+    assert s["hasil_limit_35_pct"] < s["hasil_beli_pasar_pct"], (
+        "menunggu diskon TIDAK lagi kalah dari beli di pasar -- saran 'cicil' "
+        "harus ditinjau ulang, bukan dipertahankan")
+    assert s["puncak_yang_terlewat_pct"] > 0

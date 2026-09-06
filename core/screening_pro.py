@@ -132,6 +132,10 @@ async def run_screenerpro(tickers: list[str],
 
                 result = _score_minervini(df, ticker.replace(".JK", ""), market_close)
                 if result and result["skor"] >= 65:
+                    # Rencana entry dihitung HANYA untuk yang lolos (segelintir
+                    # dari ratusan), jadi biayanya kecil -- dan df-nya sudah di
+                    # tangan, jadi tidak ada unduhan tambahan.
+                    result["rencana_entry"] = _rencana_entry(df)
                     hasil.append(result)
             except Exception:
                 continue
@@ -139,6 +143,61 @@ async def run_screenerpro(tickers: list[str],
 
     results = await asyncio.to_thread(_nilai_semua)
     return sorted(results, key=lambda x: x["skor"], reverse=True)
+
+
+# Statistik perilaku saham yang BARU masuk saringan ini. Diukur atas 848
+# kejadian (215 emiten, riwayat 2 tahun, "baru masuk" = lolos sesudah 10 hari
+# bursa tidak lolos). Angkanya ditaruh sebagai konstanta supaya yang tampil di
+# layar bisa ditelusuri ke pengukurannya, bukan kalimat yang enak dibaca.
+PULLBACK_STATS = {
+    "n": 848,
+    "turun_di_bawah_pemicu_pct": 96.9,   # menyentuh di bawah harga pemicu
+    "turun_3pct": 72.3,                  # menyentuh -3%
+    "turun_5pct": 54.8,
+    "median_turun_pct": -5.50,
+    "hasil_beli_pasar_pct": 2.32,        # rata-rata 20 hari bursa
+    "hasil_limit_35_pct": 0.39,          # dihitung DARI harga diskonnya
+    "terlewat_pct": 31.4,                # peluang yang tak pernah menyentuh -3,5%
+    "puncak_yang_terlewat_pct": 24.20,
+}
+
+
+def _rencana_entry(df: pd.DataFrame) -> dict | None:
+    """Dua level entry untuk saham yang baru lolos saringan.
+
+    Memakai _calc_entry_levels lewat calculate_advanced_plan_from_df --
+    aturan SL yang sama dengan seluruh aplikasi, bukan aturan baru khusus
+    halaman ini. Level "cicilan" diambil dari skenario pullback/deep yang
+    berbasis support sungguhan, BUKAN potongan persen tetap: -3,5% di saham
+    yang ATR hariannya 6% itu bukan diskon, itu gerak harian biasa.
+    """
+    from core.trading_plan import calculate_advanced_plan_from_df
+
+    try:
+        p = calculate_advanced_plan_from_df(df, "SCREENER")
+    except Exception:
+        return None
+    if not p or not p.get("scenarios"):
+        return None
+
+    harga = float(df["Close"].iloc[-1])
+    sk = p["scenarios"]
+    kandidat = [v for k, v in sk.items()
+                if k in ("pullback", "deep") and v and v.get("entry")]
+    # Diurut dari harga, bukan dari namanya: skenario "deep" memakai support S2
+    # yang kadang justru DI ATAS pullback.
+    kandidat.sort(key=lambda v: v["entry"])
+    cicil = kandidat[0] if kandidat else None
+    if cicil is None or cicil["entry"] >= harga:
+        return None
+
+    return {
+        "harga_pemicu": round(harga, 2),
+        "cicil_di": round(float(cicil["entry"]), 2),
+        "cicil_sl": round(float(cicil["sl"]), 2),
+        "diskon_pct": round((cicil["entry"] / harga - 1) * 100, 2),
+        "stats": PULLBACK_STATS,
+    }
 
 
 def _score_minervini(df: pd.DataFrame, name: str,
