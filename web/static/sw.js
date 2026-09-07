@@ -6,7 +6,7 @@
 // Kalau lupa, user tetap melihat UI versi LAMA walau server sudah menyajikan
 // yang baru (persis yang terjadi pada perbaikan "satu saham, dua teori":
 // backend & file di server sudah benar, tapi shell lama masih dari cache).
-const CACHE = 'ranahsaham-v50';
+const CACHE = 'ranahsaham-v51';
 // '/app.js' dan '/app.css' WAJIB ikut di-precache. Sejak keduanya dipisah dari
 // index.html, tanpa ini pembukaan pertama (dan offline) kehilangan SELURUH
 // logika aplikasi (halamannya tampil tapi mati total) atau SELURUH gayanya

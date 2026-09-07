@@ -1139,3 +1139,57 @@ def test_kunci_cache_screener_minervini_berversi():
         "kunci cache belum diberi versi; perubahan bentuk payload berikutnya "
         "akan mengulang bug 'kolom kosong sesudah deploy'")
     assert ":" in app_module.SCREENERPRO_CACHE_KEY
+
+
+def test_target_habis_dan_harga_sudah_ketinggian_menyebut_area_menambah():
+    """Permintaan user: "kalo udah ketinggian kamu blg aja naik sudah tinggi,
+    ada potensi turun dlu tapi masih ada potensi naik lagi, kamu cari entry
+    pullback".
+
+    Ambangnya BUKAN perasaan: diukur pada 848 kali saham baru masuk saringan,
+    yang >12% di atas MA50 hasil 20 hari berikutnya paling buruk (+0,88%),
+    sedangkan 7-12% justru terbaik (+4,83%). Jadi yang diperingatkan "sudah
+    naik terlalu jauh dari rata-ratanya", bukan sekadar "sudah naik"."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=3, tp3_price=1260, jarak_ma50_pct=18.0,
+                masuk_lagi={"deep": {"entry": 1180, "sl": 1120},
+                            "pullback": {"entry": 1205, "sl": 1150}})
+    padat = app_module._anjuran_ringkas(s, lolos_hari_ini={"AAAA"})
+    gabung = " ".join(padat["baris"])
+
+    assert padat["aksi"] == "HOLD", "menyuruh keluar padahal masih berpotensi"
+    assert "MA50" in gabung and "18" in gabung
+    # Area menambah diambil dari yang PALING DALAM, dihitung dari harganya
+    # sendiri -- bukan dari nama skenarionya.
+    assert "1.180" in gabung
+
+    panjang = " ".join(app_module._anjuran_sinyal(s, lolos_hari_ini={"AAAA"}))
+    assert "MENAMBAH di harga ini tidak" in panjang
+
+
+def test_harga_belum_ketinggian_tidak_diperingatkan():
+    """7-12% di atas MA50 justru zona TERBAIK menurut pengukuran. Memperingatkan
+    di situ cuma akan membuat orang menjual pemenang terlalu cepat -- persis
+    kebalikan dari masalah yang sedang diperbaiki."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=3, tp3_price=1260, jarak_ma50_pct=8.0,
+                masuk_lagi={"deep": {"entry": 1180, "sl": 1120}})
+    padat = app_module._anjuran_ringkas(s, lolos_hari_ini={"AAAA"})
+    gabung = " ".join(padat["baris"])
+    assert padat["aksi"] == "HOLD"
+    assert "MA50" not in gabung, "diperingatkan padahal masih di zona terbaiknya"
+    assert "Target habis" in gabung
+
+
+def test_target_tidak_pernah_dikarang_lebih_tinggi():
+    """Saat target habis, yang TIDAK dilakukan: meneruskan angka target ke
+    atas. Angka begitu terlihat pasti padahal tidak punya dasar apa pun --
+    dan orang mengambil keputusan dari angka yang terlihat pasti."""
+    import web.app as app_module
+
+    s = _sinyal(tp_level_hit=3, tp3_price=1260, jarak_ma50_pct=18.0,
+                masuk_lagi={"deep": {"entry": 1180, "sl": 1120}})
+    gabung = " ".join(app_module._anjuran_ringkas(s, lolos_hari_ini={"AAAA"})["baris"])
+    assert "TP4" not in gabung and "TP5" not in gabung

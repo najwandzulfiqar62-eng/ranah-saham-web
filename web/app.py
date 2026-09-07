@@ -4305,6 +4305,17 @@ async def _tempel_puncak_sejak_sinyal(signals: list[dict], boleh_fetch: bool = F
         s["puncak_return_pct"] = round((harga_puncak / entry - 1) * 100, 2)
         s["sejak_sinyal_return_pct"] = round((sesudah[-1][2] / entry - 1) * 100, 2)
         s["hari_sejak_sinyal"] = len(sesudah)
+        # Seberapa JAUH harga sekarang di atas MA50-nya. Ini ukuran "sudah
+        # ketinggian" yang bisa diperiksa, bukan perasaan. Diukur pada 848
+        # kali saham baru masuk saringan: yang >12% di atas MA50 hasil 20 hari
+        # berikutnya paling buruk (+0,88%), sedangkan yang 7-12% justru
+        # terbaik (+4,83%). Jadi yang perlu diwaspadai bukan "sudah naik",
+        # melainkan "sudah naik TERLALU jauh dari rata-ratanya".
+        tutup = [b[2] for b in bar]
+        if len(tutup) >= 50:
+            ma50 = sum(tutup[-50:]) / 50
+            if ma50 > 0:
+                s["jarak_ma50_pct"] = round((tutup[-1] / ma50 - 1) * 100, 2)
     # Field berat (masuk_lagi, emiten_rekap) HANYA ditempel ke sinyal yang
     # mewakili emitennya. Sebelumnya salinan identik menempel di SETIAP
     # sinyal: ERAA punya 10 sinyal, jadi 10 salinan rekap yang sama persis.
@@ -8107,6 +8118,35 @@ def _rp_pendek(x) -> str:
     return _rp(x).replace("Rp", "") if x is not None else "-"
 
 
+# Ambang "sudah ketinggian", dari pengukuran 848 kali saham baru masuk
+# saringan Minervini (215 emiten, 2 tahun): hasil 20 hari berikutnya per
+# kelompok jarak ke MA50 -- <3%: +2,36% | 3-7%: +2,01% | 7-12%: +4,83% |
+# >12%: +0,88%. Jadi yang perlu diwaspadai BUKAN "sudah naik" melainkan
+# "sudah naik terlalu jauh dari rata-ratanya"; di bawah 12% justru zona
+# terbaiknya, dan memperingatkan di situ cuma akan membuat orang menjual
+# pemenang terlalu cepat.
+MA50_KETINGGIAN_PCT = 12.0
+
+
+def _area_masuk_lagi(s: dict) -> list:
+    """Level masuk dari data HARI INI, diurut dari yang paling dalam.
+
+    Urutannya dihitung dari harganya sendiri, bukan dari namanya -- skenario
+    "deep" memakai support S2 yang kadang justru DI ATAS pullback.
+    """
+    ml = s.get("masuk_lagi") or {}
+    return sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
+                  key=lambda a: a["entry"])
+
+
+def _sudah_ketinggian(s: dict) -> float | None:
+    """Jarak ke MA50 kalau memang sudah melewati ambang; None kalau belum."""
+    j = s.get("jarak_ma50_pct")
+    if j is not None and j >= MA50_KETINGGIAN_PCT:
+        return j
+    return None
+
+
 def _anjuran_ringkas(s: dict, lolos_hari_ini: set | None = None,
                      harmonic_peta: dict | None = None) -> dict:
     """Bentuk PADAT untuk web: satu kata aksi + maksimal dua baris pendek.
@@ -8154,8 +8194,18 @@ def _anjuran_ringkas(s: dict, lolos_hari_ini: set | None = None,
             baris.append(f"Stop naik ke {_rp_pendek(stop)}")
             return {"aksi": "HOLD", "nada": "bull", "baris": baris}
         if potensi or lolos_hari_ini is None:
-            baris.append(f"Target habis di TP{tertinggi}, tren masih kuat")
-            baris.append(f"Stop naik ke {_rp_pendek(stop)}")
+            tinggi = _sudah_ketinggian(s)
+            if tinggi:
+                # Dua baris yang paling berguna saat posisi sudah jauh di
+                # atas rata-ratanya: seberapa jauh, dan di mana menambahnya
+                # masih masuk akal. Bukan target karangan yang diteruskan.
+                baris.append(f"Sudah {tinggi:+.0f}% di atas MA50, rawan koreksi")
+                area_t = _area_masuk_lagi(s)
+                baris.append(f"Tambah di {_rp_pendek(area_t[0]['entry'])}"
+                             if area_t else f"Stop naik ke {_rp_pendek(stop)}")
+            else:
+                baris.append(f"Target habis di TP{tertinggi}, tren masih kuat")
+                baris.append(f"Stop naik ke {_rp_pendek(stop)}")
             return {"aksi": "HOLD", "nada": "bull", "baris": baris}
         return {"aksi": "TP PENUH", "nada": "bear",
                 "baris": [f"Jual seluruhnya di {_rp_pendek(harga)}",
@@ -8258,6 +8308,21 @@ def _anjuran_sinyal(s: dict, lolos_hari_ini: set | None = None,
             baris.append(f"🟢 *Sudah punya*: HOLD — angka targetnya memang "
                          f"sudah habis di TP{tertinggi}, tapi {sebab_tahan}. Naikkan stop "
                          f"ke {label_stop} dan biarkan jalan.")
+            # Target baru SENGAJA tidak dikarang. Yang jujur dikatakan di sini:
+            # posisinya sudah berapa jauh di atas rata-ratanya, dan di harga
+            # berapa menambah masih masuk akal. Angka target yang diteruskan
+            # begitu saja ke atas cuma akan terlihat pasti padahal tidak.
+            tinggi = _sudah_ketinggian(s)
+            if tinggi:
+                teks = (f"_Harganya sudah {tinggi:+.0f}% di atas MA50 — zona yang "
+                        f"secara historis paling sering terkoreksi dulu sebelum lanjut. "
+                        f"Menahan boleh, MENAMBAH di harga ini tidak._")
+                area_t = _area_masuk_lagi(s)
+                if area_t:
+                    teks = teks[:-1] + (f" Kalau mau menambah, tunggu "
+                                        f"{_rp(area_t[0]['entry'])} "
+                                        f"(SL {_rp(area_t[0]['sl'])})._")
+                baris.append(teks)
         else:
             baris.append(f"🔴 *Sudah punya*: FULL TP — jual SELURUHNYA di "
                          f"harga sekarang ({_rp(harga)}). TP{tertinggi} adalah target "
