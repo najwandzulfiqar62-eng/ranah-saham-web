@@ -530,23 +530,6 @@ async def api_access_me(request: Request):
             "pending_proof": pending_proof}
 
 
-def _asal_permintaan(request) -> dict:
-    """Alamat IP + user-agent pemintanya.
-
-    X-Forwarded-For diisi nginx dengan pola $proxy_add_x_forwarded_for: nilai
-    yang dikirim klien DITAMBAHI alamat sambungan sungguhan DI BELAKANG. Jadi
-    yang dipakai elemen TERAKHIR, bukan yang pertama -- yang pertama sepenuhnya
-    dikarang klien, dan memakainya berarti memberi penyalahguna kendali penuh
-    atas jejak yang seharusnya menjeratnya.
-    """
-    xff = request.headers.get("x-forwarded-for") or ""
-    ip = xff.split(",")[-1].strip() if xff.strip() else None
-    if not ip:
-        ip = getattr(getattr(request, "client", None), "host", None)
-    ua = (request.headers.get("user-agent") or "")[:300]
-    return {"ip": ip, "ua": ua or None}
-
-
 @app.post("/api/access/register")
 async def api_access_register(request: Request):
     if not admin_is_configured():
@@ -554,6 +537,26 @@ async def api_access_register(request: Request):
             status_code=503,
             detail="Akses belum siap: admin perlu dikonfigurasi dulu di server.",
         )
+    # Batas ketat khusus pendaftaran. Yang dicegah bukan lalu lintas berlebih
+    # (batas umum sudah mengurusnya) melainkan PENGULANGAN: pendaftaran sampah
+    # yang dikirim berkali-kali cuma perlu diblokir sekali di sini, dan itu
+    # jauh lebih sepadan daripada mencoba mencari tahu siapa pengirimnya.
+    ip_daftar = _ip_pengunjung(request)
+    try:
+        kunci_daftar = f"daftar:{ip_daftar}"
+        n = _redis.incr(kunci_daftar)
+        if n == 1:
+            _redis.expire(kunci_daftar, _DAFTAR_WINDOW)
+        if n > _DAFTAR_MAX:
+            raise HTTPException(
+                status_code=429,
+                detail="Terlalu banyak percobaan pendaftaran dari jaringan ini. "
+                       "Coba lagi satu jam lagi.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass   # Redis mati -> jangan sampai pendaftaran ikut mati
+
     proof_filename = None
     if (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
         form = await request.form()
@@ -912,6 +915,44 @@ async def _realtime_price(ticker: str) -> dict | None:
     return result
 
 
+def _ip_pengunjung(request) -> str:
+    """IP pengunjung yang SEBENARNYA, bukan alamat nginx.
+
+    X-Forwarded-For diisi nginx dengan pola $proxy_add_x_forwarded_for: nilai
+    yang dikirim KLIEN ditambahi alamat sambungan sungguhan DI BELAKANG. Jadi
+    yang dipakai elemen TERAKHIR. Memakai yang pertama berarti menyerahkan
+    jejak yang seharusnya menjerat penyalahguna ke tangannya sendiri -- ia
+    tinggal mengirim header karangan.
+
+    Ini penting BUKAN cuma untuk penelusuran: request.client.host di belakang
+    nginx SELALU alamat nginx, jadi rate limit yang memakainya bukan per-IP
+    melainkan SATU EMBER untuk seluruh pengunjung sekaligus. Satu orang yang
+    aktif bisa menghabiskan jatah semua orang.
+    """
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff.strip():
+        ip = xff.split(",")[-1].strip()
+        if ip:
+            return ip
+    return getattr(getattr(request, "client", None), "host", None) or "unknown"
+
+
+def _asal_permintaan(request) -> dict:
+    """IP + user-agent, untuk direkam bersama pendaftaran."""
+    ua = (request.headers.get("user-agent") or "")[:300]
+    return {"ip": _ip_pengunjung(request), "ua": ua or None}
+
+
+# Batas KHUSUS pendaftaran, jauh lebih ketat dari batas umum. Batas umum
+# (1200/menit) memang dilonggarkan untuk pemakaian wajar -- satu kali membuka
+# Beranda saja menembak belasan endpoint -- tapi itu berarti satu orang bisa
+# mengirim ratusan pendaftaran sampah semenit tanpa tersentuh apa pun.
+# Mendaftar itu perbuatan yang dilakukan sekali; lima kali sejam sudah sangat
+# longgar untuk orang yang salah ketik atau bukti fotonya ditolak.
+_DAFTAR_MAX = int(os.getenv("DAFTAR_MAX_PER_JAM", "5"))
+_DAFTAR_WINDOW = 3600
+
+
 # ---------- rate limit per-IP berbasis Redis ----------
 # 120/menit ternyata terlalu ketat: satu kali buka halaman Beranda saja
 # menembak ~11 endpoint sekaligus (tickers, universe, sektor, foreign-flow,
@@ -931,7 +972,7 @@ _RATE_WINDOW = 60     # per 60 detik
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
     if request.url.path.startswith("/api/"):
-        ip = request.client.host if request.client else "unknown"
+        ip = _ip_pengunjung(request)
         key = f"rate_limit:{ip}"
         try:
             # BUG NYATA ditemukan lewat laporan user ("kenapa lagi nih" --

@@ -254,3 +254,49 @@ def test_asal_pendaftaran_tidak_bocor_ke_pengguna_biasa(clean_access_db, client)
     assert "signup_ip" not in biasa and "signup_ua" not in biasa
     admin = _public(row, sertakan_asal=True)
     assert admin["signup_ip"] == "9.9.9.9"
+
+
+def test_rate_limit_memakai_ip_pengunjung_bukan_alamat_nginx():
+    """request.client.host di belakang nginx SELALU alamat nginx. Rate limit
+    yang memakainya bukan per-IP melainkan SATU EMBER untuk seluruh pengunjung
+    -- satu orang yang aktif menghabiskan jatah semua orang, dan penyalahguna
+    tidak pernah terisolasi dari pengguna biasa."""
+    import web.app as app_module
+
+    class _Req:
+        def __init__(self, xff=None, host="127.0.0.1"):
+            self.headers = {"x-forwarded-for": xff} if xff else {}
+            self.client = type("C", (), {"host": host})()
+
+    # nginx MENAMBAHKAN alamat sungguhan di BELAKANG kiriman klien.
+    assert app_module._ip_pengunjung(_Req("1.2.3.4, 203.0.113.9")) == "203.0.113.9"
+    # Tanpa proxy: pakai alamat sambungan langsung.
+    assert app_module._ip_pengunjung(_Req(None, "198.51.100.7")) == "198.51.100.7"
+    # Header kosong tidak boleh membuatnya memilih string kosong.
+    assert app_module._ip_pengunjung(_Req("   ", "198.51.100.7")) == "198.51.100.7"
+
+
+def test_pendaftaran_dibatasi_per_ip(clean_access_db, client, monkeypatch):
+    """Batas umum 1200/menit sengaja longgar (satu kali buka Beranda menembak
+    belasan endpoint), tapi itu berarti satu orang bisa mengirim ratusan
+    pendaftaran sampah semenit tanpa tersentuh. Mendaftar itu perbuatan yang
+    dilakukan sekali."""
+    import web.app as app_module
+
+    monkeypatch.setattr(app_module, "_DAFTAR_MAX", 2)
+    try:
+        app_module._redis.delete("daftar:203.0.113.55")
+    except Exception:
+        pass
+
+    kepala = {"X-Forwarded-For": "203.0.113.55"}
+    kode = []
+    for i in range(4):
+        r = client.post("/api/access/register", data={
+            "name": f"Uji {i}", "email": f"batas{i}@example.com",
+            "phone": f"08190000{i:04d}", "password": "password-pengguna-aman",
+        }, headers=kepala)
+        kode.append(r.status_code)
+
+    assert 429 in kode, f"pendaftaran tidak pernah dibatasi: {kode}"
+    assert kode.index(429) >= 2, f"dibatasi terlalu cepat: {kode}"
