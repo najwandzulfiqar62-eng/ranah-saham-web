@@ -104,3 +104,72 @@ def test_free_text_keyword_still_uses_plain_substring(monkeypatch):
     assert success
     assert len(items) == 1
     assert "IHSG Bursa Saham" in items[0]["title"]
+
+
+def test_berita_pasar_tidak_mengambil_dua_kali_lalu_membuang_satunya(monkeypatch):
+    """Terbukti dari log produksi (7 Sep 2026) inilah penahan utama server:
+    "lambat 20.88s GET /api/ihsgnews" berulang-ulang, dengan event loop
+    tertahan 4-5 detik tiap kali.
+
+    Versi lama memanggil fetch_news() DUA KALI: sekali langsung -- hasilnya
+    dibuang, cuma dipakai memeriksa None -- lalu sekali lagi di dalam
+    _market_news_pool(). Sepuluh sumber RSS dengan timeout 12 detik, dikerjakan
+    dua kali, untuk nol tambahan informasi."""
+    import asyncio
+
+    import web.app as app_module
+
+    panggilan = {"pool": 0, "fetch": 0}
+
+    async def _pool(limit=10):
+        panggilan["pool"] += 1
+        return [{"title": "IHSG menguat", "source": "Uji", "link": "https://c/1"}]
+
+    async def _fetch(keyword=None, limit=8):
+        panggilan["fetch"] += 1
+        return [{"title": "x"}]
+
+    monkeypatch.setattr(app_module, "_market_news_pool", _pool)
+    monkeypatch.setattr(app_module, "fetch_news", _fetch)
+    try:
+        app_module._redis.delete("cache:ihsgnews:v1")
+    except Exception:
+        pass
+
+    hasil = asyncio.run(app_module._berita_pasar())
+    assert hasil["items"] and hasil["items"][0]["title"] == "IHSG menguat"
+    assert panggilan["pool"] == 1
+    # fetch_news hanya diperiksa ULANG saat pool-nya KOSONG -- untuk
+    # membedakan "tidak ada berita pasar" dari "semua sumber mati". Selama
+    # ada isinya, ia tidak boleh dipanggil sama sekali.
+    assert panggilan["fetch"] == 0, (
+        "fetch_news tetap dipanggil walau pool berisi; hasilnya pasti dibuang")
+
+
+def test_permintaan_berita_bersamaan_hanya_satu_pengambilan(monkeypatch):
+    """Sepuluh pengunjung tidak boleh berarti sepuluh kali sepuluh sumber RSS."""
+    import asyncio
+
+    import web.app as app_module
+
+    panggilan = {"n": 0}
+
+    async def _lambat(limit=10):
+        panggilan["n"] += 1
+        await asyncio.sleep(0.05)
+        return [{"title": "IHSG", "source": "Uji", "link": "https://c/1"}]
+
+    monkeypatch.setattr(app_module, "_market_news_pool", _lambat)
+
+    async def _serentak():
+        try:
+            app_module._redis.delete("cache:ihsgnews:v1")
+        except Exception:
+            pass
+        return await asyncio.gather(*[app_module._berita_pasar() for _ in range(8)])
+
+    hasil = asyncio.run(_serentak())
+    assert len(hasil) == 8
+    assert panggilan["n"] == 1, (
+        f"{panggilan['n']} pengambilan untuk 8 permintaan bersamaan; "
+        f"single-flight tidak bekerja")

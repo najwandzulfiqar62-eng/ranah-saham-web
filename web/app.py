@@ -4547,6 +4547,15 @@ async def _warm_shared_caches():
     # KEDUANYA. Kalau harmonic jalan duluan, badge itu tidak pernah terisi
     # pada putaran yang sama -- fiturnya "kadang muncul kadang tidak", yang
     # lebih buruk daripada tidak ada sama sekali karena tidak bisa dipercaya.
+    # Berita: terbukti jadi penahan utama server (lihat catatan di ihsg_news).
+    # Sepuluh sumber RSS dengan timeout 12 detik -- itu pekerjaan pemanas,
+    # bukan pekerjaan pengunjung yang kebetulan membuka halaman.
+    if _cache_get("ihsgnews:v1") is None:
+        try:
+            await _berita_pasar()
+        except Exception as e:
+            print(f"⚠️ cache-warmer berita: {type(e).__name__}: {e}")
+
     if _cache_get(SCREENERPRO_CACHE_KEY) is None:
         try:
             await screenerpro()
@@ -5573,16 +5582,81 @@ async def _market_news_pool(limit: int = 10):
     return [it for it in items if is_market(it)][:limit]
 
 
+# Cache berita pasar. TTL 5 menit: berita tidak berubah lebih cepat dari itu,
+# dan pita berita di halaman memang cuma bacaan sekilas.
+BERITA_TTL = int(os.getenv("BERITA_TTL", "300"))
+
+
 @app.get("/api/ihsgnews")
 async def ihsg_news():
-    """Berita khusus pasar/IHSG (makro & indeks), bukan berita satu emiten."""
-    items = await fetch_news(keyword=None, limit=40)
-    if items is None:
-        raise HTTPException(502, "Sumber berita tidak bisa diakses saat ini.")
-    filtered = await _market_news_pool(10)
-    out = [{"title": it.get("title"), "source": it.get("source"), "link": it.get("link")}
-           for it in filtered]
-    return {"items": out, "filtered": True}
+    """Berita khusus pasar/IHSG (makro & indeks), bukan berita satu emiten.
+
+    TERBUKTI DARI LOG PRODUKSI (7 Sep 2026) inilah penahan utama server:
+
+        lambat 12.04s GET /api/ihsgnews
+        lambat 16.59s GET /api/ihsgnews
+        lambat 20.88s GET /api/ihsgnews
+        event-loop tertahan 4507 ms
+
+    Tiga hal yang salah sekaligus, dan ketiganya diperbaiki di sini:
+
+    1. fetch_news() dipanggil DUA KALI. Hasil panggilan pertama dibuang --
+       cuma dipakai memeriksa None -- lalu _market_news_pool() mengambil
+       ulang seluruhnya. Persis dua kali kerja untuk nol tambahan informasi.
+
+    2. TIDAK ADA CACHE. Sepuluh sumber RSS, timeout 12 detik masing-masing,
+       diambil ulang SETIAP permintaan. Sementara itu tiap tab yang terbuka
+       memanggil endpoint ini tiap 2 menit -- dengan beberapa pengguna,
+       server praktis tidak pernah berhenti mengambil berita.
+
+    3. Permintaan bersamaan sama-sama menembak keluar. Sepuluh pengunjung
+       berarti sepuluh kali sepuluh sumber.
+
+    Sekarang: cache 5 menit + single-flight + dihangatkan di latar, jadi
+    pengunjung nyaris tidak pernah menunggu pengambilan sungguhan.
+    """
+    return await _berita_pasar()
+
+
+async def _berita_pasar():
+    """Jalur baca berita: cache -> single-flight -> serve-stale.
+
+    Pola yang SAMA dengan dataset berat lain di berkas ini (lihat catatan
+    "scaling #1"): yang menanggung biaya pengambilan adalah pemanas di latar,
+    bukan pengunjung yang kebetulan datang saat cache kedaluwarsa.
+
+    Berbeda dari saringan harmonic, pengunjung TIDAK dilarang memicu
+    pengambilan saat cache dingin -- pita berita tidak berguna kalau kosong,
+    dan single-flight sudah memastikan sepuluh pengunjung bersamaan cuma
+    menghasilkan SATU pengambilan, bukan sepuluh.
+    """
+    kunci = "ihsgnews:v1"
+    tersimpan = _cache_get(kunci)
+    if tersimpan is not None:
+        return tersimpan
+
+    async def _ambil():
+        filtered = await _market_news_pool(10)
+        if not filtered:
+            # Bedakan "tidak ada berita pasar yang cocok" dari "semua sumber
+            # mati": _market_news_pool mengembalikan [] untuk keduanya, jadi
+            # sumbernya diperiksa sekali lagi HANYA saat hasilnya kosong --
+            # bukan pada setiap permintaan seperti sebelumnya.
+            if await fetch_news(keyword=None, limit=1) is None:
+                return None
+        payload = _py({"items": [{"title": it.get("title"), "source": it.get("source"),
+                                  "link": it.get("link")} for it in filtered],
+                       "filtered": True})
+        _cache_set_durable(kunci, payload, ttl=BERITA_TTL)
+        return payload
+
+    hasil = await _single_flight(kunci, _ambil)
+    if hasil is not None:
+        return hasil
+    stale = _cache_get_stale(kunci)
+    if stale is not None:
+        return stale
+    raise HTTPException(502, "Sumber berita tidak bisa diakses saat ini.")
 
 
 @app.get("/api/insight/{kode}")
