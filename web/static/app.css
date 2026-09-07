@@ -1655,3 +1655,8 @@ header{background:rgba(6,17,15,.88);border-bottom-color:rgba(199,154,42,.18)}
 :root[data-theme="light"] .footer-col .footer-divider{border-top-color:#D4E0D8}
 :root[data-theme="light"] .decision-card:hover,:root[data-theme="light"] .case-card:hover,:root[data-theme="light"] .berulang-card:hover,:root[data-theme="light"] .port-sum-card:hover,:root[data-theme="light"] .alert-row:hover,:root[data-theme="light"] .home-search-card:hover{box-shadow:0 10px 24px -14px rgba(20,37,30,.25)}
 @media(max-width:640px){:root[data-theme="light"] .rs-research-hero{margin:0 0 14px;padding:20px 18px;border-radius:12px}}
+
+/* Asal pendaftaran di panel admin. Sengaja redup dan monospace: ini data
+   penelusuran, dibaca saat dibutuhkan, bukan bagian dari identitas orangnya. */
+.access-asal{display:block;margin-top:3px;font-family:'JetBrains Mono',monospace;
+  font-size:10px;color:var(--faint);word-break:break-all}

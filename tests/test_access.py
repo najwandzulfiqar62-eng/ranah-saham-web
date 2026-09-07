@@ -202,3 +202,55 @@ def test_login_menjawab_503_saat_password_belum_bisa_diperiksa(client, clean_acc
     # password yang sebenarnya sudah benar.
     assert res.status_code == 503
     assert "sibuk" in res.json()["detail"].lower()
+
+
+def test_asal_pendaftaran_direkam_dan_hanya_terlihat_admin(clean_access_db, client):
+    """Saat pendaftaran kasar/spam masuk, satu-satunya yang tersimpan dulu
+    adalah data yang DIKETIK pendaftar sendiri -- justru yang paling gampang
+    dipalsukan. IP & user-agent satu-satunya jejak yang bukan karangannya.
+
+    Tapi ia data penelusuran, bukan bagian identitas: tidak boleh ikut ke
+    /api/access/me atau ke mana pun yang dilihat pengguna biasa."""
+    from core.access import list_users
+
+    # PNG 1x1 yang SAH -- validator bukti menolak berkas yang cuma berpura-pura
+    # PNG lewat header-nya. Dipakai yang sama dengan tes pendaftaran di atas
+    # supaya yang diuji di sini asal-usulnya, bukan validatornya.
+    proof = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0dIDATx\x9cc\xf8\xcf"
+        b"\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    res = client.post("/api/access/register", data={
+        "name": "Pendaftar Uji", "email": "asal@example.com",
+        "phone": "081900000001", "password": "password-pengguna-aman",
+    }, files={"proof": ("bukti.png", proof, "image/png")},
+        headers={"X-Forwarded-For": "1.2.3.4, 203.0.113.9",
+                 "User-Agent": "UjiCoba/1.0"})
+    assert res.status_code == 200, res.text
+
+    baris = [u for u in list_users("pending") if u["email"] == "asal@example.com"]
+    assert baris, "pendaftar tidak tercatat"
+    u = baris[0]
+    # nginx MENAMBAHKAN alamat sungguhan di BELAKANG nilai kiriman klien, jadi
+    # yang sah elemen terakhir. Memakai yang pertama berarti menyerahkan jejak
+    # itu sepenuhnya ke tangan penyalahguna.
+    assert u["signup_ip"] == "203.0.113.9", (
+        "IP diambil dari elemen pertama X-Forwarded-For, yang dikarang klien")
+    assert u["signup_ua"] == "UjiCoba/1.0"
+
+
+def test_asal_pendaftaran_tidak_bocor_ke_pengguna_biasa(clean_access_db, client):
+    from core.access import _public
+    from core.database import get_db
+
+    with get_db() as conn:
+        conn.execute("""INSERT INTO access_user (name, email, password_hash, status,
+                        is_admin, created_at, signup_ip, signup_ua)
+                        VALUES ('X','x@e.com','h','approved',0,'2026-01-01','9.9.9.9','UA')""")
+        row = conn.execute("SELECT * FROM access_user WHERE email='x@e.com'").fetchone()
+
+    biasa = _public(row)
+    assert "signup_ip" not in biasa and "signup_ua" not in biasa
+    admin = _public(row, sertakan_asal=True)
+    assert admin["signup_ip"] == "9.9.9.9"

@@ -530,6 +530,23 @@ async def api_access_me(request: Request):
             "pending_proof": pending_proof}
 
 
+def _asal_permintaan(request) -> dict:
+    """Alamat IP + user-agent pemintanya.
+
+    X-Forwarded-For diisi nginx dengan pola $proxy_add_x_forwarded_for: nilai
+    yang dikirim klien DITAMBAHI alamat sambungan sungguhan DI BELAKANG. Jadi
+    yang dipakai elemen TERAKHIR, bukan yang pertama -- yang pertama sepenuhnya
+    dikarang klien, dan memakainya berarti memberi penyalahguna kendali penuh
+    atas jejak yang seharusnya menjeratnya.
+    """
+    xff = request.headers.get("x-forwarded-for") or ""
+    ip = xff.split(",")[-1].strip() if xff.strip() else None
+    if not ip:
+        ip = getattr(getattr(request, "client", None), "host", None)
+    ua = (request.headers.get("user-agent") or "")[:300]
+    return {"ip": ip, "ua": ua or None}
+
+
 @app.post("/api/access/register")
 async def api_access_register(request: Request):
     if not admin_is_configured():
@@ -545,7 +562,9 @@ async def api_access_register(request: Request):
     else:
         body = await _access_payload(request)
     try:
-        result = register_user(body.get("name", ""), body.get("email", ""), body.get("password", ""), proof_filename, body.get("phone", ""))
+        result = register_user(body.get("name", ""), body.get("email", ""),
+                               body.get("password", ""), proof_filename,
+                               body.get("phone", ""), _asal_permintaan(request))
     except ValueError as exc:
         _delete_access_proof(proof_filename)
         raise HTTPException(status_code=400, detail=str(exc))

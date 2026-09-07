@@ -103,8 +103,14 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(got, expected_bytes)
 
 
-def _public(row) -> dict:
-    return {
+def _public(row, sertakan_asal: bool = False) -> dict:
+    """Bentuk aman untuk dikirim ke frontend.
+
+    sertakan_asal HANYA dipakai jalur admin. IP & user-agent pendaftaran
+    adalah data penelusuran penyalahgunaan; ia tidak punya urusan di
+    /api/access/me atau di mana pun yang dilihat pengguna biasa.
+    """
+    hasil = {
         "id": int(row["id"]),
         "name": row["name"],
         "email": row["email"],
@@ -119,6 +125,11 @@ def _public(row) -> dict:
         "has_google_login": bool(row["google_sub"]) if "google_sub" in row.keys() else False,
         "history_hidden": bool(row["history_hidden"]) if "history_hidden" in row.keys() else False,
     }
+    if sertakan_asal:
+        kunci = row.keys()
+        hasil["signup_ip"] = row["signup_ip"] if "signup_ip" in kunci else None
+        hasil["signup_ua"] = row["signup_ua"] if "signup_ua" in kunci else None
+    return hasil
 
 
 # =========================
@@ -196,6 +207,22 @@ def ensure_access_tables() -> None:
                 approved_at TEXT
             )
         """)
+        # Asal pendaftaran. TIDAK ADA sebelumnya, jadi saat ada pendaftaran
+        # kasar/spam masuk, satu-satunya yang tersimpan adalah data yang
+        # DIKETIK pendaftar sendiri -- dan itu justru yang paling gampang
+        # dipalsukan. Dua kolom ini membuat penyalahgunaan bisa ditelusuri dan
+        # diblokir, bukan cuma dihapus lalu terulang.
+        #
+        # Yang perlu diketahui saat membacanya: alamat IP menunjuk SAMBUNGAN
+        # pada satu waktu, bukan orang. Operator seluler Indonesia memakai
+        # CGNAT, jadi ratusan pelanggan bisa memakai IP yang sama. Berguna
+        # untuk memblokir pengulangan, tidak cukup untuk menuduh seseorang.
+        kolom_user = {r["name"] for r in conn.execute("PRAGMA table_info(access_user)").fetchall()}
+        if "signup_ip" not in kolom_user:
+            conn.execute("ALTER TABLE access_user ADD COLUMN signup_ip TEXT")
+        if "signup_ua" not in kolom_user:
+            conn.execute("ALTER TABLE access_user ADD COLUMN signup_ua TEXT")
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS access_session (
                 token_hash TEXT PRIMARY KEY,
@@ -261,7 +288,8 @@ def admin_is_configured() -> bool:
     return bool(ACCESS_ADMIN_EMAIL and ACCESS_ADMIN_PASSWORD)
 
 
-def register_user(name: str, email: str, password: str, proof_filename: str | None = None, phone: str | None = None) -> dict:
+def register_user(name: str, email: str, password: str, proof_filename: str | None = None,
+                  phone: str | None = None, asal: dict | None = None) -> dict:
     ensure_access_tables()
     name = " ".join((name or "").strip().split())
     email = (email or "").strip().lower()
@@ -288,9 +316,11 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
                 conn.execute(
                     """UPDATE access_user
                        SET name = ?, password_hash = ?, status = 'pending',
-                           created_at = ?, approved_at = NULL, proof_filename = ?, phone = ?, history_hidden = 0
+                           created_at = ?, approved_at = NULL, proof_filename = ?, phone = ?,
+                           history_hidden = 0, signup_ip = ?, signup_ua = ?
                        WHERE id = ?""",
-                    (name, _hash_password(password), _now(), proof_filename, phone, exists["id"]),
+                    (name, _hash_password(password), _now(), proof_filename, phone,
+                     (asal or {}).get("ip"), (asal or {}).get("ua"), exists["id"]),
                 )
                 return {
                     "message": "Pendaftaran ulang diterima. Bukti baru akan diperiksa admin.",
@@ -298,9 +328,11 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
                 }
             raise ValueError("Email ini sudah terdaftar. Silakan masuk atau tunggu persetujuan admin.")
         conn.execute(
-            """INSERT INTO access_user (name, email, phone, password_hash, status, is_admin, created_at, proof_filename)
-               VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)""",
-            (name, email, phone, _hash_password(password), _now(), proof_filename),
+            """INSERT INTO access_user (name, email, phone, password_hash, status, is_admin,
+                                        created_at, proof_filename, signup_ip, signup_ua)
+               VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)""",
+            (name, email, phone, _hash_password(password), _now(), proof_filename,
+             (asal or {}).get("ip"), (asal or {}).get("ua")),
         )
     return {"message": "Pendaftaran diterima. Tunggu persetujuan admin sebelum masuk."}
 
@@ -465,7 +497,7 @@ def list_users(status: str = "pending") -> list[dict]:
         params = (status,)
     query += " ORDER BY created_at DESC"
     with get_db() as conn:
-        return [_public(row) for row in conn.execute(query, params).fetchall()]
+        return [_public(row, sertakan_asal=True) for row in conn.execute(query, params).fetchall()]
 
 
 def set_user_status(user_id: int, status: str) -> dict | None:
