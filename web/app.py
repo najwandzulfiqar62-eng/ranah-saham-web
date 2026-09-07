@@ -8440,6 +8440,9 @@ def _wa_fmt_minervini(payload) -> str:
         # sebagai CICILAN, bukan "tunggu di sini" -- lihat alasan terukurnya
         # di catatan penutup.
         re_ = it.get("rencana_entry")
+        if re_ and re_.get("potensi_pct") is not None:
+            baris.append(f"   Ruang naik {re_['potensi_pct']:+.1f}% "
+                         f"(ke {_rp(re_['target_jauh'])})")
         if re_:
             baris.append(f"   👉 Beli sebagian di {_rp(re_['harga_pemicu'])}, "
                          f"sisanya di {_rp(re_['cicil_di'])} "

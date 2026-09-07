@@ -204,7 +204,29 @@ def _rencana_entry(df: pd.DataFrame) -> dict | None:
     if cicil is None or cicil["entry"] >= harga:
         return None
 
+    # RUANG NAIK dari harga sekarang ke target terjauh rencana ini. Diambil
+    # dari skenario "normal" -- entry-nya harga sekarang, jadi targetnya
+    # memang diukur dari titik yang sama dengan posisi orang yang membeli
+    # hari ini. Memakai target skenario pullback akan mengukur dari harga
+    # yang belum tentu pernah tersentuh.
+    #
+    # Ini PROYEKSI dari level teknikal (ATR + resistance), BUKAN ramalan.
+    # Dasarnya sama persis dengan TP yang dipakai seluruh aplikasi ini, jadi
+    # angkanya bisa ditelusuri -- bukan angka baru yang muncul khusus di sini
+    # supaya daftarnya terlihat menarik.
+    potensi_pct = tp_jauh = None
+    normal = sk.get("normal") or {}
+    tp = normal.get("tp") or {}
+    for kunci in ("tp3", "tp2", "tp1"):
+        nilai = tp.get(kunci)
+        if nilai and nilai > harga:
+            tp_jauh = float(nilai)
+            potensi_pct = round((tp_jauh / harga - 1) * 100, 2)
+            break
+
     return {
+        "potensi_pct": potensi_pct,
+        "target_jauh": round(tp_jauh, 2) if tp_jauh else None,
         "harga_pemicu": round(harga, 2),
         "cicil_di": round(float(cicil["entry"]), 2),
         "cicil_sl": round(float(cicil["sl"]), 2),

@@ -1567,12 +1567,23 @@ function _catatanEntryMinervini(items){
     +`sisanya di level support di bawah.`,'Entry: kenapa dicicil');
 }
 
+// Ambang "potensi naik" yang sedang dipilih di tab Minervini. 0 = semua.
+// Disimpan di luar fungsi supaya pilihannya bertahan saat daftar dimuat ulang.
+let mvMinPotensi = 0;
+
 async function loadScreenerPro(){
   const body=$('#uniBody');
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai ±178 saham likuid (Minervini)… 20–40 detik</p>';
   let d; try{d=await api('/api/screenerpro')}catch(e){body.innerHTML=errBox(e.message);return}
-  const items=d.items||[];
-  if(!items.length){body.innerHTML=`<section class="panel">${emptyState('Belum ada saham yang lolos ambang skor Minervini (≥65) saat ini. Pasar mungkin sedang lemah.')}</section>`;return}
+  const semua=d.items||[];
+  // Disaring di SINI, bukan di backend: hasil saringan Minervini dipakai
+  // bersama fitur lain (sumber sinyal Minervini x Harmonic membaca cache
+  // yang sama), jadi memotongnya di server akan diam-diam mengubah teori
+  // lain yang tidak ada urusannya dengan pilihan tampilan ini.
+  const items=mvMinPotensi
+    ? semua.filter(r=>r.rencana_entry&&r.rencana_entry.potensi_pct>=mvMinPotensi)
+    : semua;
+  if(!semua.length){body.innerHTML=`<section class="panel">${emptyState('Belum ada saham yang lolos ambang skor Minervini (≥65) saat ini. Pasar mungkin sedang lemah.')}</section>`;return}
   const tr=items.map(r=>{const bar='█'.repeat(r.criteria_met)+'░'.repeat(8-r.criteria_met);
     return `<tr data-k="${r.ticker}" style="cursor:pointer">
     <td class="tk">${tickerTag(r.ticker)}</td>
@@ -1582,6 +1593,10 @@ async function loadScreenerPro(){
     <td class="hide-xs">${fmt(r.rs_score,0)}</td>
     <td class="hide-xs">${fmt(r.rsi,1)}</td>
     <td class="${r.pct_from_52w_high>=-10?'up':'down'}">${fmt(r.pct_from_52w_high,1)}%</td>
+    <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:${r.rencana_entry&&r.rencana_entry.potensi_pct>=10?'var(--bull)':'var(--muted)'}">${
+      r.rencana_entry&&r.rencana_entry.potensi_pct!=null
+        ? `+${fmt(r.rencana_entry.potensi_pct,1)}%<div class="muted" style="font-size:9.5px">ke ${fmt(r.rencana_entry.target_jauh)}</div>`
+        : '<span class="muted">-</span>'}</td>
     <td style="font-size:11px;line-height:1.45">${r.rencana_entry
       ? `<b>Rp${fmt(r.rencana_entry.harga_pemicu)}</b> <span class="muted">sebagian</span><br>
          <b style="color:var(--gold)">Rp${fmt(r.rencana_entry.cicil_di)}</b>
@@ -1590,9 +1605,18 @@ async function loadScreenerPro(){
       : '<span class="muted">\u2014</span>'}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
     <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Memindai ±178 saham likuid, hanya skor ≥65. Tap baris untuk analisis.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <span class="muted" style="font-size:12px;margin-right:2px">Potensi naik:</span>
+      ${[0,10,15,20].map(v=>`<button class="chip ${mvMinPotensi===v?'active':''}" data-mvpot="${v}">${v?'≥'+v+'%':'Semua'}</button>`).join('')}
+      <span class="muted" style="font-size:11px">${items.length} dari ${semua.length} saham</span>
+    </div>
+    ${items.length?'':emptyState('Tidak ada saham yang potensinya mencapai ambang itu hari ini. Turunkan ambangnya — hari tanpa hasil itu wajar, bukan tanda datanya rusak.')}
     ${_catatanEntryMinervini(items)}
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th class="hide-xs">RSI</th><th class="hide-xs">vs 52W High</th><th>Entry</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
+    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th class="hide-xs">RSI</th><th class="hide-xs">vs 52W High</th><th>Potensi</th><th>Entry</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+  body.querySelectorAll('[data-mvpot]').forEach(b=>b.addEventListener('click',()=>{
+    mvMinPotensi=Number(b.dataset.mvpot)||0; loadScreenerPro();
+  }));
   staggerRows(body.querySelector('.ctable'), 12);
 }
 
@@ -6080,7 +6104,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v51';
+const APP_VERSION='v52';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

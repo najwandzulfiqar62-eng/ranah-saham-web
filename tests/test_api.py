@@ -5917,3 +5917,37 @@ def test_simulasi_tidak_menyentuh_win_rate_tercatat():
     # padahal ia pembanding.
     assert isinstance(hasil["win_rate"], (int, float))
     assert set(("win_rate", "win_rate_tercatat")) <= set(hasil)
+
+
+def test_potensi_naik_diukur_dari_harga_sekarang_bukan_dari_entry_pullback():
+    """Permintaan user: cari saham Minervini yang ruang naiknya >10%.
+
+    Angkanya WAJIB diukur dari harga SEKARANG memakai skenario "normal" --
+    entry skenario itu memang harga sekarang, jadi targetnya diukur dari titik
+    yang sama dengan posisi orang yang membeli hari ini. Memakai target
+    skenario pullback akan mengukur dari harga yang belum tentu pernah
+    tersentuh, dan angkanya jadi lebih besar tanpa alasan."""
+    import numpy as np
+    import pandas as pd
+
+    from core.screening_pro import _rencana_entry
+
+    rng = np.random.default_rng(11)
+    n = 260
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    close = 1000 * np.cumprod(1 + rng.normal(0.002, 0.015, n))
+    df = pd.DataFrame({"Open": close * .999, "High": close * 1.01, "Low": close * .99,
+                       "Close": close,
+                       "Volume": rng.integers(1_000_000, 5_000_000, n).astype(float)},
+                      index=idx)
+
+    r = _rencana_entry(df)
+    if r is None or r.get("potensi_pct") is None:
+        pytest.skip("data uji tidak menghasilkan skenario lengkap")
+
+    harga = float(df["Close"].iloc[-1])
+    assert r["target_jauh"] > harga, "target di BAWAH harga sekarang"
+    # Angkanya harus konsisten dengan targetnya sendiri -- bukan angka lain
+    # yang kebetulan enak dibaca.
+    assert r["potensi_pct"] == pytest.approx((r["target_jauh"] / harga - 1) * 100, abs=0.05)
+    assert r["potensi_pct"] > 0
