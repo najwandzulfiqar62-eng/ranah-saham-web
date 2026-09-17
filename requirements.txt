@@ -1,21 +1,40 @@
+# VERSI DIKUNCI (==), BUKAN ">=". Alasannya kejadian nyata 18 September 2026:
+# menjalankan `pip install -r requirements.txt` -- perintah yang tampak rutin,
+# niatnya cuma memasang SATU paket yang hilang -- justru memutakhirkan SELURUH
+# dependensi sekaligus: pandas 2 -> 3.0, numpy -> 2.4, redis -> 8.1,
+# curl_cffi 0.7 -> 0.16.3. Dua kerusakan menyusul seketika:
+#
+#   1. redis 8.1 butuh async_timeout di Python 3.11 ini, dan pip tidak ikut
+#      memasangnya -> `import redis` gagal -> aplikasi mati saat restart.
+#   2. curl_cffi 0.16 menggeser arti alias impersonate="chrome" ke sidik jari
+#      Chrome yang jauh lebih baru -> tidak lagi sepadan dengan cf_clearance
+#      yang dipanen Chrome di server -> fitur Pemegang Saham kena 403.
+#
+# Keduanya lahir dari satu sifat: ">=" membuat hasil pemasangan bergantung
+# pada HARI ia dijalankan, bukan pada isi berkas ini. Versi terkunci membuat
+# server bisa dibangun ulang dan menghasilkan lingkungan yang sama persis.
+# Menaikkan versi sekarang jadi keputusan sadar, bukan efek samping.
+#
+# Angka di bawah = yang terpasang & terbukti jalan di produksi per 18 Sep 2026.
+
 # Web framework
-fastapi>=0.110
-uvicorn[standard]>=0.29
-python-multipart>=0.0.9
-python-dotenv>=1.0
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+python-dotenv==1.2.3
 
 # Data & analisis
-yfinance>=0.2.40
-pandas>=2.0
-numpy>=1.24
-matplotlib>=3.7
+yfinance==1.7.0
+pandas==3.0.5
+numpy==2.4.6
+matplotlib==3.11.2
 
 # Laporan PDF
-reportlab>=4.0
+reportlab==5.0.1
 
 # HTTP client (pengambil berita)
-httpx>=0.27
-defusedxml>=0.7.1
+httpx==0.28.1
+defusedxml==0.7.1
 
 # Scraping pengumuman IDX (X-15/kepemilikan saham) -- menembus Cloudflare
 # managed-challenge di idx.co.id yang MEMBLOKIR IP datacenter/VPS. Dari IP
@@ -23,16 +42,26 @@ defusedxml>=0.7.1
 # cf_clearance via Chrome headed/Xvfb) + curl_cffi (pakai ulang cookie dgn
 # meniru JA3 Chrome). Lihat core/idx_cf.py & scripts/idx_solve.py.
 # nodriver butuh Google Chrome stable + Xvfb terpasang di server.
-cloudscraper>=1.2.71
-curl_cffi>=0.7.0
-nodriver>=0.50
+#
+# curl_cffi DIKUNCI KETAT. Versinya menentukan sidik jari TLS mana yang
+# ditiru; menaikkannya tanpa memeriksa ulang bisa memutus kecocokan dengan
+# cf_clearance dan menjatuhkan seluruh fitur kepemilikan saham dengan 403
+# yang menyesatkan (semuanya tampak benar: solver jalan, cookie ada).
+cloudscraper==1.2.71
+curl_cffi==0.16.3
+nodriver==0.50.3
 
 # Pemrosesan gambar (watermark chart)
-pillow>=10.0
+pillow==12.3.0
 
 # Membaca Excel daftar emiten (data/saham.xlsx)
-openpyxl>=3.1
-redis>=5.0.0
+openpyxl==3.1.5
+redis==8.1.0
+# WAJIB eksplisit: redis>=5 memerlukannya di Python < 3.11.3 (server memakai
+# 3.11.x), tapi penanda versinya membuat pip MELEWATKANNYA pada pemasangan
+# tertentu. Tanpa baris ini, `import redis` gagal dan seluruh aplikasi mati
+# saat restart -- tepat seperti yang terjadi 18 Sep 2026.
+async-timeout==5.0.1
 
 # Web Push (notifikasi HP walau app tertutup) — VAPID + enkripsi payload
-pywebpush>=2.0.0
+pywebpush==2.5.0

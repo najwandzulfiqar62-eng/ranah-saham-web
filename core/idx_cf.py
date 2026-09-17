@@ -80,6 +80,93 @@ async def get_session(force: bool = False) -> tuple[dict, str]:
         return cookies, ua
 
 
+_impersonate_cache = None
+
+
+def _chrome_major() -> int | None:
+    """Versi mayor Chrome yang terpasang di server, dari `--version`."""
+    import re
+    import shutil
+    import subprocess
+
+    for nama in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        jalur = shutil.which(nama)
+        if not jalur:
+            continue
+        try:
+            keluar = subprocess.run([jalur, "--version"], capture_output=True,
+                                    text=True, timeout=10).stdout
+        except Exception:
+            continue
+        m = re.search(r"(\d+)\.\d+\.\d+", keluar or "")
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _target_impersonate() -> str:
+    """Target JA3 curl_cffi yang COCOK dengan Chrome di server ini.
+
+    KENAPA BUKAN "chrome" SAJA: alias itu MENGAMBANG -- ia menunjuk Chrome
+    terbaru yang didukung versi curl_cffi yang sedang terpasang. Saat
+    curl_cffi dimutakhirkan (18 Sep 2026: 0.7 -> 0.16.3), alias itu melompat
+    ke sidik jari yang jauh lebih baru daripada Chrome yang BENAR-BENAR
+    memecahkan challenge di server.
+
+    Dan cf_clearance TERIKAT pada sidik jari itu. Begitu keduanya tidak lagi
+    sepadan, idx.co.id membalas 403 walau cookienya sah dan baru saja didapat
+    -- kegagalan yang menyesatkan, karena semua yang kelihatan (solver jalan,
+    cookie ada) justru tampak benar.
+
+    Jadi targetnya diturunkan dari versi Chrome yang terpasang: dipilih
+    `chromeNNN` tertinggi yang TIDAK melebihi Chrome asli. Kalau Chrome
+    diperbarui suatu hari, fungsi ini ikut menyesuaikan sendiri.
+    IDX_IMPERSONATE bisa dipakai memaksa nilai tertentu saat menelusuri.
+    """
+    global _impersonate_cache
+    if _impersonate_cache:
+        return _impersonate_cache
+
+    paksa = os.getenv("IDX_IMPERSONATE")
+    if paksa:
+        _impersonate_cache = paksa
+        return paksa
+
+    tersedia = set()
+    try:
+        import typing
+
+        from curl_cffi.requests.impersonate import BrowserTypeLiteral
+        tersedia = set(typing.get_args(BrowserTypeLiteral))
+    except Exception:
+        try:
+            from curl_cffi.requests import BrowserType
+            tersedia = {b.value for b in BrowserType}
+        except Exception:
+            tersedia = set()
+
+    major = _chrome_major()
+    if major and tersedia:
+        import re
+        kandidat = []
+        for t in tersedia:
+            m = re.fullmatch(r"chrome(\d+)[a-z]?", t)   # buang varian _android
+            if m:
+                kandidat.append((int(m.group(1)), t))
+        # Yang TIDAK melebihi Chrome asli. Meniru versi yang lebih BARU dari
+        # browser yang memecahkan challenge itu persis kesalahan yang sedang
+        # diperbaiki di sini.
+        cocok = sorted((v, t) for v, t in kandidat if v <= major)
+        if cocok:
+            _impersonate_cache = cocok[-1][1]
+            print(f"\u2139\ufe0f idx_cf: Chrome {major} -> impersonate={_impersonate_cache}",
+                  flush=True)
+            return _impersonate_cache
+
+    _impersonate_cache = "chrome"
+    return _impersonate_cache
+
+
 async def _idx_get(url: str, *, timeout: int, accept: str):
     """GET url idx.co.id via curl_cffi (JA3 Chrome) + cookie cf_clearance.
     Sekali kena 403 -> paksa refresh cookie & ulang. Return curl_cffi Response."""
@@ -90,7 +177,8 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
 
     def _do(_cookies, _ua):
         return _cffi.get(url, headers={"User-Agent": _ua, "Accept": accept},
-                         cookies=_cookies, impersonate="chrome", timeout=timeout)
+                         cookies=_cookies, impersonate=_target_impersonate(),
+                         timeout=timeout)
 
     resp = await loop.run_in_executor(None, _do, cookies, ua)
     if resp.status_code == 403:
