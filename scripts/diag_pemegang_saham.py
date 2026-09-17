@@ -38,9 +38,19 @@ async def utama():
     print(f"   DISPLAY = {os.environ.get('DISPLAY') or '(kosong)'}")
 
     tahap(2, "Solver Cloudflare (ambil cf_clearance)")
+    # TIDAK memaksa solve baru secara bawaan. Versi pertama skrip ini memakai
+    # force=True, dan itu keliru: tiap kali dijalankan ia melewati cache 15
+    # menit lalu menembak challenge Cloudflare lagi. Menjalankannya beberapa
+    # kali berturut-turut saat menelusuri masalah membuat idx.co.id menaikkan
+    # penjagaannya ("Just a moment..." yang tak kunjung selesai) -- alat
+    # diagnosis yang MEMPERBURUK hal yang sedang didiagnosisnya.
+    # Pakai `--paksa` hanya kalau solvernya sendiri yang ingin diuji.
+    paksa = "--paksa" in sys.argv
+    print("   mode:", "PAKSA solve baru" if paksa
+          else "pakai sesi tersimpan bila masih hangat")
     try:
         from core.idx_cf import get_session
-        cookies, ua = await get_session(force=True)
+        cookies, ua = await get_session(force=paksa)
         punya_cf = "cf_clearance" in (cookies or {})
         print(f"   cookie didapat : {len(cookies or {})} buah")
         print(f"   cf_clearance   : {'ADA' if punya_cf else 'TIDAK ADA'}")
@@ -52,6 +62,12 @@ async def utama():
         print(f"   GAGAL: {type(e).__name__}: {e}")
         traceback.print_exc(limit=3)
         print("\n   >> BERHENTI di tahap 2. Ini mata rantai yang putus.")
+        if "tidak selesai" in str(e):
+            print("\n   Judul yang menggantung di 'Just a moment...' berarti")
+            print("   Cloudflare MENAHAN, bukan lambat. Penyebab tersering:")
+            print("   challenge ditembak berulang kali dari IP yang sama dalam")
+            print("   waktu singkat. Diamkan 15-30 menit, lalu coba lagi TANPA")
+            print("   --paksa. Mencoba terus justru memperpanjang penahanannya.")
         return
 
     tahap(3, "Ambil data X-15 hari ini dari idx.co.id")
