@@ -175,3 +175,63 @@ def test_client_hints_berbentuk_aneh_tidak_menjatuhkan_pengambilan(idx, monkeypa
     assert h["User-Agent"] == UA_LINUX
     # Platform tetap wajib sepakat dengan UA walau client hints tak terpakai.
     assert h["sec-ch-ua-platform"] == '"Linux"'
+
+
+# =========================
+# JALUR CADANGAN: AMBIL DI DALAM BROWSER
+# =========================
+# Memutar ulang cf_clearance lewat klien HTTP terbukti tidak lagi bisa
+# diandalkan (18 Sep 2026): sidik jari chrome150 + header konsisten + cookie
+# segar tetap dibalas `cf-mitigated: challenge`, sementara Chrome yang
+# memanen cookie itu membuka URL yang sama dan mendapat JSON.
+
+def test_balasan_browser_menyerupai_response_curl_cffi(idx):
+    """Pemanggil TIDAK BOLEH peduli jalur mana yang dipakai. Kalau bentuknya
+    berbeda, tiap pemanggil harus menangani dua kasus -- dan yang terlupa
+    akan gagal justru saat jalur cadangan sedang dibutuhkan."""
+    b = idx._BalasanBrowser(200, '{"Replies": [1, 2]}')
+    assert b.status_code == 200
+    assert b.json()["Replies"] == [1, 2]
+    assert b.content == b'{"Replies": [1, 2]}'
+    assert isinstance(b.headers, dict)
+
+
+def test_curl_cffi_dicoba_dulu_browser_hanya_saat_ditolak(idx, monkeypatch):
+    """Jalur browser jauh lebih mahal (navigasi sungguhan). Ia cadangan, bukan
+    pengganti -- dan kalau Cloudflare melonggar, jalur murah dipakai lagi
+    dengan sendirinya tanpa ada yang perlu menyunting apa pun."""
+    import asyncio
+
+    dipakai = []
+
+    class _Resp:
+        def __init__(self, kode):
+            self.status_code = kode
+            self.text = "{}"
+            self.headers = {}
+
+    async def _sesi(force=False):
+        return {"cf_clearance": "x"}, UA_LINUX
+
+    async def _agent(url):
+        dipakai.append("browser")
+        return idx._BalasanBrowser(200, '{"ok": true}')
+
+    monkeypatch.setattr(idx, "get_session", _sesi)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setattr(idx, "_target_impersonate", lambda: "chrome150")
+
+    # (a) curl_cffi langsung 200 -> browser TIDAK disentuh
+    palsu = type("M", (), {"get": staticmethod(lambda *a, **k: _Resp(200))})
+    monkeypatch.setitem(__import__("sys").modules, "curl_cffi",
+                        type("P", (), {"requests": palsu}))
+    r = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+    assert r.status_code == 200 and dipakai == []
+
+    # (b) 403 terus-menerus -> baru jatuh ke browser
+    palsu2 = type("M", (), {"get": staticmethod(lambda *a, **k: _Resp(403))})
+    monkeypatch.setitem(__import__("sys").modules, "curl_cffi",
+                        type("P", (), {"requests": palsu2}))
+    r = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+    assert dipakai == ["browser"], "tidak jatuh ke jalur cadangan saat ditolak"
+    assert r.json()["ok"] is True

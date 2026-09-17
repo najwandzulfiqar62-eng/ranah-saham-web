@@ -246,7 +246,117 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
     if resp.status_code == 403:
         cookies, ua = await get_session(force=True)
         resp = await loop.run_in_executor(None, _do, cookies, ua)
+    if resp.status_code == 403:
+        # Cookie segar pun ditolak. Terbukti 18 Sep 2026: Cloudflare mengikat
+        # cf_clearance lebih dalam daripada yang bisa ditiru klien HTTP --
+        # sidik jari chrome150 dan header yang sudah konsisten tetap dibalas
+        # `cf-mitigated: challenge`, sementara Chrome yang memanen cookie itu
+        # membuka URL yang sama dan mendapat JSON.
+        #
+        # Jalur curl_cffi tetap DICOBA LEBIH DULU karena jauh lebih murah, dan
+        # kalau suatu saat Cloudflare melonggar ia akan dipakai lagi dengan
+        # sendirinya -- tanpa ada yang perlu menyunting apa pun.
+        return await _agent_get(url)
     return resp
+
+
+_AGENT_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "scripts", "idx_agent.py")
+_AGENT_START_TIMEOUT = int(os.getenv("IDX_AGENT_START_TIMEOUT", "90"))
+_AGENT_REQ_TIMEOUT = int(os.getenv("IDX_AGENT_REQ_TIMEOUT", "40"))
+_agent = {"proc": None}
+_agent_lock = asyncio.Lock()
+
+
+class _BalasanBrowser:
+    """Menyerupai Response curl_cffi seperlunya, supaya pemanggil tidak peduli
+    jalur mana yang dipakai."""
+
+    def __init__(self, status: int, teks: str):
+        self.status_code = status
+        self.text = teks
+        self.headers = {}
+
+    @property
+    def content(self) -> bytes:
+        return (self.text or "").encode("utf-8", "replace")
+
+    def json(self):
+        return json.loads(self.text)
+
+
+async def _agent_mati():
+    p = _agent.get("proc")
+    if p is not None:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    _agent["proc"] = None
+
+
+async def _agent_hidup():
+    """Nyalakan pelayan browser bila belum ada, tunggu sampai ia berkata READY."""
+    p = _agent.get("proc")
+    if p is not None and p.returncode is None:
+        return p
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, _AGENT_SCRIPT,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        baris = await asyncio.wait_for(proc.stdout.readline(),
+                                       timeout=_AGENT_START_TIMEOUT)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise IdxCfError(f"pelayan browser idx tidak siap dalam {_AGENT_START_TIMEOUT}s")
+
+    pesan = baris.decode("utf-8", "replace").strip()
+    if pesan != "READY":
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise IdxCfError(f"pelayan browser idx gagal start: {pesan[:200]}")
+
+    _agent["proc"] = proc
+    print("\u2139\ufe0f idx_cf: pelayan browser siap", flush=True)
+    return proc
+
+
+async def _agent_get(url: str) -> _BalasanBrowser:
+    """Ambil URL DI DALAM browser yang memecahkan challenge.
+
+    Dipakai saat curl_cffi ditolak. Lebih lambat (navigasi sungguhan), tapi
+    inilah satu-satunya jalur yang terbukti diterima Cloudflare -- lihat
+    catatan di scripts/idx_agent.py.
+    """
+    async with _agent_lock:
+        proc = await _agent_hidup()
+        try:
+            proc.stdin.write((url + "\n").encode())
+            await proc.stdin.drain()
+            baris = await asyncio.wait_for(proc.stdout.readline(),
+                                           timeout=_AGENT_REQ_TIMEOUT)
+        except Exception as e:
+            await _agent_mati()
+            raise IdxCfError(f"pelayan browser idx putus: {type(e).__name__}: {e}")
+
+    if not baris:
+        await _agent_mati()
+        raise IdxCfError("pelayan browser idx berhenti tanpa menjawab")
+    try:
+        data = json.loads(baris.decode("utf-8", "replace"))
+    except Exception:
+        raise IdxCfError("jawaban pelayan browser idx tidak terbaca")
+    if data.get("error"):
+        raise IdxCfError(f"pelayan browser idx: {data['error'][:200]}")
+    return _BalasanBrowser(int(data.get("status") or 0), data.get("text") or "")
 
 
 async def idx_get_json(url: str, *, timeout: int = 20):
