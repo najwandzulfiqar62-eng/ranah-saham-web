@@ -9,11 +9,17 @@ yang bisa ditiru klien HTTP.
 
 Jalan yang PASTI bekerja: ambil datanya di dalam browser itu sendiri.
 
-Yang membuat ini layak dipakai (bukan cuma bisa): SATU browser melayani
-BANYAK URL. Menyalakan Chrome per permintaan akan memakan ~10 detik setiap
-kali, dan riwayat 90 hari berarti 90 kali -- tidak masuk akal. Di sini Chrome
-dinyalakan sekali, challenge diselesaikan sekali, lalu URL dibaca dari stdin
-satu per baris dan jawabannya ditulis ke stdout satu per baris.
+DUA HAL YANG MEMBUATNYA LAYAK DIPAKAI, bukan cuma bisa:
+
+1. SATU browser melayani BANYAK URL. Menyalakan Chrome per permintaan memakan
+   ~10 detik setiap kali; riwayat 90 hari berarti 90 kali.
+
+2. Tiap URL diambil dengan fetch() DI DALAM halaman, bukan dengan berpindah
+   halaman. Versi pertama memakai navigasi dan itu ~2 detik per URL -- untuk
+   90 hari jadi bermenit-menit, cukup lambat untuk membuat fiturnya tidak
+   terpakai. fetch() memakai koneksi, cookie, dan sesi TLS yang sama persis
+   dengan halaman yang sudah lolos challenge, jadi Cloudflare menerimanya,
+   tapi biayanya tinggal ~0,2 detik.
 
 Protokol (baris demi baris, JSON):
     <- READY                       (siap menerima)
@@ -30,15 +36,16 @@ import sys
 MAIN = "https://www.idx.co.id/id"
 CHALLENGE = ("just a moment", "tunggu sebentar", "attention required",
              "checking your browser")
-MAX_WAIT_S = 45
-WAIT_API_S = 20
+CHALLENGE_TIMEOUT_S = 45
+FETCH_TIMEOUT_S = 30
+POLL_S = 0.1
 
 
-async def _tunggu_bersih(page, batas: int) -> str:
-    """Tunggu sampai judul halaman bukan lagi halaman challenge."""
+async def _lolos_challenge(page) -> str:
+    """Tunggu halaman utama lolos challenge. Kembalikan judul terakhir."""
     judul = ""
-    for _ in range(batas):
-        await asyncio.sleep(1)
+    langkah = int(CHALLENGE_TIMEOUT_S / 0.5)
+    for _ in range(langkah):
         try:
             judul = (await page.evaluate("document.title")) or ""
         except Exception:
@@ -46,16 +53,42 @@ async def _tunggu_bersih(page, batas: int) -> str:
         t = judul.lower()
         if t.strip() and not any(c in t for c in CHALLENGE):
             return judul
-        # Halaman JSON tidak punya judul sama sekali -- itu justru tanda
-        # berhasil, jadi periksa isinya juga alih-alih menunggu sia-sia.
-        try:
-            isi = (await page.evaluate(
-                "document.body ? document.body.innerText.slice(0,1) : ''")) or ""
-        except Exception:
-            isi = ""
-        if isi in ("{", "["):
-            return judul
+        await asyncio.sleep(0.5)
     return judul
+
+
+async def _ambil(page, url: str) -> dict:
+    """fetch() di dalam halaman, hasilnya dijemput dengan polling.
+
+    Sengaja TIDAK memakai await_promise: bentuk dukungannya berbeda-beda antar
+    versi nodriver, dan kegagalan di situ akan terbaca seperti masalah
+    Cloudflare padahal bukan. Pola "titipkan ke window lalu jemput" cuma
+    memakai evaluate sinkron biasa, yang perilakunya sama di semua versi.
+    """
+    kunci = "__idx_hasil"
+    pasang = (
+        f"(() => {{ window.{kunci} = null;"
+        f" fetch({json.dumps(url)}, {{credentials: 'include'}})"
+        f"  .then(r => r.text().then(t => {{ window.{kunci} ="
+        f"      JSON.stringify({{status: r.status, text: t}}); }}))"
+        f"  .catch(e => {{ window.{kunci} ="
+        f"      JSON.stringify({{status: 0, error: String(e)}}); }});"
+        f" return 1; }})()"
+    )
+    await page.evaluate(pasang)
+
+    for _ in range(int(FETCH_TIMEOUT_S / POLL_S)):
+        await asyncio.sleep(POLL_S)
+        try:
+            hasil = await page.evaluate(f"window.{kunci}")
+        except Exception:
+            hasil = None
+        if isinstance(hasil, str) and hasil.strip():
+            try:
+                return json.loads(hasil)
+            except Exception:
+                return {"status": 0, "error": "jawaban fetch tidak terbaca"}
+    return {"status": 0, "error": f"fetch tidak selesai dalam {FETCH_TIMEOUT_S}s"}
 
 
 async def main() -> int:
@@ -68,7 +101,7 @@ async def main() -> int:
     )
     try:
         page = await browser.get(MAIN)
-        judul = await _tunggu_bersih(page, MAX_WAIT_S)
+        judul = await _lolos_challenge(page)
         if any(c in judul.lower() for c in CHALLENGE):
             print(json.dumps({"fatal": f"challenge tidak selesai (judul: {judul!r})"}),
                   flush=True)
@@ -85,18 +118,10 @@ async def main() -> int:
             if not url:
                 continue
             try:
-                p = await browser.get(url)
-                await _tunggu_bersih(p, WAIT_API_S)
-                teks = (await p.evaluate(
-                    "document.body ? document.body.innerText : ''")) or ""
-                judul_p = (await p.evaluate("document.title")) or ""
-                # Halaman challenge -> laporkan 403 supaya pemanggil bisa
-                # membedakannya dari balasan kosong yang sah.
-                status = 403 if any(c in judul_p.lower() for c in CHALLENGE) else 200
-                print(json.dumps({"status": status, "text": teks}), flush=True)
+                jawaban = await _ambil(page, url)
             except Exception as e:
-                print(json.dumps({"status": 0,
-                                  "error": f"{type(e).__name__}: {e}"}), flush=True)
+                jawaban = {"status": 0, "error": f"{type(e).__name__}: {e}"}
+            print(json.dumps(jawaban), flush=True)
     finally:
         try:
             browser.stop()

@@ -121,6 +121,11 @@ async def utama():
         return
 
     tahap(4, "Rakit pemegang saham untuk satu emiten (BBCA)")
+    # Tahap ini menyapu 90 hari. Dengan cache dingin itu 90 permintaan;
+    # sesudah hangat, hampir seluruhnya dilayani cache per-hari
+    # (x15raw:{d}) dan jauh lebih cepat. Disebutkan supaya lamanya
+    # tidak terbaca sebagai macet.
+    print("   (menyapu 90 hari -- cache dingin bisa ~30 detik, sabar)")
     try:
         import web.app as app
         items = await app._fetch_x15_history_for_kode("BBCA", days=90)
