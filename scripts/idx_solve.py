@@ -62,12 +62,31 @@ async def main() -> int:
 
         cookies_raw = await browser.cookies.get_all()
         ua = await page.evaluate("navigator.userAgent")
+        # CLIENT HINTS ASLI dari Chrome ini. Wajib ikut dibawa: cf_clearance
+        # dinilai bersama identitas peminta, dan curl_cffi punya sec-ch-ua
+        # bawaannya sendiri yang BELUM TENTU sama dengan Chrome di server.
+        # Ditemukan nyata 18 Sep 2026: UA mengaku "Linux, Chrome 150"
+        # sementara sec-ch-ua bawaan mengaku "macOS, Chrome 146" -- satu
+        # permintaan dengan dua identitas, yang justru paling gampang
+        # dikenali sebagai bot.
+        try:
+            ch = await page.evaluate("""(() => {
+                const d = navigator.userAgentData;
+                if (!d) return null;
+                return {
+                    brands: d.brands.map(b => `"${b.brand}";v="${b.version}"`).join(', '),
+                    mobile: d.mobile ? '?1' : '?0',
+                    platform: '"' + d.platform + '"',
+                };
+            })()""")
+        except Exception:
+            ch = None
         jar = {c.name: c.value for c in cookies_raw
                if "idx.co.id" in (c.domain or "")}
         if "cf_clearance" not in jar:
             print("cf_clearance tidak ditemukan setelah solve", file=sys.stderr)
             return 3
-        print("RESULT_JSON:" + json.dumps({"cookies": jar, "ua": ua}))
+        print("RESULT_JSON:" + json.dumps({"cookies": jar, "ua": ua, "ch": ch}))
         return 0
     finally:
         try:

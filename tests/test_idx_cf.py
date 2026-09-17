@@ -89,3 +89,66 @@ def test_chrome_major_membaca_versi_dari_keluaran_perintah(idx, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _jalankan)
     assert idx._chrome_major() == 140
+
+
+# =========================
+# SATU PERMINTAAN, SATU IDENTITAS
+# =========================
+# Kode lama cuma menimpa User-Agent, sementara curl_cffi tetap mengirim
+# sec-ch-ua bawaannya sendiri. Hasilnya satu permintaan membawa DUA identitas:
+#     User-Agent        : Mozilla/5.0 (X11; Linux x86_64) Chrome/150
+#     Sec-Ch-Ua         : "Google Chrome";v="146"
+#     Sec-Ch-Ua-Platform: "macOS"
+# Pertentangan itu tanda bot yang paling gampang dikenali, dan Cloudflare
+# membalasnya dengan challenge baru (cf-mitigated: challenge) walau
+# cf_clearance-nya sah -- sementara Chrome yang memanen cookie itu membuka
+# URL yang sama dan mendapat JSON tanpa hambatan.
+
+UA_LINUX = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+
+
+def test_client_hints_diambil_dari_chrome_yang_memanen_cookie(idx, monkeypatch):
+    """Nilainya datang dari navigator.userAgentData Chrome ITU SENDIRI, bukan
+    dikarang -- jadi saat Chrome di server diperbarui, header ikut berubah
+    tanpa ada yang perlu menyunting kode."""
+    monkeypatch.setitem(idx._cache, "ch", {
+        "brands": '"Chromium";v="150", "Google Chrome";v="150"',
+        "mobile": "?0", "platform": '"Linux"'})
+    h = idx._header_permintaan(UA_LINUX, "application/json")
+    assert h["sec-ch-ua"] == '"Chromium";v="150", "Google Chrome";v="150"'
+    assert h["sec-ch-ua-platform"] == '"Linux"'
+    assert h["sec-ch-ua-mobile"] == "?0"
+
+
+def test_platform_tidak_pernah_bertentangan_dengan_user_agent(idx, monkeypatch):
+    """INI bug-nya. Tanpa client hints pun, platform WAJIB mengikuti UA --
+    membiarkan bawaan curl_cffi ('macOS') melawan UA Linux adalah persis
+    kontradiksi yang membuat Cloudflare menolak."""
+    monkeypatch.setitem(idx._cache, "ch", None)
+    for ua, harus in (
+        (UA_LINUX, '"Linux"'),
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150.0.0.0", '"Windows"'),
+        ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/150.0.0.0", '"macOS"'),
+    ):
+        h = idx._header_permintaan(ua, "application/json")
+        assert h["sec-ch-ua-platform"] == harus, f"UA {ua[:40]!r} -> {h['sec-ch-ua-platform']}"
+
+
+def test_referer_disertakan(idx, monkeypatch):
+    """Permintaan ke API ini di browser selalu berasal dari situsnya sendiri;
+    tanpa Referer ia terlihat datang entah dari mana."""
+    monkeypatch.setitem(idx._cache, "ch", None)
+    h = idx._header_permintaan(UA_LINUX, "application/json")
+    assert "idx.co.id" in h["Referer"]
+    assert h["User-Agent"] == UA_LINUX
+
+
+def test_user_agent_selalu_yang_memanen_cookie_bukan_bawaan(idx, monkeypatch):
+    """cf_clearance dinilai bersama identitas pemintanya. UA yang dikirim
+    HARUS milik Chrome yang memecahkan challenge, bukan UA bawaan curl_cffi."""
+    monkeypatch.setitem(idx._cache, "ch", {"brands": 'x', "mobile": "?0",
+                                           "platform": '"Linux"'})
+    h = idx._header_permintaan(UA_LINUX, "*/*")
+    assert h["User-Agent"] == UA_LINUX
+    assert h["Accept"] == "*/*"

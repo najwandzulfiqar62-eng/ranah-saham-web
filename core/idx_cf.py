@@ -32,7 +32,7 @@ _SESSION_TTL = int(os.getenv("IDX_CF_SESSION_TTL", "900"))   # 15 menit
 _SOLVE_TIMEOUT = int(os.getenv("IDX_CF_SOLVE_TIMEOUT", "120"))
 
 _lock = asyncio.Lock()
-_cache = {"cookies": None, "ua": None, "ts": 0.0}
+_cache = {"cookies": None, "ua": None, "ch": None, "ts": 0.0}
 
 
 class IdxCfError(RuntimeError):
@@ -43,8 +43,8 @@ class IdxCfError(RuntimeError):
     menyulap kegagalan jadi list kosong."""
 
 
-async def _run_solver() -> tuple[dict, str]:
-    """Jalankan scripts/idx_solve.py sbg subprocess, kembalikan (cookies, ua)."""
+async def _run_solver() -> tuple[dict, str, dict | None]:
+    """Jalankan scripts/idx_solve.py sbg subprocess -> (cookies, ua, client-hints)."""
     proc = await asyncio.create_subprocess_exec(
         sys.executable, _SOLVE_SCRIPT,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -61,13 +61,16 @@ async def _run_solver() -> tuple[dict, str]:
     for line in out.decode("utf-8", "replace").splitlines():
         if line.startswith("RESULT_JSON:"):
             data = json.loads(line[len("RESULT_JSON:"):])
-            return data["cookies"], data["ua"]
+            return data["cookies"], data["ua"], data.get("ch")
     tail = err.decode("utf-8", "replace").strip()[-300:]
     raise IdxCfError(f"solve Cloudflare idx.co.id gagal (rc={proc.returncode}): {tail}")
 
 
 async def get_session(force: bool = False) -> tuple[dict, str]:
-    """(cookies, user_agent) untuk idx.co.id; refresh via browser bila perlu."""
+    """(cookies, user_agent) untuk idx.co.id; refresh via browser bila perlu.
+
+    Client-hints ikut disimpan di _cache["ch"] -- lihat _header_permintaan().
+    """
     now = time.time()
     if not force and _cache["cookies"] and (now - _cache["ts"] < _SESSION_TTL):
         return _cache["cookies"], _cache["ua"]
@@ -75,8 +78,8 @@ async def get_session(force: bool = False) -> tuple[dict, str]:
         now = time.time()
         if not force and _cache["cookies"] and (now - _cache["ts"] < _SESSION_TTL):
             return _cache["cookies"], _cache["ua"]
-        cookies, ua = await _run_solver()
-        _cache.update(cookies=cookies, ua=ua, ts=time.time())
+        cookies, ua, ch = await _run_solver()
+        _cache.update(cookies=cookies, ua=ua, ch=ch, ts=time.time())
         return cookies, ua
 
 
@@ -167,6 +170,58 @@ def _target_impersonate() -> str:
     return _impersonate_cache
 
 
+def _platform_dari_ua(ua: str) -> str:
+    """Cadangan kalau Chrome tidak memberi userAgentData."""
+    u = (ua or "").lower()
+    if "windows" in u:
+        return '"Windows"'
+    if "mac os" in u or "macintosh" in u:
+        return '"macOS"'
+    if "android" in u:
+        return '"Android"'
+    return '"Linux"'
+
+
+def _header_permintaan(ua: str, accept: str) -> dict:
+    """Header yang SELURUHNYA sepakat tentang siapa peminta ini.
+
+    MASALAH YANG DITUTUP DI SINI (terukur 18 Sep 2026): kode lama cuma
+    menimpa User-Agent. curl_cffi tetap mengirim sec-ch-ua bawaannya sendiri,
+    jadi satu permintaan membawa DUA identitas yang bertentangan --
+
+        User-Agent        : Mozilla/5.0 (X11; Linux x86_64) Chrome/150
+        Sec-Ch-Ua         : "Google Chrome";v="146"
+        Sec-Ch-Ua-Platform: "macOS"
+
+    -- dan pertentangan itu justru tanda bot yang paling gampang dikenali.
+    Cloudflare membalasnya dengan challenge baru (cf-mitigated: challenge)
+    walau cf_clearance-nya sah, sementara Chrome yang memanen cookie itu
+    membuka URL yang sama dan mendapat JSON tanpa hambatan.
+
+    Client-hints diambil dari Chrome ITU SENDIRI (navigator.userAgentData),
+    bukan dikarang di sini -- kalau Chrome di server diperbarui, nilainya
+    ikut berubah tanpa ada yang perlu menyuntingnya.
+    """
+    h = {
+        "User-Agent": ua,
+        "Accept": accept,
+        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        # Permintaan ke API ini di browser selalu berasal dari situsnya
+        # sendiri; tanpa Referer ia terlihat datang entah dari mana.
+        "Referer": "https://www.idx.co.id/id",
+    }
+    ch = _cache.get("ch") or {}
+    if ch.get("brands"):
+        h["sec-ch-ua"] = ch["brands"]
+        h["sec-ch-ua-mobile"] = ch.get("mobile") or "?0"
+        h["sec-ch-ua-platform"] = ch.get("platform") or _platform_dari_ua(ua)
+    else:
+        # Chrome lama tanpa userAgentData: setidaknya samakan platformnya
+        # dengan UA, jangan biarkan bawaan curl_cffi bertentangan.
+        h["sec-ch-ua-platform"] = _platform_dari_ua(ua)
+    return h
+
+
 async def _idx_get(url: str, *, timeout: int, accept: str):
     """GET url idx.co.id via curl_cffi (JA3 Chrome) + cookie cf_clearance.
     Sekali kena 403 -> paksa refresh cookie & ulang. Return curl_cffi Response."""
@@ -176,7 +231,7 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
     cookies, ua = await get_session()
 
     def _do(_cookies, _ua):
-        return _cffi.get(url, headers={"User-Agent": _ua, "Accept": accept},
+        return _cffi.get(url, headers=_header_permintaan(_ua, accept),
                          cookies=_cookies, impersonate=_target_impersonate(),
                          timeout=timeout)
 
