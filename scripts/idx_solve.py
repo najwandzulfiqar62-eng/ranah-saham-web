@@ -69,16 +69,26 @@ async def main() -> int:
         # sementara sec-ch-ua bawaan mengaku "macOS, Chrome 146" -- satu
         # permintaan dengan dua identitas, yang justru paling gampang
         # dikenali sebagai bot.
+        # JSON.stringify, BUKAN objek mentah: page.evaluate() nodriver
+        # mengembalikan objek JS dalam bentuk yang tidak dijamin dict di sisi
+        # Python (terpantau sebagai list pasangan kunci-nilai), dan bentuk
+        # yang tidak pasti itu menjatuhkan seluruh jalur pengambilan.
+        # String selalu kembali sebagai string.
+        ch = None
         try:
-            ch = await page.evaluate("""(() => {
+            mentah = await page.evaluate("""(() => {
                 const d = navigator.userAgentData;
-                if (!d) return null;
-                return {
+                if (!d) return "";
+                return JSON.stringify({
                     brands: d.brands.map(b => `"${b.brand}";v="${b.version}"`).join(', '),
                     mobile: d.mobile ? '?1' : '?0',
                     platform: '"' + d.platform + '"',
-                };
+                });
             })()""")
+            if isinstance(mentah, str) and mentah.strip():
+                nilai = json.loads(mentah)
+                if isinstance(nilai, dict):
+                    ch = nilai
         except Exception:
             ch = None
         jar = {c.name: c.value for c in cookies_raw

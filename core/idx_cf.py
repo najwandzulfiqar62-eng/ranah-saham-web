@@ -210,7 +210,14 @@ def _header_permintaan(ua: str, accept: str) -> dict:
         # sendiri; tanpa Referer ia terlihat datang entah dari mana.
         "Referer": "https://www.idx.co.id/id",
     }
-    ch = _cache.get("ch") or {}
+    # SENGAJA defensif: kehilangan client hints cuma membuat permintaan
+    # kurang meyakinkan, sedangkan meledak di sini menjatuhkan SELURUH
+    # pengambilan data kepemilikan. Terjadi nyata 18 Sep 2026 -- nilainya
+    # kembali sebagai list, dan `ch.get(...)` melempar AttributeError yang
+    # merobohkan jalur yang justru sedang diperbaiki.
+    ch = _cache.get("ch")
+    if not isinstance(ch, dict):
+        ch = {}
     if ch.get("brands"):
         h["sec-ch-ua"] = ch["brands"]
         h["sec-ch-ua-mobile"] = ch.get("mobile") or "?0"

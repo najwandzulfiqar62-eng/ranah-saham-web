@@ -152,3 +152,26 @@ def test_user_agent_selalu_yang_memanen_cookie_bukan_bawaan(idx, monkeypatch):
     h = idx._header_permintaan(UA_LINUX, "*/*")
     assert h["User-Agent"] == UA_LINUX
     assert h["Accept"] == "*/*"
+
+
+@pytest.mark.parametrize("nilai_aneh", [
+    [("brands", "x")],          # list pasangan -- bentuk yang benar-benar terjadi
+    ["brands", "x"],
+    "bukan dict",
+    42,
+])
+def test_client_hints_berbentuk_aneh_tidak_menjatuhkan_pengambilan(idx, monkeypatch,
+                                                                   nilai_aneh):
+    """page.evaluate() nodriver tidak menjamin objek JS kembali sebagai dict.
+    Terjadi nyata 18 Sep 2026: nilainya kembali sebagai LIST, `ch.get(...)`
+    melempar AttributeError, dan seluruh pengambilan data kepemilikan roboh --
+    di jalur yang justru sedang diperbaiki.
+
+    Kehilangan client hints cuma membuat permintaan kurang meyakinkan;
+    meledak di sini menjatuhkan semuanya. Perbandingan itu yang menentukan
+    fungsi ini harus memaafkan, bukan menuntut."""
+    monkeypatch.setitem(idx._cache, "ch", nilai_aneh)
+    h = idx._header_permintaan(UA_LINUX, "application/json")
+    assert h["User-Agent"] == UA_LINUX
+    # Platform tetap wajib sepakat dengan UA walau client hints tak terpakai.
+    assert h["sec-ch-ua-platform"] == '"Linux"'
