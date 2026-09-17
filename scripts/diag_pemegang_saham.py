@@ -70,6 +70,40 @@ async def utama():
             print("   --paksa. Mencoba terus justru memperpanjang penahanannya.")
         return
 
+    tahap("3a", "Isi balasan mentah dari idx.co.id (siapa yang menolak?)")
+    # 403 saja tidak cukup untuk menyimpulkan apa pun. Cloudflare yang
+    # memblokir membalas HTML dengan Ray ID dan header cf-*; IDX yang menolak
+    # di lapisan aplikasinya membalas hal lain sama sekali. Sebelum baris ini
+    # ada, dua sebab yang sangat berbeda itu terlihat identik -- dan sudah
+    # dua kali membuat penelusuran salah arah.
+    try:
+        import datetime as _dt
+
+        from core.idx_cf import _idx_get, _target_impersonate
+        hari = _dt.datetime.now().strftime("%Y%m%d")
+        url = ("https://www.idx.co.id/primary/ListedCompany/GetAnnouncement"
+               f"?emitenType=*&indexFrom=0&pageSize=5&dateFrom={hari}&dateTo={hari}"
+               "&lang=id&keyword=kepemilikan")
+        print(f"   impersonate : {_target_impersonate()}")
+        r = await _idx_get(url, timeout=25, accept="application/json")
+        print(f"   status      : {r.status_code}")
+        menarik = ("server", "cf-ray", "cf-mitigated", "cf-cache-status",
+                   "content-type", "x-frame-options", "set-cookie")
+        for k, v in (r.headers or {}).items():
+            if k.lower() in menarik:
+                print(f"   {k.lower():12s}: {str(v)[:110]}")
+        badan = " ".join((r.text or "")[:600].split())
+        print(f"   badan (600)  : {badan}")
+        if r.status_code == 403:
+            petunjuk = badan.lower()
+            if "cf-ray" in str(r.headers).lower() or "cloudflare" in petunjuk:
+                print("\n   >> Yang menolak CLOUDFLARE (bukan IDX).")
+            else:
+                print("\n   >> Tidak ada jejak Cloudflare -- kemungkinan IDX sendiri")
+                print("      yang menolak (endpoint/param berubah, atau butuh Referer).")
+    except Exception as e:
+        print(f"   tidak bisa diperiksa: {type(e).__name__}: {e}")
+
     tahap(3, "Ambil data X-15 hari ini dari idx.co.id")
     try:
         import web.app as app
