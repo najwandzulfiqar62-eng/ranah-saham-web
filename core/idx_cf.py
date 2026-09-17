@@ -229,9 +229,36 @@ def _header_permintaan(ua: str, accept: str) -> dict:
     return h
 
 
+# Berapa lama jalur curl_cffi diistirahatkan sesudah ia ditolak. Selama
+# jendela ini, permintaan langsung dilayani pelayan browser.
+_CFFI_ISTIRAHAT = int(os.getenv("IDX_CFFI_ISTIRAHAT", "1800"))   # 30 menit
+_cffi_istirahat_sampai = 0.0
+
+
 async def _idx_get(url: str, *, timeout: int, accept: str):
-    """GET url idx.co.id via curl_cffi (JA3 Chrome) + cookie cf_clearance.
-    Sekali kena 403 -> paksa refresh cookie & ulang. Return curl_cffi Response."""
+    """GET url idx.co.id. Coba curl_cffi (murah); kalau ditolak, lewat browser.
+
+    PENTING -- JANGAN MENCOBA ULANG YANG SEDANG PASTI GAGAL. Versi sebelumnya
+    memanggil get_session(force=True) pada SETIAP 403, dan itu bukan sekadar
+    sia-sia: satu solve berarti menyalakan Chrome dan menyelesaikan challenge,
+    sekitar 15 detik. Karena curl_cffi saat ini selalu ditolak, menyapu
+    riwayat 90 hari berarti 90 kali solve penuh -- bermenit-menit, sekaligus
+    menembaki Cloudflare berulang kali (yang justru menaikkan penjagaannya).
+
+    Sekarang: begitu ditolak SEKALI, jalur curl_cffi diistirahatkan selama
+    _CFFI_ISTIRAHAT dan permintaan berikutnya langsung ke pelayan browser --
+    yang sudah memegang satu sesi hidup, jadi biayanya ~0,2 detik per URL.
+    Sesudah jendela itu lewat, curl_cffi dicoba lagi sekali; kalau Cloudflare
+    sudah melonggar, jalur murah dipakai lagi dengan sendirinya.
+    """
+    global _cffi_istirahat_sampai
+
+    # Sedang istirahat: jangan sentuh curl_cffi, dan JANGAN memanggil
+    # get_session -- pelayan browser memegang sesinya sendiri, jadi solve di
+    # sini cuma menambah satu Chrome lagi tanpa guna.
+    if time.time() < _cffi_istirahat_sampai:
+        return await _agent_get(url)
+
     from curl_cffi import requests as _cffi
 
     loop = asyncio.get_event_loop()
@@ -243,21 +270,13 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
                          timeout=timeout)
 
     resp = await loop.run_in_executor(None, _do, cookies, ua)
-    if resp.status_code == 403:
-        cookies, ua = await get_session(force=True)
-        resp = await loop.run_in_executor(None, _do, cookies, ua)
-    if resp.status_code == 403:
-        # Cookie segar pun ditolak. Terbukti 18 Sep 2026: Cloudflare mengikat
-        # cf_clearance lebih dalam daripada yang bisa ditiru klien HTTP --
-        # sidik jari chrome150 dan header yang sudah konsisten tetap dibalas
-        # `cf-mitigated: challenge`, sementara Chrome yang memanen cookie itu
-        # membuka URL yang sama dan mendapat JSON.
-        #
-        # Jalur curl_cffi tetap DICOBA LEBIH DULU karena jauh lebih murah, dan
-        # kalau suatu saat Cloudflare melonggar ia akan dipakai lagi dengan
-        # sendirinya -- tanpa ada yang perlu menyunting apa pun.
-        return await _agent_get(url)
-    return resp
+    if resp.status_code != 403:
+        return resp
+
+    _cffi_istirahat_sampai = time.time() + _CFFI_ISTIRAHAT
+    print(f"\u2139\ufe0f idx_cf: curl_cffi ditolak ({resp.status_code}); "
+          f"pakai pelayan browser selama {_CFFI_ISTIRAHAT // 60} menit", flush=True)
+    return await _agent_get(url)
 
 
 _AGENT_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

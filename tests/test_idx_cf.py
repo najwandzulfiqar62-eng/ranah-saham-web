@@ -235,3 +235,71 @@ def test_curl_cffi_dicoba_dulu_browser_hanya_saat_ditolak(idx, monkeypatch):
     r = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
     assert dipakai == ["browser"], "tidak jatuh ke jalur cadangan saat ditolak"
     assert r.json()["ok"] is True
+
+
+# =========================
+# JANGAN MENGULANG YANG SEDANG PASTI GAGAL
+# =========================
+# Versi sebelumnya memanggil get_session(force=True) pada SETIAP 403. Itu
+# bukan sekadar sia-sia: satu solve berarti menyalakan Chrome dan
+# menyelesaikan challenge, sekitar 15 detik. Karena curl_cffi saat ini selalu
+# ditolak, menyapu riwayat 90 hari berarti 90 solve penuh -- bermenit-menit,
+# sekaligus menembaki Cloudflare berulang kali.
+
+def _pasang_cffi(monkeypatch, kode):
+    import sys as _s
+    resp = type("R", (), {"status_code": kode, "text": "{}", "headers": {}})
+    palsu = type("M", (), {"get": staticmethod(lambda *a, **k: resp())})
+    monkeypatch.setitem(_s.modules, "curl_cffi", type("P", (), {"requests": palsu}))
+
+
+def test_curl_cffi_diistirahatkan_sesudah_sekali_ditolak(idx, monkeypatch):
+    import asyncio
+
+    jejak = []
+
+    async def _sesi(force=False):
+        jejak.append(f"solve(force={force})")
+        return {"cf_clearance": "x"}, UA_LINUX
+
+    async def _agent(url):
+        jejak.append("browser")
+        return idx._BalasanBrowser(200, '{"ok": true}')
+
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    monkeypatch.setattr(idx, "get_session", _sesi)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setattr(idx, "_target_impersonate", lambda: "chrome150")
+    _pasang_cffi(monkeypatch, 403)
+
+    for _ in range(5):
+        asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+
+    # Solve HANYA sekali (percobaan pertama). Sesudah ditolak, tidak ada lagi
+    # Chrome yang dinyalakan -- itu yang membuat 90 URL jadi bermenit-menit.
+    assert jejak.count("solve(force=False)") == 1, jejak
+    assert "solve(force=True)" not in jejak, "masih ada solve paksa per permintaan"
+    assert jejak.count("browser") == 5, jejak
+
+
+def test_curl_cffi_dicoba_lagi_sesudah_masa_istirahat_lewat(idx, monkeypatch):
+    """Pemulihan harus OTOMATIS. Kalau Cloudflare melonggar, jalur murah wajib
+    dipakai lagi tanpa ada yang perlu menyunting atau me-restart apa pun."""
+    import asyncio
+
+    async def _sesi(force=False):
+        return {"cf_clearance": "x"}, UA_LINUX
+
+    async def _agent(url):
+        return idx._BalasanBrowser(200, "{}")
+
+    monkeypatch.setattr(idx, "get_session", _sesi)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setattr(idx, "_target_impersonate", lambda: "chrome150")
+
+    # Masa istirahat sudah lewat, dan Cloudflare kini menerima.
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    _pasang_cffi(monkeypatch, 200)
+    r = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+    assert r.status_code == 200
+    assert idx._cffi_istirahat_sampai == 0.0, "diistirahatkan padahal tidak ditolak"
