@@ -300,3 +300,115 @@ def test_pendaftaran_dibatasi_per_ip(clean_access_db, client, monkeypatch):
 
     assert 429 in kode, f"pendaftaran tidak pernah dibatasi: {kode}"
     assert kode.index(429) >= 2, f"dibatasi terlalu cepat: {kode}"
+
+
+# ===========================================================================
+# "Email dan password sudah benar tapi tetap tidak bisa masuk"
+# ===========================================================================
+# Keluhan yang paling mahal, karena yang mengalaminya tidak punya cara
+# membuktikan dirinya benar -- ia cuma bisa mencoba lagi. Tiap bentuk yang
+# masuk akal diuji di sini supaya tidak perlu ditebak saat ada yang lapor.
+
+PNG_1X1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0dIDATx\x9cc\xf8"
+    b"\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND"
+    b"\xaeB`\x82"
+)
+SANDI = "password-pengguna-aman"
+
+
+def _daftar_dan_setujui(client, email="Budi.Santoso@Example.COM",
+                        phone="081234567890"):
+    """Daftar lalu setujui lewat admin, kembalikan email yang tersimpan."""
+    from core.access import get_db, set_user_status
+
+    r = client.post("/api/access/register", data={
+        "name": "Budi Santoso", "email": email, "phone": phone,
+        "password": SANDI,
+    }, files={"proof": ("bukti.png", PNG_1X1, "image/png")})
+    assert r.status_code == 200, r.text
+    with get_db() as conn:
+        row = conn.execute("SELECT id, email FROM access_user WHERE email = ?",
+                           (email.strip().lower(),)).fetchone()
+    assert row is not None, "pendaftaran tidak tersimpan dengan email ternormalisasi"
+    set_user_status(row["id"], "approved")
+    return row["id"]
+
+
+@pytest.mark.parametrize("ditulis", [
+    "budi.santoso@example.com",      # persis seperti tersimpan
+    "Budi.Santoso@Example.COM",      # seperti saat mendaftar
+    "BUDI.SANTOSO@EXAMPLE.COM",      # huruf besar semua
+    "  budi.santoso@example.com  ",  # spasi dari salin-tempel / autocomplete HP
+])
+def test_email_beda_huruf_atau_berspasi_tetap_bisa_masuk(client, clean_access_db,
+                                                          ditulis):
+    """Orang tidak mengetik emailnya dengan huruf yang sama persis tiap kali,
+    dan papan ketik HP gemar menambahi spasi di belakang. Kalau salah satu
+    bentuk ini ditolak, yang mengalaminya akan yakin passwordnya yang salah
+    dan menggantinya berkali-kali -- padahal tidak pernah salah."""
+    _daftar_dan_setujui(client)
+    r = client.post("/api/access/login", json={"login": ditulis, "password": SANDI})
+    assert r.status_code == 200, f"{ditulis!r} ditolak: {r.text}"
+    assert r.cookies.get("rs_session"), "login berhasil tapi cookie sesi tidak dipasang"
+
+
+@pytest.mark.parametrize("ditulis", [
+    "081234567890",
+    "6281234567890",
+    "+6281234567890",
+    " 0812-3456-7890 ",
+])
+def test_nomor_hp_berbagai_bentuk_tetap_bisa_masuk(client, clean_access_db, ditulis):
+    """Formulirnya menjanjikan "Email atau nomor HP WhatsApp". Nomor yang sama
+    ditulis empat cara berbeda harus menunjuk akun yang sama."""
+    _daftar_dan_setujui(client)
+    r = client.post("/api/access/login", json={"login": ditulis, "password": SANDI})
+    assert r.status_code == 200, f"{ditulis!r} ditolak: {r.text}"
+
+
+def test_cookie_sesi_benar_benar_membuka_endpoint(client, clean_access_db):
+    """Login yang berhasil TAPI sesinya tidak dikenali di permintaan berikutnya
+    terlihat persis seperti "password saya salah" dari sisi pemakai: ia masuk,
+    halaman termuat ulang, dan layar login muncul lagi."""
+    _daftar_dan_setujui(client)
+    assert client.get("/api/ihsg").status_code == 401
+
+    r = client.post("/api/access/login",
+                    json={"login": "budi.santoso@example.com", "password": SANDI})
+    assert r.status_code == 200
+    me = client.get("/api/access/me")
+    assert me.status_code == 200
+    assert (me.json().get("user") or {}).get("email") == "budi.santoso@example.com"
+
+
+def test_akun_ditolak_tidak_disuruh_menunggu(client, clean_access_db):
+    """Akun yang DITOLAK dulu dijawab "menunggu persetujuan admin" -- menyuruh
+    orang menunggu sesuatu yang tidak akan datang, karena tidak ada antrean
+    yang sedang memprosesnya. Pendaftaran ulang dengan email yang sama justru
+    dipersilakan oleh register_user()."""
+    from core.access import set_user_status
+
+    uid = _daftar_dan_setujui(client)
+    set_user_status(uid, "rejected")
+
+    r = client.post("/api/access/login",
+                    json={"login": "budi.santoso@example.com", "password": SANDI})
+    assert r.status_code == 403
+    pesan = r.json().get("detail", "")
+    assert "daftar ulang" in pesan.lower(), f"pesan masih menyesatkan: {pesan!r}"
+    assert "menunggu persetujuan" not in pesan.lower()
+
+
+def test_password_salah_tidak_membocorkan_akun_mana_yang_ada(client, clean_access_db):
+    """Pesannya harus sama untuk "akun tidak ada" dan "password salah".
+    Kalau berbeda, siapa pun bisa memeriksa satu per satu email mana yang
+    terdaftar di sini."""
+    _daftar_dan_setujui(client)
+    salah = client.post("/api/access/login",
+                        json={"login": "budi.santoso@example.com", "password": "salah-sekali"})
+    tidak_ada = client.post("/api/access/login",
+                            json={"login": "entah@example.com", "password": "salah-sekali"})
+    assert salah.status_code == tidak_ada.status_code == 403
+    assert salah.json()["detail"] == tidak_ada.json()["detail"]

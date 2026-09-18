@@ -337,6 +337,26 @@ def register_user(name: str, email: str, password: str, proof_filename: str | No
     return {"message": "Pendaftaran diterima. Tunggu persetujuan admin sebelum masuk."}
 
 
+def _pesan_belum_bisa_masuk(status: str) -> str:
+    """Alasan yang BENAR kenapa akun dengan password tepat belum bisa masuk.
+
+    Sebelumnya semua status non-approved dijawab "menunggu persetujuan admin".
+    Untuk akun yang DITOLAK itu keliru dan bikin orang menunggu sesuatu yang
+    tidak akan datang: tidak ada antrean yang sedang memprosesnya, dan
+    register_user() justru mempersilakan ia mendaftar ulang dengan email yang
+    sama. Kalimat yang salah di sini terbaca seperti "password saya benar tapi
+    tetap tidak bisa masuk" -- persis kebingungan yang tidak perlu ada.
+
+    Dicabut (revoke_user_approval) mengembalikan status ke 'pending', jadi
+    kalimat menunggu memang tepat untuk kasus itu.
+    """
+    if status == "rejected":
+        return ("Pendaftaranmu belum diterima admin. Daftar ulang dengan email "
+                "yang sama dan bukti anggota grup WhatsApp yang lebih jelas — "
+                "tidak perlu menunggu, antreanmu sudah diproses.")
+    return "Akunmu masih menunggu persetujuan admin."
+
+
 def authenticate(identifier: str, password: str) -> tuple[dict | None, str | None]:
     ensure_access_tables()
     identifier = (identifier or "").strip()
@@ -351,7 +371,7 @@ def authenticate(identifier: str, password: str) -> tuple[dict | None, str | Non
             return None, "Email/nomor HP atau password tidak tepat."
         user = _public(row)
         if user["status"] != "approved":
-            return None, "Akunmu masih menunggu persetujuan admin."
+            return None, _pesan_belum_bisa_masuk(user["status"])
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat(timespec="seconds")

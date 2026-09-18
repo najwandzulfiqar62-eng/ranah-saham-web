@@ -6601,13 +6601,17 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
            f"?emitenType=*&indexFrom=0&pageSize=100&dateFrom={today}&dateTo={today}"
            "&lang=id&keyword=kepemilikan")
     try:
-        status, data = await idx_get_json(url, timeout=25)
+        status, data, jalur = await idx_get_json(url, timeout=25)
     except IdxCfError as e:
         # Gagal menembus Cloudflare -- BUKAN "tidak ada filing". Raise (jangan
         # cache, jangan menyamar jadi list kosong) biar dicoba lagi nanti.
         raise X15FetchError(str(e))
     if status != 200:
-        raise X15FetchError(f"idx.co.id membalas HTTP {status}")
+        # Jalurnya ikut disebut. "membalas HTTP 403" saja membuat dua keadaan
+        # yang sangat berbeda terlihat identik: klien HTTP murah yang ditolak
+        # (wajar, sudah ada cadangannya) versus browser yang sudah lolos
+        # challenge tapi tetap ditolak (jalan terakhir tertutup).
+        raise X15FetchError(f"idx.co.id membalas HTTP {status} (lewat {jalur})")
     if not isinstance(data, dict):
         # 200 tapi bukan JSON = halaman challenge/blokir Cloudflare -- sama:
         # bukan "tidak ada filing".

@@ -481,3 +481,37 @@ def test_curl_cffi_hilang_pun_tetap_dilayani(idx, monkeypatch):
     resp = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
     assert resp.status_code == 200
     assert "browser" in resp.text
+
+
+def test_balasan_menyebut_jalur_yang_melayaninya(idx, monkeypatch):
+    """"idx.co.id membalas HTTP 403" tanpa keterangan jalur membuat DUA
+    keadaan yang menuntut tindakan berbeda terlihat identik:
+
+      curl_cffi ditolak  -> wajar, cadangannya jalan, tidak perlu apa-apa
+      browser ditolak    -> jalan terakhir tertutup, ini yang gawat
+
+    Sudah dua kali penelusuran berangkat ke arah yang salah karenanya."""
+    import asyncio
+
+    async def _sesi(force=False):
+        return {"cf_clearance": "x"}, UA_LINUX
+
+    async def _agent(url):
+        return idx._BalasanBrowser(403, "ditolak juga")
+
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    monkeypatch.setattr(idx, "get_session", _sesi)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setattr(idx, "_target_impersonate", lambda: "chrome150")
+
+    # Jalur murah menjawab 200 -> penanda "curl_cffi".
+    _pasang_cffi(monkeypatch, 200)
+    status, _, jalur = asyncio.run(idx.idx_get_json("https://x", timeout=5))
+    assert (status, jalur) == (200, "curl_cffi")
+
+    # Jalur murah ditolak -> dilempar ke browser, penanda ikut berubah.
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    _pasang_cffi(monkeypatch, 403)
+    status, _, jalur = asyncio.run(idx.idx_get_json("https://x", timeout=5))
+    assert (status, jalur) == (403, "browser"), (
+        "403 dari browser tidak bisa dibedakan dari 403 dari curl_cffi")

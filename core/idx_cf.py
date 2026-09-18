@@ -404,6 +404,10 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
 
         resp = await loop.run_in_executor(None, _do, cookies, ua)
         if resp.status_code != 403:
+            try:
+                resp.jalur = "curl_cffi"
+            except Exception:
+                pass
             return resp
         sebab = f"ditolak ({resp.status_code})"
     except Exception as e:
@@ -429,6 +433,13 @@ _agent_lock = asyncio.Lock()
 class _BalasanBrowser:
     """Menyerupai Response curl_cffi seperlunya, supaya pemanggil tidak peduli
     jalur mana yang dipakai."""
+
+    # Penanda JALUR. Tanpa ini, "idx.co.id membalas HTTP 403" tidak
+    # memberi tahu siapa yang ditolak: klien HTTP murah, atau browser yang
+    # sudah lolos challenge. Dua keadaan yang sangat berbeda -- yang pertama
+    # wajar dan sudah ditangani, yang kedua berarti jalan terakhir pun
+    # tertutup -- dan tanpa penanda keduanya terbaca sama persis.
+    jalur = "browser"
 
     def __init__(self, status: int, teks: str):
         self.status_code = status
@@ -516,13 +527,27 @@ async def _agent_get(url: str) -> _BalasanBrowser:
     return _BalasanBrowser(int(data.get("status") or 0), data.get("text") or "")
 
 
+def jalur_balasan(resp) -> str:
+    """Jalur mana yang melayani balasan ini: "curl_cffi" atau "browser"."""
+    return getattr(resp, "jalur", "?")
+
+
 async def idx_get_json(url: str, *, timeout: int = 20):
-    """Return (status_code, parsed_json_or_None). None kalau body bukan JSON."""
+    """Return (status_code, parsed_json_or_None, jalur).
+
+    `jalur` ikut dikembalikan supaya pesan galat bisa menyebut SIAPA yang
+    ditolak. "idx.co.id membalas HTTP 403" saja tidak cukup: ditolaknya klien
+    HTTP murah itu wajar dan sudah ada cadangannya, sedangkan ditolaknya
+    browser yang sudah lolos challenge berarti jalan terakhir pun tertutup.
+    Dua keadaan yang menuntut tindakan berbeda, dan tanpa ini keduanya
+    terbaca sama persis -- sudah dua kali membuat penelusuran salah arah.
+    """
     resp = await _idx_get(url, timeout=timeout, accept="application/json")
+    jalur = jalur_balasan(resp)
     try:
-        return resp.status_code, resp.json()
+        return resp.status_code, resp.json(), jalur
     except Exception:
-        return resp.status_code, None
+        return resp.status_code, None, jalur
 
 
 async def idx_get_bytes(url: str, *, timeout: int = 20) -> tuple[int, bytes]:
