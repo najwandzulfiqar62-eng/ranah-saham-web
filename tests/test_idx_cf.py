@@ -355,14 +355,27 @@ def test_gagal_start_menyebutkan_sebabnya_bukan_titik_dua_kosong():
     import core.idx_cf as idx
 
     class _StderrPalsu:
+        """Pipa yang mengantar traceback SEPOTONG-SEPOTONG, seperti aslinya."""
+
+        def __init__(self):
+            self.antrean = [b"Traceback (most recent call last):\n",
+                            b'  File "scripts/idx_agent.py", line 96\n',
+                            b"ModuleNotFoundError: No module named 'nodriver'\n",
+                            b""]
+
         async def read(self, n):
-            return b"Xvfb: command not found\nchrome: cannot open display\n"
+            return self.antrean.pop(0) if self.antrean else b""
 
     class _ProcPalsu:
         stderr = _StderrPalsu()
 
     sebab = asyncio.run(idx._ekor_stderr(_ProcPalsu()))
-    assert "cannot open display" in sebab
+    # Yang WAJIB selamat adalah baris PENUTUPnya. Versi pertama memakai satu
+    # read() dan cuma mendapat "Traceback (most recent call last):" -- persis
+    # baris yang tidak memberi tahu apa pun. Itu terjadi sungguhan di server
+    # 18 Sep 2026: pesannya buntu padahal sebabnya sudah tercetak di bawahnya.
+    assert "ModuleNotFoundError" in sebab, (
+        f"sebab sebenarnya hilang, yang tersisa cuma: {sebab!r}")
     assert sebab.strip(), "ekor stderr kosong -- pesan gagal akan buntu lagi"
 
 

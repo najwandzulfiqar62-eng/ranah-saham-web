@@ -46,6 +46,24 @@ async def utama():
     except Exception as e:
         print(f"   tidak bisa dibaca: {type(e).__name__}: {e}")
 
+    # Interpreter mana yang dipakai, dan apakah nodriver ADA DI SITU.
+    # Pelayan browser dijalankan dengan sys.executable, jadi kalau skrip ini
+    # dipanggil `python3` (3.10 di Ubuntu 22.04) sementara paketnya dipasang
+    # untuk python3.11, importnya gagal -- dan gagalnya muncul sebagai
+    # traceback di subprocess, jauh dari sebabnya. Service pun bisa memakai
+    # interpreter yang lain lagi, jadi angka ini harus ikut dibandingkan.
+    print(f"   interpreter    : {sys.executable} (Python {sys.version.split()[0]})")
+    try:
+        import nodriver
+        print(f"   nodriver       : ADA -> {getattr(nodriver, '__file__', '?')}")
+    except Exception as e:
+        print(f"   nodriver       : TIDAK ADA untuk interpreter ini "
+              f"({type(e).__name__}: {e})")
+        print("      >> Pasang di interpreter YANG SAMA dengan yang dipakai")
+        print("         service, bukan sekadar `pip install nodriver`:")
+        print(f"         {sys.executable} -m pip install nodriver")
+    print("   dipakai service: cek `systemctl show -p ExecStart ranahsaham`")
+
     tahap("1b", "Pelayan browser bisa hidup?")
     # Tahap TERSENDIRI karena inilah yang berbeda antara shell dan service:
     # dijalankan lewat `xvfb-run -a python3 ...` semuanya jalan, sedangkan

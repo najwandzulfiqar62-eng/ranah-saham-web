@@ -101,7 +101,7 @@ def _bunuh_pohon(proc) -> None:
             pass
 
 
-async def _ekor_stderr(proc, batas: int = 400) -> str:
+async def _ekor_stderr(proc, batas: int = 1200) -> str:
     """Baca sisa stderr subprocess tanpa menggantung kalau ia masih hidup.
 
     Sebelum ini ada, kegagalan start terbaca sebagai "pelayan browser idx
@@ -109,14 +109,35 @@ async def _ekor_stderr(proc, batas: int = 400) -> str:
     mati, stdout langsung EOF (baris kosong), sedangkan alasan sebenarnya
     ada di stderr yang tidak pernah dibaca. Pesan kosong itu membuat
     penelusuran berangkat dari nol padahal jawabannya sudah tercetak.
+
+    DIBACA SAMPAI HABIS, bukan sekali ambil. Versi pertama memakai satu
+    `read(8192)`, dan itu mengembalikan apa yang KEBETULAN sudah sampai di
+    pipa saat itu -- untuk sebuah traceback Python yang berarti cuma
+    "Traceback (most recent call last):", persis baris yang paling tidak
+    memberi tahu apa-apa. Terbukti 18 Sep 2026 di server: pesannya berhenti
+    di situ dan penelusuran tetap buntu walau alasannya sudah dicetak dua
+    baris di bawahnya.
+
+    Potongan terakhir yang disimpan (bukan yang pertama), karena baris
+    penutup traceback-lah yang menyebut jenis dan pesan galatnya.
     """
     if proc.stderr is None:
         return ""
-    try:
-        data = await asyncio.wait_for(proc.stderr.read(8192), timeout=3)
-    except Exception:
-        return ""
-    return " ".join(data.decode("utf-8", "replace").split())[-batas:]
+    potongan = []
+    tenggat = time.monotonic() + 3.0
+    while True:
+        sisa = tenggat - time.monotonic()
+        if sisa <= 0:
+            break
+        try:
+            data = await asyncio.wait_for(proc.stderr.read(4096), timeout=sisa)
+        except Exception:
+            break
+        if not data:
+            break   # EOF: prosesnya sudah menutup stderr
+        potongan.append(data)
+    teks = b"".join(potongan).decode("utf-8", "replace")
+    return " ".join(teks.split())[-batas:]
 
 
 class IdxCfError(RuntimeError):
