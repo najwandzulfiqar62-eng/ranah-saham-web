@@ -148,10 +148,13 @@ async def run_screenerpro(tickers: list[str],
     terpenuhi. Syarat kedua yang membuat isinya memang Minervini -- lihat
     alasan dan angkanya di komentar MIN_KRITERIA di atas.
 
-    `catatan` (kalau diberi) diisi {"tersaring": n, "min_kriteria": k}:
-    berapa saham berskor cukup yang dibuang karena kriterianya kurang.
-    Angka itu dipakai di layar supaya daftar yang tiba-tiba pendek bisa
-    dijelaskan, bukan terbaca seperti data yang gagal dimuat.
+    `catatan` (kalau diberi) diisi {"tersaring": n, "min_kriteria": k,
+    "nyaris": [...]}: berapa saham berskor cukup yang dibuang karena
+    kriterianya kurang, dan yang paling dekat dengan ambang. Dipakai di layar
+    supaya daftar yang tiba-tiba pendek bisa dijelaskan -- dan supaya saham
+    yang hilang bisa ditelusuri, bukan lenyap tanpa jejak. `nyaris` sengaja
+    TIDAK ikut di daftar utama: sumber sinyal Minervini x Harmonic membaca
+    daftar itu.
 
     Returns list terurut skor tertinggi ke terendah."""
     data = await async_download_many(tickers, period="1y", interval="1d")
@@ -164,6 +167,12 @@ async def run_screenerpro(tickers: list[str],
     # masuk. Itu keluhan "web keluar-keluaran, disuruh login ulang" yang
     # sudah dilacak ke akar yang sama di tempat lain.
     n_tolak = [0]
+    # Yang PALING DEKAT dengan ambang, supaya saham yang hilang dari daftar
+    # bisa ditelusuri alih-alih lenyap begitu saja. Dibatasi ke satu kriteria
+    # di bawah ambang: 2/8 bukan "nyaris", ia cuma kebetulan berskor tinggi.
+    # TIDAK ikut masuk `items` -- sumber sinyal Minervini x Harmonic membaca
+    # daftar itu, dan yang belum Minervini tidak boleh menyelinap lewat sini.
+    nyaris = []
 
     def _nilai_semua(sebagian):
         hasil = []
@@ -181,6 +190,19 @@ async def run_screenerpro(tickers: list[str],
                     continue
                 if result and result["criteria_met"] < MIN_KRITERIA:
                     n_tolak[0] += 1
+                    if result["criteria_met"] >= MIN_KRITERIA - 1:
+                        nyaris.append({
+                            "ticker": result["ticker"],
+                            "skor": result["skor"],
+                            "harga": result["harga"],
+                            "criteria_met": result["criteria_met"],
+                            # Kunci MENTAH, bukan yang sudah dirapikan jadi
+                            # teks berspasi: yang menampilkan perlu
+                            # memetakannya ke kalimat, dan memetakan balik
+                            # dari teks yang sudah dipermak itu rapuh.
+                            "gagal": [k for k, v in (result.get("criteria") or {}).items()
+                                      if not v],
+                        })
                     continue
                 if result:
                     # Rencana entry dihitung HANYA untuk yang lolos (segelintir
@@ -206,6 +228,8 @@ async def run_screenerpro(tickers: list[str],
     if catatan is not None:
         catatan["tersaring"] = n_tolak[0]
         catatan["min_kriteria"] = MIN_KRITERIA
+        catatan["nyaris"] = sorted(nyaris, key=lambda x: x["skor"],
+                                   reverse=True)[:20]
     return sorted(results, key=lambda x: x["skor"], reverse=True)
 
 
@@ -362,6 +386,10 @@ def _score_minervini(df: pd.DataFrame, name: str,
         "skor": round(total_score, 1),
         "harga": round(price, 0),
         "criteria_met": criteria_met,
+        # Kunci mentah + hasilnya, di samping kriteria_lolos/kriteria_gagal
+        # yang sudah dirapikan untuk dibaca manusia. Yang menampilkan butuh
+        # kuncinya utuh supaya bisa dipetakan ke kalimat sendiri.
+        "criteria": {k: bool(v) for k, v in criteria.items()},
         "rs_score": rs_score,
         "rsi": round(rsi_val, 1),
         "macd_bullish": macd_bull,

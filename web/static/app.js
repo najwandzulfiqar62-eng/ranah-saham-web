@@ -1567,6 +1567,51 @@ function _catatanEntryMinervini(items){
     +`sisanya di level support di bawah.`,'Entry: kenapa dicicil');
 }
 
+// Kriteria trend template yang gagal, dijelaskan sebagai KEADAAN sahamnya --
+// bukan nama kunci internalnya. "ma alignment" tidak memberi tahu apa-apa;
+// "MA50 belum di atas MA150/MA200" langsung bisa dinilai sendiri.
+const MV_ALASAN={
+  harga_di_atas_ma50:'harga belum di atas MA50',
+  harga_di_atas_ma150:'harga belum di atas MA150',
+  harga_di_atas_ma200:'harga belum di atas MA200',
+  ma_alignment:'susunan MA belum tertata (MA50&gt;MA150&gt;MA200)',
+  ma200_trending_up:'MA200 masih menurun',
+  jauh_dari_52w_low:'masih terlalu dekat 52W low',
+  dekat_52w_high:'masih terlalu jauh dari 52W high',
+  rs_outperform:'RS di bawah 70 (kalah dari IHSG)',
+};
+
+// Saham yang berskor cukup tapi kriterianya kurang. Ditaruh di balik
+// <details> supaya daftar utamanya tetap pendek -- itu yang diminta -- tanpa
+// membuat saham yang hilang lenyap tanpa jejak. <details> dipakai karena
+// buka-tutupnya ditangani browser: tidak ada JS, tidak ada beban tambahan.
+function _mvNyarisHtml(nyaris,tersaring,minKriteria){
+  if(!tersaring) return '';
+  const baris=(nyaris||[]).map(r=>{
+    const alasan=(r.gagal||[]).map(k=>MV_ALASAN[k]||k).join(' · ');
+    return `<tr data-k="${r.ticker}" style="cursor:pointer">
+      <td class="tk">${tickerTag(r.ticker)}</td>
+      <td>${fmt(r.skor,1)}</td>
+      <td style="color:var(--gold);font-size:12px">${r.criteria_met}/8</td>
+      <td>Rp${fmt(r.harga)}</td>
+      <td style="font-size:11px;line-height:1.45;color:var(--muted)">${alasan||'—'}</td>
+    </tr>`}).join('');
+  const isi=baris
+    ? `<div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th>Kriteria</th><th>Harga</th><th>Yang belum terpenuhi</th></tr></thead><tbody>${baris}</tbody></table></div>`
+    : `<p class="muted" style="font-size:12px">Yang tersaring hari ini jaraknya lebih dari satu kriteria dari ambang — bukan "nyaris".</p>`;
+  return `<details class="mv-nyaris" style="margin:0 0 12px">
+    <summary style="cursor:pointer;font-size:12px;color:var(--muted);padding:6px 0">
+      ${tersaring} saham berskor ≥65 tidak masuk daftar — lihat yang paling dekat
+    </summary>
+    <p class="muted" style="font-size:11px;line-height:1.5;margin:4px 0 8px">
+      Skornya tertolong momentum dan volume, bukan oleh trennya, jadi kriteria
+      trend template-nya belum sampai ${minKriteria}/8. Bukan berarti sahamnya
+      akan turun — cuma belum berbentuk setup Minervini.
+    </p>
+    ${isi}
+  </details>`;
+}
+
 // Ambang "potensi naik" yang sedang dipilih di tab Minervini. 0 = semua.
 // Disimpan di luar fungsi supaya pilihannya bertahan saat daftar dimuat ulang.
 let mvMinPotensi = 0;
@@ -1617,19 +1662,23 @@ async function loadScreenerPro(){
       <button class="chip ${mvPenuhSaja?'active':''}" data-mvpenuh="1" title="Hanya saham yang memenuhi kedelapan kriteria">8/8 saja</button>
       <span class="muted" style="font-size:11px">${items.length} dari ${semua.length} saham</span>
     </div>
-    ${tersaring?`<p class="muted" style="font-size:11px;margin:-4px 0 10px">${tersaring} saham lain skornya ≥65 tapi tidak ditampilkan: kriteria trend template-nya kurang dari ${minKriteria}/8 — skornya tertolong momentum dan volume, bukan oleh trennya.</p>`:''}
+    ${_mvNyarisHtml(d.nyaris, tersaring, minKriteria)}
     ${items.length?'':emptyState(mvPenuhSaja&&!mvMinPotensi
       ? 'Tidak ada saham yang memenuhi kedelapan kriteria hari ini. Itu hal biasa — 8/8 memang jarang. Matikan "8/8 saja" untuk melihat yang 7/8.'
       : 'Tidak ada saham yang lolos saringan itu hari ini. Longgarkan ambangnya — hari tanpa hasil itu wajar, bukan tanda datanya rusak.')}
     ${_catatanEntryMinervini(items)}
-    <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th class="hide-xs">RSI</th><th class="hide-xs">vs 52W High</th><th>Potensi</th><th>Entry</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
+    <div style="overflow-x:auto"><table class="ctable" id="mvTabel"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th class="hide-xs">RSI</th><th class="hide-xs">vs 52W High</th><th>Potensi</th><th>Entry</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   body.querySelectorAll('[data-mvpot]').forEach(b=>b.addEventListener('click',()=>{
     mvMinPotensi=Number(b.dataset.mvpot)||0; loadScreenerPro();
   }));
   const bPenuh=body.querySelector('[data-mvpenuh]');
   if(bPenuh) bPenuh.addEventListener('click',()=>{mvPenuhSaja=!mvPenuhSaja; loadScreenerPro()});
-  staggerRows(body.querySelector('.ctable'), 12);
+  // Tabel utama disebut dengan id, bukan querySelector('.ctable'): daftar
+  // "nyaris" berada di ATASNYA, jadi pemilih pertama-yang-cocok akan
+  // menganimasikan tabel yang masih tertutup dan membiarkan yang dilihat
+  // orang diam saja.
+  staggerRows(body.querySelector('#mvTabel'), 12);
 }
 
 function _fundVerdictColor(v){return v==='Undervalued'?'var(--bull)':v==='Overvalued'?'var(--bear)':'var(--gold)'}
@@ -6116,7 +6165,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v53';
+const APP_VERSION='v54';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

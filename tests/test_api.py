@@ -6021,3 +6021,64 @@ def test_screenerpro_melaporkan_berapa_yang_disaring(monkeypatch):
     payload = asyncio.run(app_module.screenerpro())
     assert payload["tersaring"] == 9
     assert payload["min_kriteria"] == sp.MIN_KRITERIA
+
+
+def test_nyaris_tidak_ikut_ke_daftar_utama():
+    """Daftar "nyaris" itu untuk DILIHAT, bukan untuk dipakai teori lain.
+
+    Sumber sinyal Minervini x Harmonic membaca items dari cache yang sama.
+    Kalau yang belum Minervini menyelinap lewat sini, nama teorinya jadi
+    tidak benar lagi -- persis masalah yang baru saja ditutup."""
+    import asyncio
+
+    import core.screening_pro as sp
+
+    catatan: dict = {}
+
+    async def _kosong(*a, **k):
+        return {}
+
+    # Tidak ada data -> tidak ada hasil, tapi bentuk catatannya tetap terisi.
+    import core.async_yf as ay
+    asli = ay.async_download_many
+    ay.async_download_many = _kosong
+    sp_asli = sp.async_download_many
+    sp.async_download_many = _kosong
+    try:
+        items = asyncio.run(sp.run_screenerpro(["AAAA.JK"], catatan=catatan))
+    finally:
+        ay.async_download_many = asli
+        sp.async_download_many = sp_asli
+
+    assert items == []
+    assert catatan["min_kriteria"] == sp.MIN_KRITERIA
+    assert catatan["tersaring"] == 0
+    assert catatan["nyaris"] == []
+
+
+def test_skor_minervini_membawa_kriteria_mentah():
+    """Yang menampilkan perlu KUNCI kriterianya, bukan cuma teks yang sudah
+    dirapikan. Memetakan balik dari "ma alignment" ke kalimat penjelas itu
+    rapuh: satu perubahan kata di satu tempat mematahkan tampilan di tempat
+    lain tanpa ada yang error."""
+    import numpy as np
+    import pandas as pd
+
+    from core.screening_pro import _score_minervini
+
+    n = 300
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    harga = np.linspace(1000, 2000, n)
+    df = pd.DataFrame({"Open": harga, "High": harga * 1.01, "Low": harga * 0.99,
+                       "Close": harga,
+                       "Volume": np.full(n, 1_000_000.0)}, index=idx)
+
+    r = _score_minervini(df, "UJI", None)
+    assert r is not None
+    kriteria = r["criteria"]
+    assert isinstance(kriteria, dict) and len(kriteria) == 8
+    assert all(isinstance(v, bool) for v in kriteria.values())
+    assert sum(kriteria.values()) == r["criteria_met"], (
+        "kriteria mentah tidak sepakat dengan criteria_met")
+    # Kunci yang dipakai tampilan untuk memetakan alasan.
+    assert "ma_alignment" in kriteria and "ma200_trending_up" in kriteria

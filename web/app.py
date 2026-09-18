@@ -2828,7 +2828,7 @@ async def smc_chart(kode: str, kind: str):
 # yang bentuknya berbeda sampai TTL habis -- gejalanya bukan error melainkan
 # kolom yang diam-diam kosong, jadi tidak ada yang tahu penyebabnya. Versi 2
 # menandai ditambahkannya `rencana_entry`.
-SCREENERPRO_CACHE_KEY = "screenerpro:v3"
+SCREENERPRO_CACHE_KEY = "screenerpro:v4"
 
 
 @app.get("/api/screenerpro")
@@ -2884,7 +2884,8 @@ async def screenerpro():
     payload = _py({"items": items, "universe": len(TOP_PICK_UNIVERSE),
                    "n_confluence": n_confluence,
                    "tersaring": catatan.get("tersaring", 0),
-                   "min_kriteria": catatan.get("min_kriteria")})
+                   "min_kriteria": catatan.get("min_kriteria"),
+                   "nyaris": catatan.get("nyaris") or []})
     _cache_set(SCREENERPRO_CACHE_KEY, payload)
     return payload
 
