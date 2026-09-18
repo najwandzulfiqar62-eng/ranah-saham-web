@@ -303,3 +303,81 @@ def test_curl_cffi_dicoba_lagi_sesudah_masa_istirahat_lewat(idx, monkeypatch):
     r = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
     assert r.status_code == 200
     assert idx._cffi_istirahat_sampai == 0.0, "diistirahatkan padahal tidak ditolak"
+
+
+# ===========================================================================
+# "Jalan di shell, mati di service" -- kelas kegagalan yang tidak pernah
+# terlihat saat diuji manual, karena yang diuji bukan yang dipakai produksi.
+# ===========================================================================
+
+def test_proses_browser_membungkus_diri_saat_display_kosong(monkeypatch):
+    """Chrome headed butuh DISPLAY. Shell selalu memanggil lewat `xvfb-run -a`,
+    unit systemd memanggil uvicorn langsung -- jadi fitur ini bisa lolos setiap
+    pengujian manual dan tetap mati di server.
+
+    Syaratnya tidak boleh dititipkan ke berkas unit: berkas unit tidak ikut
+    ter-`git pull` dan harus diingat orang. Prosesnya membungkus dirinya."""
+    import core.idx_cf as idx
+
+    import shutil as _sh
+
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(_sh, "which",
+                        lambda n: "/usr/bin/xvfb-run" if n == "xvfb-run" else None)
+
+    perintah = idx._perintah_browser("/apa/saja.py")
+    assert perintah[0].endswith("xvfb-run"), f"tidak dibungkus xvfb-run: {perintah}"
+    assert "-a" in perintah
+    assert perintah[-1] == "/apa/saja.py"
+
+
+def test_tidak_membungkus_dua_kali_kalau_display_sudah_ada(monkeypatch):
+    """Dijalankan dari shell di bawah xvfb-run, DISPLAY sudah ada. Membungkus
+    lagi berarti Xvfb di dalam Xvfb -- pemborosan yang gagalnya tidak jelas."""
+    import shutil as _sh
+
+    import core.idx_cf as idx
+
+    monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.setattr(_sh, "which", lambda n: "/usr/bin/xvfb-run")
+    perintah = idx._perintah_browser("/apa/saja.py")
+    assert "xvfb-run" not in perintah[0]
+    assert perintah[-1] == "/apa/saja.py"
+
+
+def test_gagal_start_menyebutkan_sebabnya_bukan_titik_dua_kosong():
+    """Kalau Chrome tidak bisa membuka display, stdout langsung EOF dan baris
+    pertamanya kosong -- sedangkan alasannya ada di stderr. Versi lama
+    melaporkan "pelayan browser idx gagal start:" tanpa apa pun sesudahnya,
+    dan penelusuran jadi berangkat dari nol padahal jawabannya sudah dicetak."""
+    import asyncio
+
+    import core.idx_cf as idx
+
+    class _StderrPalsu:
+        async def read(self, n):
+            return b"Xvfb: command not found\nchrome: cannot open display\n"
+
+    class _ProcPalsu:
+        stderr = _StderrPalsu()
+
+    sebab = asyncio.run(idx._ekor_stderr(_ProcPalsu()))
+    assert "cannot open display" in sebab
+    assert sebab.strip(), "ekor stderr kosong -- pesan gagal akan buntu lagi"
+
+
+def test_membunuh_pelayan_ikut_membunuh_anaknya():
+    """xvfb-run adalah PEMBUNGKUS, bukan Chrome-nya. Membunuh pembungkusnya
+    saja meninggalkan Xvfb dan Chrome hidup; beberapa kali gagal-dan-ulang
+    menumpuk Chrome yatim sampai memori server habis -- kegagalan yang
+    muncul jauh dari sebabnya."""
+    import os
+
+    import core.idx_cf as idx
+
+    opsi = idx._opsi_sesi_baru()
+    if os.name == "posix":
+        assert opsi.get("start_new_session") is True, (
+            "tanpa sesi sendiri, grup prosesnya tidak bisa dibunuh utuh")
+    else:
+        assert opsi == {}

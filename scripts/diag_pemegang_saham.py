@@ -35,7 +35,33 @@ async def utama():
         jalur = shutil.which(nama)
         print(f"   {'ADA   ' if jalur else 'TIDAK '} {nama}"
               + (f"  -> {jalur}" if jalur else ""))
-    print(f"   DISPLAY = {os.environ.get('DISPLAY') or '(kosong)'}")
+    tampilan = os.environ.get("DISPLAY")
+    print(f"   DISPLAY = {tampilan or '(kosong)'}")
+    if not tampilan:
+        print("   (kosong itu TIDAK apa-apa: proses browser membungkus dirinya")
+        print("    sendiri dengan xvfb-run. Yang wajib ada: paket xvfb.)")
+    try:
+        from core.idx_cf import _perintah_browser
+        print(f"   perintah dipakai: {' '.join(_perintah_browser('scripts/idx_agent.py'))}")
+    except Exception as e:
+        print(f"   tidak bisa dibaca: {type(e).__name__}: {e}")
+
+    tahap("1b", "Pelayan browser bisa hidup?")
+    # Tahap TERSENDIRI karena inilah yang berbeda antara shell dan service:
+    # dijalankan lewat `xvfb-run -a python3 ...` semuanya jalan, sedangkan
+    # systemd memanggil uvicorn langsung tanpa DISPLAY. Kalau tahap ini lolos
+    # di shell TAPI fiturnya tetap mati di web, jalankan skrip ini TANPA
+    # xvfb-run -- begitulah service menjalankannya.
+    try:
+        from core.idx_cf import _agent_hidup, _agent_mati
+        await _agent_hidup()
+        print("   pelayan browser: SIAP")
+        await _agent_mati()
+    except Exception as e:
+        print(f"   pelayan browser GAGAL: {type(e).__name__}: {e}")
+        print("\n   >> Ini mata rantai yang putus. Kalau pesannya menyebut")
+        print("      display/Xvfb: `sudo apt install -y xvfb`.")
+        return
 
     tahap(2, "Solver Cloudflare (ambil cf_clearance)")
     # TIDAK memaksa solve baru secara bawaan. Versi pertama skrip ini memakai

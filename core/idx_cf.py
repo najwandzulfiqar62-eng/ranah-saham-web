@@ -16,9 +16,15 @@ sebagai subprocess (Chrome tereklaim bersih tiap kali), simpan cookie+UA.
 idx_get_json / idx_get_bytes -> curl_cffi dgn cookie; sekali 403 -> paksa
 refresh cookie & ulang.
 
-Prasyarat runtime di server: Google Chrome stable + Xvfb (DISPLAY di-set di
-environment service). Import berat (curl_cffi) dilakukan di dalam fungsi
-supaya modul ini AMAN diimpor di mesin dev/test tanpa dependensi itu.
+Prasyarat runtime di server: Google Chrome stable + paket xvfb. DISPLAY
+TIDAK perlu di-set di unit systemd -- proses browsernya membungkus dirinya
+sendiri dengan xvfb-run saat DISPLAY kosong (lihat _perintah_browser).
+Syarat yang harus diingat orang dan tidak ikut ter-`git pull` adalah syarat
+yang cepat atau lambat terlupa, dan itulah yang membuat fitur ini jalan saat
+diuji dari shell tapi mati di service.
+
+Import berat (curl_cffi) dilakukan di dalam fungsi supaya modul ini AMAN
+diimpor di mesin dev/test tanpa dependensi itu.
 """
 import asyncio
 import json
@@ -35,6 +41,84 @@ _lock = asyncio.Lock()
 _cache = {"cookies": None, "ua": None, "ch": None, "ts": 0.0}
 
 
+def _perintah_browser(script: str) -> list[str]:
+    """Perintah untuk menjalankan skrip yang butuh Chrome BERJENDELA.
+
+    KENAPA ADA -- ini sebab "jalan waktu dicoba manual, mati di server".
+    Chrome headed perlu DISPLAY. Di shell perintahnya selalu diawali
+    `xvfb-run -a`, jadi DISPLAY ada dan semuanya bekerja. Tapi unit systemd
+    memanggil uvicorn langsung: tidak ada xvfb-run, tidak ada DISPLAY, dan
+    Chrome mati sebelum sempat membuka apa pun. Dua cara menjalankan yang
+    sama sekali berbeda, dan yang dipakai saat menguji justru bukan yang
+    dipakai di produksi.
+
+    Ketimbang menitipkan syarat itu ke berkas unit (yang harus diingat orang
+    dan tidak ikut ter-`git pull`), prosesnya membungkus dirinya sendiri:
+    kalau DISPLAY kosong dan xvfb-run ada, ia dipakai. Kalau DISPLAY sudah
+    ada -- misalnya sudah dijalankan di bawah xvfb-run dari shell -- tidak
+    dibungkus dua kali.
+    """
+    import shutil
+
+    dasar = [sys.executable, script]
+    if os.environ.get("DISPLAY"):
+        return dasar
+    xvfb = shutil.which("xvfb-run")
+    if not xvfb:
+        # Biarkan gagal di Chrome, bukan di sini: pesan dari Chrome jauh
+        # lebih menunjuk daripada tebakan kita tentang sebabnya.
+        return dasar
+    return [xvfb, "-a", "--server-args=-screen 0 1366x768x24"] + dasar
+
+
+def _opsi_sesi_baru() -> dict:
+    """Jalankan subprocess di grup proses sendiri, supaya bisa dibunuh utuh.
+
+    Perlu karena pembungkus xvfb-run bukan Chrome-nya: membunuh xvfb-run saja
+    meninggalkan Chrome dan Xvfb hidup sebagai yatim. Beberapa kali gagal dan
+    coba lagi akan menumpuk Chrome yang tak terpakai sampai memori server
+    habis -- kegagalan yang muncul jauh dari sebabnya.
+    """
+    if os.name == "posix":
+        return {"start_new_session": True}
+    return {}
+
+
+def _bunuh_pohon(proc) -> None:
+    """Bunuh subprocess BESERTA anak-anaknya (xvfb-run -> Xvfb -> Chrome)."""
+    if proc is None:
+        return
+    try:
+        if os.name == "posix":
+            import signal
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:
+            proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+async def _ekor_stderr(proc, batas: int = 400) -> str:
+    """Baca sisa stderr subprocess tanpa menggantung kalau ia masih hidup.
+
+    Sebelum ini ada, kegagalan start terbaca sebagai "pelayan browser idx
+    gagal start:" -- titik, tanpa apa pun sesudahnya. Sebabnya: kalau Chrome
+    mati, stdout langsung EOF (baris kosong), sedangkan alasan sebenarnya
+    ada di stderr yang tidak pernah dibaca. Pesan kosong itu membuat
+    penelusuran berangkat dari nol padahal jawabannya sudah tercetak.
+    """
+    if proc.stderr is None:
+        return ""
+    try:
+        data = await asyncio.wait_for(proc.stderr.read(8192), timeout=3)
+    except Exception:
+        return ""
+    return " ".join(data.decode("utf-8", "replace").split())[-batas:]
+
+
 class IdxCfError(RuntimeError):
     """Gagal menembus Cloudflare idx.co.id (solve gagal / tetap 403).
 
@@ -46,16 +130,14 @@ class IdxCfError(RuntimeError):
 async def _run_solver() -> tuple[dict, str, dict | None]:
     """Jalankan scripts/idx_solve.py sbg subprocess -> (cookies, ua, client-hints)."""
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, _SOLVE_SCRIPT,
+        *_perintah_browser(_SOLVE_SCRIPT),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        **_opsi_sesi_baru(),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=_SOLVE_TIMEOUT)
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
+        _bunuh_pohon(proc)
         raise IdxCfError(f"solve Cloudflare idx.co.id timeout (>{_SOLVE_TIMEOUT}s)")
 
     for line in out.decode("utf-8", "replace").splitlines():
@@ -305,12 +387,7 @@ class _BalasanBrowser:
 
 
 async def _agent_mati():
-    p = _agent.get("proc")
-    if p is not None:
-        try:
-            p.kill()
-        except Exception:
-            pass
+    _bunuh_pohon(_agent.get("proc"))
     _agent["proc"] = None
 
 
@@ -321,27 +398,31 @@ async def _agent_hidup():
         return p
 
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, _AGENT_SCRIPT,
+        *_perintah_browser(_AGENT_SCRIPT),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE, **_opsi_sesi_baru(),
     )
     try:
         baris = await asyncio.wait_for(proc.stdout.readline(),
                                        timeout=_AGENT_START_TIMEOUT)
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        raise IdxCfError(f"pelayan browser idx tidak siap dalam {_AGENT_START_TIMEOUT}s")
+        sebab = await _ekor_stderr(proc)
+        _bunuh_pohon(proc)
+        raise IdxCfError(
+            f"pelayan browser idx tidak siap dalam {_AGENT_START_TIMEOUT}s"
+            + (f" -- {sebab}" if sebab else ""))
 
     pesan = baris.decode("utf-8", "replace").strip()
     if pesan != "READY":
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        raise IdxCfError(f"pelayan browser idx gagal start: {pesan[:200]}")
+        # Stderr DULU, baru stdout. Kalau Chrome tidak bisa membuka display,
+        # stdout langsung EOF dan `pesan` kosong -- alasannya cuma ada di
+        # stderr, dan tanpa ini pesannya berhenti di titik dua.
+        sebab = await _ekor_stderr(proc) or pesan[:200] or "berhenti tanpa pesan"
+        _bunuh_pohon(proc)
+        if "DISPLAY" in sebab or "display" in sebab:
+            sebab += (" | DISPLAY tidak ada dan xvfb-run tidak ditemukan: "
+                      "pasang paket xvfb di server")
+        raise IdxCfError(f"pelayan browser idx gagal start: {sebab}")
 
     _agent["proc"] = proc
     print("\u2139\ufe0f idx_cf: pelayan browser siap", flush=True)
