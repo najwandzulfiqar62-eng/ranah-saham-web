@@ -24,6 +24,54 @@ sys.path.insert(0, AKAR)
 os.chdir(AKAR)
 
 
+def _interpreter_service():
+    """Interpreter yang BENAR-BENAR dipakai service, kalau proyek ini pakai venv."""
+    for kandidat in (os.path.join(AKAR, "venv", "bin", "python"),
+                     os.path.join(AKAR, "venv", "bin", "python3"),
+                     os.path.join(AKAR, ".venv", "bin", "python")):
+        if os.path.exists(kandidat):
+            return kandidat
+    return None
+
+
+def _pastikan_interpreter_produksi():
+    """Jalankan ulang diri sendiri dengan interpreter venv kalau berbeda.
+
+    KENAPA MEMAKSA, bukan sekadar memperingatkan. Skrip ini gunanya cuma satu:
+    menggambarkan keadaan PRODUKSI. Dijalankan dengan interpreter yang salah,
+    ia tetap mencetak kesimpulan yang rapi dan meyakinkan -- tentang mesin
+    yang lain. Terbukti 18 Sep 2026: `python3 scripts/diag_pemegang_saham.py`
+    melaporkan "nodriver TIDAK ADA" karena /usr/bin/python3 (3.10) memang
+    tidak punya, sementara service berjalan dari venv/bin/uvicorn yang boleh
+    jadi punya. Dua putaran penelusuran terbuang ke temuan yang tidak ada
+    hubungannya dengan yang sedang rusak.
+
+    Ini kesalahan yang sama dengan soal DISPLAY, cuma pindah lapisan: yang
+    diuji bukan yang dipakai. Alat diagnosis yang bisa salah sasaran seperti
+    itu lebih buruk daripada tidak ada alat, karena ia terdengar yakin.
+    """
+    if "--apa-adanya" in sys.argv:
+        return
+    venv = _interpreter_service()
+    if not venv:
+        return
+    try:
+        if os.path.samefile(venv, sys.executable):
+            return
+    except OSError:
+        if os.path.realpath(venv) == os.path.realpath(sys.executable):
+            return
+    print(f"Dijalankan dengan : {sys.executable}")
+    print(f"Service memakai   : {venv}")
+    print("Menjalankan ulang dengan interpreter service, supaya yang diperiksa")
+    print("memang yang dipakai produksi. (paksa dengan --apa-adanya)\n")
+    sys.stdout.flush()
+    os.execv(venv, [venv, os.path.abspath(__file__)] + sys.argv[1:])
+
+
+_pastikan_interpreter_produksi()
+
+
 def tahap(n, judul):
     print(f"\n{'=' * 60}\n{n}. {judul}\n{'=' * 60}")
 
@@ -62,7 +110,8 @@ async def utama():
         print("      >> Pasang di interpreter YANG SAMA dengan yang dipakai")
         print("         service, bukan sekadar `pip install nodriver`:")
         print(f"         {sys.executable} -m pip install nodriver")
-    print("   dipakai service: cek `systemctl show -p ExecStart ranahsaham`")
+    venv = _interpreter_service()
+    print(f"   interpreter service: {venv or '(tidak ada venv, pakai sistem)'}")
 
     tahap("1b", "Pelayan browser bisa hidup?")
     # Tahap TERSENDIRI karena inilah yang berbeda antara shell dan service:
@@ -76,9 +125,22 @@ async def utama():
         print("   pelayan browser: SIAP")
         await _agent_mati()
     except Exception as e:
-        print(f"   pelayan browser GAGAL: {type(e).__name__}: {e}")
-        print("\n   >> Ini mata rantai yang putus. Kalau pesannya menyebut")
-        print("      display/Xvfb: `sudo apt install -y xvfb`.")
+        pesan = f"{type(e).__name__}: {e}"
+        print(f"   pelayan browser GAGAL: {pesan}")
+        print("\n   >> Ini mata rantai yang putus.")
+        # Saran yang MENGIKUTI pesannya, bukan satu saran untuk segala
+        # kegagalan. Versi sebelumnya selalu menyarankan memasang xvfb --
+        # termasuk saat xvfb jelas-jelas sudah ada dan yang hilang nodriver.
+        # Saran yang tidak nyambung membuat orang meragukan temuan yang benar.
+        if "No module named" in pesan:
+            hilang = pesan.split("No module named")[-1].strip().strip("'\"")
+            print(f"      Modul '{hilang}' tidak ada di interpreter yang")
+            print("      menjalankan pelayan browser. Pasang ke SITU:")
+            print(f"         {sys.executable} -m pip install {hilang}")
+        elif "display" in pesan.lower() or "Xvfb" in pesan:
+            print("      `sudo apt install -y xvfb`")
+        else:
+            print("      Baris terakhir pesan di atas menyebut jenis galatnya.")
         return
 
     tahap(2, "Solver Cloudflare (ambil cf_clearance)")
