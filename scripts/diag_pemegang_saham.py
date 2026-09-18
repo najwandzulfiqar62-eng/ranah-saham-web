@@ -143,7 +143,14 @@ async def utama():
             print("      Baris terakhir pesan di atas menyebut jenis galatnya.")
         return
 
-    tahap(2, "Solver Cloudflare (ambil cf_clearance)")
+    tahap(2, "Solver Cloudflare (ambil cf_clearance) -- jalur MURAH, opsional")
+    # BUKAN mata rantai wajib, dan sejak 18 Sep 2026 tahap ini TIDAK LAGI
+    # menghentikan pemeriksaan kalau gagal. Solver cuma melayani jalur murah
+    # (curl_cffi). Selama pelayan browser di tahap 1b hidup, datanya tetap
+    # bisa diambil -- cuma lebih mahal. Versi sebelumnya berhenti di sini dan
+    # melaporkan "mata rantai yang putus", padahal rantainya utuh lewat jalan
+    # yang lain; laporan itu sendiri yang menyesatkan.
+    #
     # TIDAK memaksa solve baru secara bawaan. Versi pertama skrip ini memakai
     # force=True, dan itu keliru: tiap kali dijalankan ia melewati cache 15
     # menit lalu menembak challenge Cloudflare lagi. Menjalankannya beberapa
@@ -162,19 +169,18 @@ async def utama():
         print(f"   cf_clearance   : {'ADA' if punya_cf else 'TIDAK ADA'}")
         print(f"   user-agent     : {(ua or '')[:70]}")
         if not punya_cf:
-            print("\n   >> BERHENTI: cookie utama tidak didapat.")
-            return
+            print("   (jalur murah tidak siap -- lanjut lewat pelayan browser)")
     except Exception as e:
         print(f"   GAGAL: {type(e).__name__}: {e}")
-        traceback.print_exc(limit=3)
-        print("\n   >> BERHENTI di tahap 2. Ini mata rantai yang putus.")
+        print("\n   >> Jalur MURAH mati, rantainya TIDAK putus. Permintaan")
+        print("      dilayani pelayan browser (lebih lambat, tetap benar).")
+        print("      Lanjut memeriksa tahap berikutnya.")
         if "tidak selesai" in str(e):
             print("\n   Judul yang menggantung di 'Just a moment...' berarti")
             print("   Cloudflare MENAHAN, bukan lambat. Penyebab tersering:")
             print("   challenge ditembak berulang kali dari IP yang sama dalam")
             print("   waktu singkat. Diamkan 15-30 menit, lalu coba lagi TANPA")
             print("   --paksa. Mencoba terus justru memperpanjang penahanannya.")
-        return
 
     tahap("3a", "Isi balasan mentah dari idx.co.id (siapa yang menolak?)")
     # 403 saja tidak cukup untuk menyimpulkan apa pun. Cloudflare yang

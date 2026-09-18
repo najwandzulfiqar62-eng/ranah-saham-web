@@ -394,3 +394,90 @@ def test_membunuh_pelayan_ikut_membunuh_anaknya():
             "tanpa sesi sendiri, grup prosesnya tidak bisa dibunuh utuh")
     else:
         assert opsi == {}
+
+
+def test_solver_mati_tidak_menjatuhkan_permintaan(idx, monkeypatch):
+    """Solver mati = jalur MURAH tidak siap, bukan rantai putus.
+
+    Terbukti di server 18 Sep 2026: solver keluar rc=2 (challenge tidak
+    selesai), get_session() melempar IdxCfError, dan galat itu keluar dari
+    _idx_get membawa seluruh permintaan -- padahal pelayan browser sedang
+    hidup dan terbukti bisa mengambil datanya (diag tahap 1b: SIAP).
+
+    Fiturnya mati bukan karena jalan yang benar tertutup, tapi karena jalan
+    pintas gagal berkemas. Cadangan yang cuma menangkap SATU bentuk
+    kegagalan (403) bukan cadangan; ia kebetulan menolong."""
+    import asyncio
+
+    jejak = []
+
+    async def _sesi_mati(force=False):
+        jejak.append("solve")
+        raise idx.IdxCfError("solve Cloudflare idx.co.id gagal (rc=2): challenge tidak selesai")
+
+    async def _agent(url):
+        jejak.append("browser")
+        return idx._BalasanBrowser(200, '{"ok": true}')
+
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    monkeypatch.setattr(idx, "get_session", _sesi_mati)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setattr(idx, "_target_impersonate", lambda: "chrome150")
+    _pasang_cffi(monkeypatch, 200)
+
+    resp = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+    assert resp.status_code == 200
+    assert resp.text == '{"ok": true}'
+    assert "browser" in jejak, "pelayan browser tidak dipakai padahal ia hidup"
+
+
+def test_solver_mati_ikut_kena_masa_istirahat(idx, monkeypatch):
+    """Justru di sini jedanya paling perlu: satu solve GAGAL berarti Chrome
+    menyala sampai 45 detik untuk ketiadaan hasil. Tanpa jeda, tiap
+    permintaan mengulanginya -- menyapu 90 hari jadi berjam-jam."""
+    import asyncio
+
+    jejak = []
+
+    async def _sesi_mati(force=False):
+        jejak.append("solve")
+        raise idx.IdxCfError("solve gagal")
+
+    async def _agent(url):
+        jejak.append("browser")
+        return idx._BalasanBrowser(200, "{}")
+
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    monkeypatch.setattr(idx, "get_session", _sesi_mati)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setattr(idx, "_target_impersonate", lambda: "chrome150")
+    _pasang_cffi(monkeypatch, 200)
+
+    for _ in range(5):
+        asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+
+    assert jejak.count("solve") == 1, f"solve diulang tiap permintaan: {jejak}"
+    assert jejak.count("browser") == 5, jejak
+
+
+def test_curl_cffi_hilang_pun_tetap_dilayani(idx, monkeypatch):
+    """Bukan cuma solver. Apa pun yang menggagalkan jalur murah -- paket
+    curl_cffi tidak terpasang, jaringan putus -- harus berakhir di tempat
+    yang sama."""
+    import asyncio
+    import sys as _s
+
+    async def _sesi(force=False):
+        return {"cf_clearance": "x"}, UA_LINUX
+
+    async def _agent(url):
+        return idx._BalasanBrowser(200, '{"lewat": "browser"}')
+
+    monkeypatch.setattr(idx, "_cffi_istirahat_sampai", 0.0, raising=False)
+    monkeypatch.setattr(idx, "get_session", _sesi)
+    monkeypatch.setattr(idx, "_agent_get", _agent)
+    monkeypatch.setitem(_s.modules, "curl_cffi", None)   # import -> ImportError
+
+    resp = asyncio.run(idx._idx_get("https://x", timeout=5, accept="application/json"))
+    assert resp.status_code == 200
+    assert "browser" in resp.text

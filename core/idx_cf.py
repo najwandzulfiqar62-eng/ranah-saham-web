@@ -165,8 +165,20 @@ async def _run_solver() -> tuple[dict, str, dict | None]:
         if line.startswith("RESULT_JSON:"):
             data = json.loads(line[len("RESULT_JSON:"):])
             return data["cookies"], data["ua"], data.get("ch")
-    tail = err.decode("utf-8", "replace").strip()[-300:]
-    raise IdxCfError(f"solve Cloudflare idx.co.id gagal (rc={proc.returncode}): {tail}")
+    # stdout ikut dilihat kalau stderr kosong. Beberapa jalur keluar solver
+    # mencetak alasannya ke stdout, dan pesan yang berakhir di titik dua
+    # ("gagal (rc=2):") memaksa penelusuran berangkat dari nol -- sudah
+    # terjadi 18 Sep 2026.
+    tail = " ".join(err.decode("utf-8", "replace").split())[-400:]
+    if not tail:
+        tail = " ".join(out.decode("utf-8", "replace").split())[-400:]
+    if not tail and proc.returncode == 2:
+        tail = ("challenge Cloudflare tidak selesai dalam batas waktu solver "
+                "(bukan galat program). Sering terjadi kalau challenge "
+                "ditembak berulang kali dari IP yang sama.")
+    raise IdxCfError(
+        f"solve Cloudflare idx.co.id gagal (rc={proc.returncode}): "
+        + (tail or "tanpa pesan apa pun"))
 
 
 async def get_session(force: bool = False) -> tuple[dict, str]:
@@ -353,6 +365,10 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
     yang sudah memegang satu sesi hidup, jadi biayanya ~0,2 detik per URL.
     Sesudah jendela itu lewat, curl_cffi dicoba lagi sekali; kalau Cloudflare
     sudah melonggar, jalur murah dipakai lagi dengan sendirinya.
+
+    JALUR MURAH TIDAK BOLEH MENJATUHKAN PERMINTAAN. Kegagalan apa pun di
+    dalamnya -- termasuk saat MENYIAPKANNYA, bukan cuma balasan 403 --
+    berakhir di pelayan browser. Lihat catatan panjang di badan fungsi.
     """
     global _cffi_istirahat_sampai
 
@@ -362,22 +378,42 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
     if time.time() < _cffi_istirahat_sampai:
         return await _agent_get(url)
 
-    from curl_cffi import requests as _cffi
+    # SELURUH percobaan jalur murah dibungkus, termasuk PERSIAPANNYA.
+    #
+    # Terbukti 18 Sep 2026 di server: solver mati (rc=2, challenge tidak
+    # selesai) sehingga get_session() melempar IdxCfError -- dan galat itu
+    # keluar dari fungsi ini, membawa serta seluruh permintaan. Padahal
+    # pelayan browser di bawah sedang hidup dan terbukti bisa mengambil
+    # datanya (diag tahap 1b: SIAP). Jadi fiturnya mati bukan karena jalan
+    # yang benar tertutup, melainkan karena jalan pintas gagal berkemas.
+    #
+    # Cadangan yang cuma menangkap SATU bentuk kegagalan (403) bukan
+    # cadangan; ia kebetulan menolong. Apa pun yang menggagalkan jalur murah
+    # -- solver mati, curl_cffi tidak terpasang, jaringan putus -- harus
+    # berakhir di tempat yang sama: pelayan browser.
+    try:
+        from curl_cffi import requests as _cffi
 
-    loop = asyncio.get_event_loop()
-    cookies, ua = await get_session()
+        loop = asyncio.get_event_loop()
+        cookies, ua = await get_session()
 
-    def _do(_cookies, _ua):
-        return _cffi.get(url, headers=_header_permintaan(_ua, accept),
-                         cookies=_cookies, impersonate=_target_impersonate(),
-                         timeout=timeout)
+        def _do(_cookies, _ua):
+            return _cffi.get(url, headers=_header_permintaan(_ua, accept),
+                             cookies=_cookies, impersonate=_target_impersonate(),
+                             timeout=timeout)
 
-    resp = await loop.run_in_executor(None, _do, cookies, ua)
-    if resp.status_code != 403:
-        return resp
+        resp = await loop.run_in_executor(None, _do, cookies, ua)
+        if resp.status_code != 403:
+            return resp
+        sebab = f"ditolak ({resp.status_code})"
+    except Exception as e:
+        # Istirahatnya dipasang juga di sini, dan justru di sini paling perlu:
+        # satu solve yang gagal berarti Chrome menyala ~45 detik untuk
+        # ketiadaan hasil. Tanpa jeda, tiap permintaan mengulanginya.
+        sebab = f"gagal disiapkan ({type(e).__name__}: {e})"
 
     _cffi_istirahat_sampai = time.time() + _CFFI_ISTIRAHAT
-    print(f"\u2139\ufe0f idx_cf: curl_cffi ditolak ({resp.status_code}); "
+    print(f"\u2139\ufe0f idx_cf: curl_cffi {sebab}; "
           f"pakai pelayan browser selama {_CFFI_ISTIRAHAT // 60} menit", flush=True)
     return await _agent_get(url)
 
