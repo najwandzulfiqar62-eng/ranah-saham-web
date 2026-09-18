@@ -6590,13 +6590,21 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
     # IP rumah tetap jalan mulus (tidak ada challenge). Lihat core/idx_cf.py.
     from core.idx_cf import idx_get_json, idx_get_bytes, IdxCfError
 
-    cache_key = f"x15raw:{days_back}"
+    # Tanggal acuan = WIB (lihat _WIB di atas), bukan jam lokal server.
+    hari_ini = _dt.now(_WIB) - _td(days=days_back)
+    today = hari_ini.strftime("%Y%m%d")
+    tanggal_iso = hari_ini.strftime("%Y-%m-%d")
+
+    # Kunci memakai TANGGAL, bukan "berapa hari lalu". Versi lama memakai
+    # x15raw:{days_back} dengan umur 24 jam, dan itu salah melintasi tengah
+    # malam: x15raw:5 yang ditulis pukul 23.00 masih dianggap sah pukul 01.00
+    # keesokan harinya -- padahal "5 hari lalu" sudah menunjuk hari kalender
+    # yang berbeda. Bukan sekadar basi, tapi filing hari yang KELIRU disajikan
+    # sebagai hari yang diminta, tanpa ada yang error.
+    cache_key = f"x15raw:tgl:{tanggal_iso}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-
-    # Tanggal acuan = WIB (lihat _WIB di atas), bukan jam lokal server.
-    today = (_dt.now(_WIB) - _td(days=days_back)).strftime("%Y%m%d")
     url = ("https://www.idx.co.id/primary/ListedCompany/GetAnnouncement"
            f"?emitenType=*&indexFrom=0&pageSize=100&dateFrom={today}&dateTo={today}"
            "&lang=id&keyword=kepemilikan")
@@ -6645,6 +6653,19 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
             })
         except Exception:
             continue
+
+    # SIMPAN, bukan cuma cache. Filing X-15 itu arsip: sekali terbit isinya
+    # tidak berubah lagi, jadi tidak ada alasan menaruhnya cuma di tempat
+    # yang kedaluwarsa. Inilah yang membuat riwayat menumpuk alih-alih
+    # menguap saat idx.co.id tidak terjangkau -- lihat core/x15_store.py.
+    try:
+        from core.x15_store import simpan_filing
+        baru = simpan_filing(results)
+        if baru:
+            print(f"ℹ️ x15: {baru} filing baru disimpan ({tanggal_iso})", flush=True)
+    except Exception as e:
+        # Menyimpan itu tambahan, bukan syarat.
+        print(f"⚠️ x15: gagal menyimpan: {type(e).__name__}: {e}", flush=True)
 
     _cache_set(cache_key, results, ttl=_CACHE_TTL if days_back == 0 else _CACHE_TTL_HISTORICAL)
     return results
@@ -6738,11 +6759,44 @@ async def _fetch_x15_history_for_kode(kode: str, days: int = 90) -> list[dict]:
         return_exceptions=True,
     )
     kode = kode.upper()
+
+    # SIMPANAN DULU, baru hasil hari ini ditumpuk di atasnya.
+    #
+    # Sebelum ini ada, seluruh riwayat cuma hidup di cache 24 jam. Selama
+    # idx.co.id bisa dihubungi tiap hari ia terus terisi ulang dan TERLIHAT
+    # seperti arsip; begitu sumbernya menolak (403), tidak ada lagi yang
+    # mengisi ulang dan isinya menguap satu per satu sampai habis. Tidak ada
+    # yang menghapusnya -- ia memang tidak pernah disimpan.
+    #
+    # Sekarang hari yang gagal diambil tidak lagi berarti hari yang hilang,
+    # selama ia pernah berhasil diambil sekali.
     items = []
+    n_simpanan = 0
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+
+        from core.x15_store import ambil_untuk_kode
+        sejak = (_dt.now(_WIB) - _td(days=days)).strftime("%Y-%m-%d")
+        items = ambil_untuk_kode(kode, sejak)
+        n_simpanan = len(items)
+    except Exception as e:
+        print(f"⚠️ x15: simpanan tidak terbaca: {type(e).__name__}: {e}",
+              flush=True)
+
+    # Dedup berdasarkan URL PDF: satu filing = satu PDF. Yang dari simpanan
+    # dan yang baru diambil pasti bertumpang tindih, dan menghitungnya dua
+    # kali akan menggandakan angka perubahan kepemilikan.
+    sudah = {x.get("pdf_url") for x in items if x.get("pdf_url")}
     for day_result in results_per_day:
         if isinstance(day_result, Exception):
             continue
-        items.extend(x for x in day_result if x["kode"] == kode)
+        for x in day_result:
+            if x["kode"] == kode and x.get("pdf_url") not in sudah:
+                sudah.add(x.get("pdf_url"))
+                items.append(x)
+    if n_simpanan:
+        print(f"ℹ️ x15 {kode}: {n_simpanan} dari simpanan, "
+              f"{len(items) - n_simpanan} baru dari idx.co.id", flush=True)
     return items
 
 
@@ -6763,10 +6817,25 @@ async def api_pemegang_saham(kode: str):
     if cached:
         return cached
 
+    # Gagal mengambil dari idx.co.id TIDAK lagi berarti gagal menjawab: yang
+    # pernah berhasil diambil sudah tersimpan. Yang boleh menggagalkan
+    # permintaan ini cuma satu keadaan -- tidak ada data sama sekali, baik
+    # dari idx.co.id maupun dari simpanan.
+    galat_hidup = None
     try:
         raw_items = await _fetch_x15_history_for_kode(kode, days=90)
     except Exception as e:
-        raise HTTPException(502, f"Gagal fetch data pemegang saham: {e}")
+        galat_hidup = f"{type(e).__name__}: {e}"
+        try:
+            from datetime import datetime as _dt2, timedelta as _td2
+
+            from core.x15_store import ambil_untuk_kode
+            raw_items = ambil_untuk_kode(
+                kode, (_dt2.now(_WIB) - _td2(days=90)).strftime("%Y-%m-%d"))
+        except Exception:
+            raw_items = []
+        if not raw_items:
+            raise HTTPException(502, f"Gagal fetch data pemegang saham: {e}")
 
     holders = _latest_x15_holders_for_kode(raw_items)
     for h in holders:
@@ -6777,6 +6846,14 @@ async def api_pemegang_saham(kode: str):
         "kode": kode,
         "holders": holders,
         "total": len(holders),
+        # Disebutkan apa adanya kalau idx.co.id sedang tidak terjangkau dan
+        # yang tampil berasal dari simpanan. Data lama yang disajikan seolah
+        # baru itu jenis kebohongan yang paling mahal di aplikasi seperti ini.
+        "dari_simpanan": bool(galat_hidup),
+        "catatan_sumber": (
+            "idx.co.id sedang tidak bisa dihubungi dari server, jadi yang "
+            "tampil adalah filing yang sudah tersimpan sebelumnya. Filing "
+            "yang terbit hari ini mungkin belum masuk." if galat_hidup else None),
         "disclaimer": ("Data dari filing X-15/POJK 4-2024 resmi IDX (pemegang ≥5% & insider yang "
                        "wajib lapor perubahan kepemilikan), 90 hari terakhir. BUKAN daftar lengkap "
                        "seluruh pemegang saham -- pemegang di bawah 5% (termasuk retail) tidak wajib "
