@@ -46,6 +46,7 @@
 # dokumentasi sebelumnya.
 
 import asyncio
+import os
 
 import numpy as np
 import pandas as pd
@@ -98,8 +99,41 @@ def _calculate_rs_vs_market(stock_close: pd.Series, market_close: pd.Series,
     return round(max(0, min(100, rs)), 1)
 
 
+# Berapa dari 8 kriteria trend template yang WAJIB terpenuhi supaya sebuah
+# saham boleh disebut Minervini di sini.
+#
+# KENAPA ADA: ambang skornya 65, padahal 8 kriteria itu cuma bernilai 60 dari
+# 100 -- momentum dan volume menyumbang 40 sisanya. Akibatnya saham dengan
+# 4/8 kriteria (30 poin) tetap lolos asal momentum dan volumenya penuh.
+# Setengah trend template gagal, tapi barisnya tetap muncul dengan label
+# "Minervini". Itu bukan saringan yang ketat kebetulan longgar; itu label
+# yang tidak benar.
+#
+# YANG DIUKUR sebelum angkanya dipilih (828 kali saham baru lolos, 217
+# emiten, riwayat 2 tahun, hasil dinilai 20 hari bursa sesudahnya):
+#
+#   kriteria      n   hasil 20h   puncak   menang
+#   4/8         292      +1,43%   13,23%    39,4%
+#   5/8         200      +3,51%   15,61%    41,5%
+#   6/8         225      +1,72%   16,64%    41,3%
+#   7/8          82      +2,78%   16,28%    43,9%
+#   8/8          29      +0,27%   16,74%    41,4%
+#
+# JUJURNYA: makin ketat TIDAK membuat hasil rupiahnya membaik -- yang 8/8
+# justru paling buruk (+0,27%), dan sampelnya tipis. Yang memang membaik
+# cuma dua hal kecil: peluang menang (39,4% -> 43,9%) dan tinggi puncak
+# (13,2% -> 16,3%). Jadi ambang ini dipasang untuk membuat LABELNYA benar
+# dan daftarnya bisa dipilih, bukan dengan janji untung lebih besar.
+#
+# Kenapa 7 dan bukan 8: pada 8/8 daftarnya tinggal ~13,9 saham/hari dan
+# hasilnya paling buruk; pada 7/8 masih ~22,0 saham/hari (dari ~31,6 di
+# aturan lama) -- berkurang sepertiga tanpa membuat daftarnya kosong.
+MIN_KRITERIA = int(os.getenv("MINERVINI_MIN_KRITERIA", "7"))
+
+
 async def run_screenerpro(tickers: list[str],
-                           market_close: pd.Series | None = None) -> list[dict]:
+                           market_close: pd.Series | None = None,
+                           catatan: dict | None = None) -> list[dict]:
     """Screening berbasis Minervini Trend Template (8 kriteria teknikal)
     + konfirmasi MACD+RSI (73% win rate dari backtest QuantifiedStrategies
     2026 untuk kombinasi ini).
@@ -109,8 +143,15 @@ async def run_screenerpro(tickers: list[str],
     - Konfirmasi momentum (25 poin max): MACD bullish + RSI zona sehat
     - Volume confirmation (15 poin max): volume di atas rata-rata
 
-    Hanya saham dengan skor >= 65 yang ditampilkan (threshold yang
-    menyaring ke ~5-15 saham terkuat dari 200 yang discan).
+    Yang ditampilkan harus lolos DUA syarat, bukan satu: skor >= 65 DAN
+    minimal MIN_KRITERIA dari 8 kriteria trend template benar-benar
+    terpenuhi. Syarat kedua yang membuat isinya memang Minervini -- lihat
+    alasan dan angkanya di komentar MIN_KRITERIA di atas.
+
+    `catatan` (kalau diberi) diisi {"tersaring": n, "min_kriteria": k}:
+    berapa saham berskor cukup yang dibuang karena kriterianya kurang.
+    Angka itu dipakai di layar supaya daftar yang tiba-tiba pendek bisa
+    dijelaskan, bukan terbaca seperti data yang gagal dimuat.
 
     Returns list terurut skor tertinggi ke terendah."""
     data = await async_download_many(tickers, period="1y", interval="1d")
@@ -122,6 +163,8 @@ async def run_screenerpro(tickers: list[str],
     # sehingga frontend menyimpulkan "belum login" dan memunculkan layar
     # masuk. Itu keluhan "web keluar-keluaran, disuruh login ulang" yang
     # sudah dilacak ke akar yang sama di tempat lain.
+    n_tolak = [0]
+
     def _nilai_semua(sebagian):
         hasil = []
         for ticker in sebagian:
@@ -134,7 +177,12 @@ async def run_screenerpro(tickers: list[str],
                     continue  # perlu 200 bar untuk MA200
 
                 result = _score_minervini(df, ticker.replace(".JK", ""), market_close)
-                if result and result["skor"] >= 65:
+                if result and result["skor"] < 65:
+                    continue
+                if result and result["criteria_met"] < MIN_KRITERIA:
+                    n_tolak[0] += 1
+                    continue
+                if result:
                     # Rencana entry dihitung HANYA untuk yang lolos (segelintir
                     # dari ratusan), jadi biayanya kecil -- dan df-nya sudah di
                     # tangan, jadi tidak ada unduhan tambahan.
@@ -155,6 +203,9 @@ async def run_screenerpro(tickers: list[str],
     for i in range(0, len(daftar), 20):
         results += await asyncio.to_thread(_nilai_semua, daftar[i:i + 20])
         await asyncio.sleep(0)
+    if catatan is not None:
+        catatan["tersaring"] = n_tolak[0]
+        catatan["min_kriteria"] = MIN_KRITERIA
     return sorted(results, key=lambda x: x["skor"], reverse=True)
 
 

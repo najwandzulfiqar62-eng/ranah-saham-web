@@ -5951,3 +5951,73 @@ def test_potensi_naik_diukur_dari_harga_sekarang_bukan_dari_entry_pullback():
     # yang kebetulan enak dibaca.
     assert r["potensi_pct"] == pytest.approx((r["target_jauh"] / harga - 1) * 100, abs=0.05)
     assert r["potensi_pct"] > 0
+
+
+# ===========================================================================
+# SARINGAN MINERVINI: kriteria trend template adalah SYARAT, bukan sekadar
+# penyumbang skor.
+# ===========================================================================
+
+def test_minervini_menolak_saham_yang_skornya_ditolong_momentum():
+    """Saham dengan trend template setengah gagal TIDAK boleh masuk daftar
+    Minervini, walaupun skor totalnya lewat 65.
+
+    Ini akar masalah yang ditutup 18 Sep 2026: 8 kriteria cuma bernilai 60
+    dari 100, sedangkan momentum + volume menyumbang 40. Jadi saham dengan
+    4/8 kriteria (30 poin) lolos asal momentum dan volumenya penuh -- separuh
+    trend template gagal, tapi barisnya tetap tampil dengan label "Minervini".
+    Yang salah bukan angkanya, melainkan namanya."""
+    import numpy as np
+    import pandas as pd
+
+    from core.screening_pro import MIN_KRITERIA, _score_minervini
+
+    assert 6 <= MIN_KRITERIA <= 8, "ambang kriteria di luar rentang yang masuk akal"
+
+    n = 300
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    # Turun panjang lalu memantul tajam di ujung: MA-nya masih menurun dan
+    # harga masih jauh di bawah 52W high, tapi MACD/RSI/volume terakhir kuat.
+    # Inilah bentuk saham yang dulu lolos "karena momentum".
+    harga = np.concatenate([np.linspace(2000, 1000, n - 15),
+                            np.linspace(1000, 1180, 15)])
+    vol = np.full(n, 1_000_000.0)
+    vol[-1] = 3_000_000.0
+    df = pd.DataFrame({"Open": harga, "High": harga * 1.01, "Low": harga * 0.99,
+                       "Close": harga, "Volume": vol}, index=idx)
+
+    hasil = _score_minervini(df, "UJI", None)
+    assert hasil is not None
+    assert hasil["criteria_met"] < MIN_KRITERIA, (
+        "data uji tidak lagi mewakili kasusnya -- kriterianya justru banyak "
+        "terpenuhi, jadi uji ini tidak membuktikan apa pun")
+    assert hasil["criteria_met"] < MIN_KRITERIA <= 8
+
+
+def test_screenerpro_melaporkan_berapa_yang_disaring(monkeypatch):
+    """Daftar yang tiba-tiba pendek harus bisa DIJELASKAN, bukan cuma pendek.
+
+    Tanpa angka ini, memperketat saringan terlihat persis seperti data yang
+    gagal dimuat -- dan itu jenis kebingungan yang justru mau dihilangkan."""
+    import asyncio
+
+    import core.screening_pro as sp
+    import web.app as app_module
+
+    async def _palsu(tickers, market_close=None, catatan=None):
+        if catatan is not None:
+            catatan["tersaring"] = 9
+            catatan["min_kriteria"] = sp.MIN_KRITERIA
+        return []
+
+    monkeypatch.setattr(sp, "run_screenerpro", _palsu)
+    monkeypatch.setattr(app_module, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "_cache_set", lambda *a, **k: None)
+
+    async def _ihsg(*a, **k):
+        return None
+
+    monkeypatch.setattr(app_module, "_clean", _ihsg)
+    payload = asyncio.run(app_module.screenerpro())
+    assert payload["tersaring"] == 9
+    assert payload["min_kriteria"] == sp.MIN_KRITERIA

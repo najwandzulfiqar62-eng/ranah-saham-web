@@ -1570,20 +1570,26 @@ function _catatanEntryMinervini(items){
 // Ambang "potensi naik" yang sedang dipilih di tab Minervini. 0 = semua.
 // Disimpan di luar fungsi supaya pilihannya bertahan saat daftar dimuat ulang.
 let mvMinPotensi = 0;
+// Tampilkan hanya yang 8/8 kriteria. Ini pilihan TAMPILAN di atas daftar yang
+// sudah disaring server (minimal 7/8), bukan saringan kedua yang bersaing.
+let mvPenuhSaja = false;
 
 async function loadScreenerPro(){
   const body=$('#uniBody');
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Memindai ±178 saham likuid (Minervini)… 20–40 detik</p>';
   let d; try{d=await api('/api/screenerpro')}catch(e){body.innerHTML=errBox(e.message);return}
   const semua=d.items||[];
-  // Disaring di SINI, bukan di backend: hasil saringan Minervini dipakai
-  // bersama fitur lain (sumber sinyal Minervini x Harmonic membaca cache
-  // yang sama), jadi memotongnya di server akan diam-diam mengubah teori
-  // lain yang tidak ada urusannya dengan pilihan tampilan ini.
-  const items=mvMinPotensi
-    ? semua.filter(r=>r.rencana_entry&&r.rencana_entry.potensi_pct>=mvMinPotensi)
-    : semua;
-  if(!semua.length){body.innerHTML=`<section class="panel">${emptyState('Belum ada saham yang lolos ambang skor Minervini (≥65) saat ini. Pasar mungkin sedang lemah.')}</section>`;return}
+  const minKriteria=d.min_kriteria||7, tersaring=d.tersaring||0;
+  // Dua saringan yang sengaja dipisah tempatnya:
+  // - KRITERIA (min 7/8) disaring di SERVER. Itu soal apakah sahamnya berhak
+  //   disebut Minervini sama sekali, jadi fitur lain yang membaca cache yang
+  //   sama -- sumber sinyal "Minervini x Harmonic" -- memang harus ikut.
+  // - POTENSI & "8/8 saja" disaring di SINI. Itu selera memilih, bukan teori,
+  //   dan memotongnya di server akan diam-diam mengubah teori lain.
+  const items=semua.filter(r=>
+    (!mvMinPotensi||(r.rencana_entry&&r.rencana_entry.potensi_pct>=mvMinPotensi))
+    &&(!mvPenuhSaja||r.criteria_met>=8));
+  if(!semua.length){body.innerHTML=`<section class="panel">${emptyState(`Belum ada saham yang lolos hari ini. Syaratnya dua: skor ≥65 dan minimal ${minKriteria} dari 8 kriteria trend template terpenuhi.${tersaring?` Hari ini ${tersaring} saham berskor cukup, tapi kriterianya kurang.`:' Pasar mungkin sedang lemah.'}`)}</section>`;return}
   const tr=items.map(r=>{const bar='█'.repeat(r.criteria_met)+'░'.repeat(8-r.criteria_met);
     return `<tr data-k="${r.ticker}" style="cursor:pointer">
     <td class="tk">${tickerTag(r.ticker)}</td>
@@ -1604,19 +1610,25 @@ async function loadScreenerPro(){
          <span style="color:var(--bear);font-size:10px">SL Rp${fmt(r.rencana_entry.cicil_sl)}</span>`
       : '<span class="muted">\u2014</span>'}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
-    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Memindai ±178 saham likuid, hanya skor ≥65. Tap baris untuk analisis.</p>
+    <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Dari ±178 saham likuid, yang masuk harus skor ≥65 <b>dan</b> minimal ${minKriteria} dari 8 kriteria terpenuhi. Tap baris untuk analisis.</p>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
       <span class="muted" style="font-size:12px;margin-right:2px">Potensi naik:</span>
       ${[0,10,15,20].map(v=>`<button class="chip ${mvMinPotensi===v?'active':''}" data-mvpot="${v}">${v?'≥'+v+'%':'Semua'}</button>`).join('')}
+      <button class="chip ${mvPenuhSaja?'active':''}" data-mvpenuh="1" title="Hanya saham yang memenuhi kedelapan kriteria">8/8 saja</button>
       <span class="muted" style="font-size:11px">${items.length} dari ${semua.length} saham</span>
     </div>
-    ${items.length?'':emptyState('Tidak ada saham yang potensinya mencapai ambang itu hari ini. Turunkan ambangnya — hari tanpa hasil itu wajar, bukan tanda datanya rusak.')}
+    ${tersaring?`<p class="muted" style="font-size:11px;margin:-4px 0 10px">${tersaring} saham lain skornya ≥65 tapi tidak ditampilkan: kriteria trend template-nya kurang dari ${minKriteria}/8 — skornya tertolong momentum dan volume, bukan oleh trennya.</p>`:''}
+    ${items.length?'':emptyState(mvPenuhSaja&&!mvMinPotensi
+      ? 'Tidak ada saham yang memenuhi kedelapan kriteria hari ini. Itu hal biasa — 8/8 memang jarang. Matikan "8/8 saja" untuk melihat yang 7/8.'
+      : 'Tidak ada saham yang lolos saringan itu hari ini. Longgarkan ambangnya — hari tanpa hasil itu wajar, bukan tanda datanya rusak.')}
     ${_catatanEntryMinervini(items)}
     <div style="overflow-x:auto"><table class="ctable"><thead><tr><th>Saham</th><th>Skor</th><th class="hide-xs">Kriteria (8)</th><th>Harga</th><th class="hide-xs">RS</th><th class="hide-xs">RSI</th><th class="hide-xs">vs 52W High</th><th>Potensi</th><th>Entry</th></tr></thead><tbody>${tr}</tbody></table></div></section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
   body.querySelectorAll('[data-mvpot]').forEach(b=>b.addEventListener('click',()=>{
     mvMinPotensi=Number(b.dataset.mvpot)||0; loadScreenerPro();
   }));
+  const bPenuh=body.querySelector('[data-mvpenuh]');
+  if(bPenuh) bPenuh.addEventListener('click',()=>{mvPenuhSaja=!mvPenuhSaja; loadScreenerPro()});
   staggerRows(body.querySelector('.ctable'), 12);
 }
 
@@ -6104,7 +6116,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v52';
+const APP_VERSION='v53';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

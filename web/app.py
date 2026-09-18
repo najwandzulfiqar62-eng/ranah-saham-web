@@ -2828,13 +2828,25 @@ async def smc_chart(kode: str, kind: str):
 # yang bentuknya berbeda sampai TTL habis -- gejalanya bukan error melainkan
 # kolom yang diam-diam kosong, jadi tidak ada yang tahu penyebabnya. Versi 2
 # menandai ditambahkannya `rencana_entry`.
-SCREENERPRO_CACHE_KEY = "screenerpro:v2"
+SCREENERPRO_CACHE_KEY = "screenerpro:v3"
 
 
 @app.get("/api/screenerpro")
 async def screenerpro():
     """Screener gaya Minervini (8 kriteria trend template + RS vs IHSG +
-    momentum). Skor ≥65 saja. Atas universe likuid, di-cache.
+    momentum). Atas universe likuid, di-cache.
+
+    DUA syarat, bukan satu: skor ≥65 DAN minimal 7 dari 8 kriteria trend
+    template terpenuhi. Syarat kedua ditambahkan 18 Sep 2026 -- sebelumnya
+    saham dengan 4/8 kriteria bisa lolos asal momentum dan volumenya penuh
+    (momentum+volume = 40 dari 100, kriterianya cuma 60), jadi separuh trend
+    template gagal tapi barisnya tetap berlabel "Minervini". Ambangnya
+    memendekkan daftar kira-kira sepertiga; alasannya dan angkanya ada di
+    komentar MIN_KRITERIA di core/screening_pro.py.
+
+    Yang ikut berubah karenanya, dan itu memang disengaja: sumber sinyal
+    "Minervini x Harmonic" membaca cache yang sama, jadi sinyal yang memakai
+    nama Minervini sekarang benar-benar berdiri di atas saham Minervini.
 
     Universe DIPERLUAS (permintaan user: "banyakin screening minervini lagi")
     dari SCREENER_UNIVERSE (~45, LQ45-ish) ke universe extended (likuid
@@ -2849,7 +2861,9 @@ async def screenerpro():
     try:
         ihsg_raw = await _clean("^JKSE", period="1y")
         market_close = ihsg_raw["Close"] if ihsg_raw is not None and len(ihsg_raw) else None
-        res = await run_screenerpro([t + ".JK" for t in TOP_PICK_UNIVERSE], market_close=market_close)
+        catatan: dict = {}
+        res = await run_screenerpro([t + ".JK" for t in TOP_PICK_UNIVERSE],
+                                    market_close=market_close, catatan=catatan)
     except Exception:
         raise HTTPException(502, "Gagal menjalankan screener pro.")
     # Arah sebaliknya dari badge di saringan harmonic: di sini yang ditandai
@@ -2868,7 +2882,9 @@ async def screenerpro():
                           if h else None)
         n_confluence += 1 if h else 0
     payload = _py({"items": items, "universe": len(TOP_PICK_UNIVERSE),
-                   "n_confluence": n_confluence})
+                   "n_confluence": n_confluence,
+                   "tersaring": catatan.get("tersaring", 0),
+                   "min_kriteria": catatan.get("min_kriteria")})
     _cache_set(SCREENERPRO_CACHE_KEY, payload)
     return payload
 
