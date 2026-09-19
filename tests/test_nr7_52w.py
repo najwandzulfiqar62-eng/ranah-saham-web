@@ -165,7 +165,7 @@ def test_detect_nr7_52w_valid_even_with_nan_last_bar_when_prev_is_nr7():
 def test_record_nr7_rejects_nan_levels(clean_signal_db):
     """Pertahanan berlapis: walau caller keliru mengirim level NaN
     (bool(nan)==True di Python bisa lolos filter naif), perekaman menolaknya."""
-    bad = {"kode": "NANX", "harga": 200.0, "is_nr7_52w": True,
+    bad = {"kode": "NANX", "harga": 200.0, "is_nr7_52w": True, "nr7_ketat": True,
            "nr7_sl_pct": float("nan"), "nr7_tp1_pct": float("nan")}
     saved = asyncio.run(record_nr7_52w_signals([bad]))
     assert saved == []
@@ -174,9 +174,9 @@ def test_record_nr7_rejects_nan_levels(clean_signal_db):
 # ---------------------------------------------------------------------------
 # record_nr7_52w_signals
 # ---------------------------------------------------------------------------
-def _nr7_item(kode="AAAA", harga=200.0):
+def _nr7_item(kode="AAAA", harga=200.0, ketat=True):
     return {
-        "kode": kode, "harga": harga, "is_nr7_52w": True,
+        "kode": kode, "harga": harga, "is_nr7_52w": True, "nr7_ketat": ketat,
         "nr7_sl_pct": 2.0, "nr7_tp1_pct": 4.0, "nr7_tp2_pct": 6.0, "nr7_tp3_pct": 8.0,
         "ai_rating": "BAGUS", "confidence_score": 70, "ai_score": 60,
     }
@@ -203,8 +203,9 @@ def test_record_nr7_records_open_buy_with_theory_levels(clean_signal_db):
 def test_record_nr7_ignores_non_nr7_and_incomplete_items(clean_signal_db):
     items = [
         {"kode": "X1", "harga": 100.0},                                  # bukan NR7
-        {"kode": "X2", "harga": 100.0, "is_nr7_52w": True},              # tanpa level
-        {"kode": "X3", "harga": 100.0, "is_nr7_52w": True, "nr7_sl_pct": 2.0},  # tanpa tp1
+        {"kode": "X2", "harga": 100.0, "is_nr7_52w": True, "nr7_ketat": True},   # tanpa level
+        {"kode": "X3", "harga": 100.0, "is_nr7_52w": True, "nr7_ketat": True,
+         "nr7_sl_pct": 2.0},                                                     # tanpa tp1
     ]
     saved = asyncio.run(record_nr7_52w_signals(items))
     assert saved == []
@@ -503,3 +504,122 @@ def test_saringan_nr7_menghormati_ambang_yang_dipilih(monkeypatch):
     # Di luar rentang dijepit, bukan meledak atau membuka lebih lebar.
     assert asyncio.run(app_module.screener_nr7(dekat=50))["dekat"] == 90
     assert asyncio.run(app_module.screener_nr7(dekat=999))["dekat"] == 98
+
+
+# ===========================================================================
+# BAR SESI BERJALAN: hari yang belum berakhir selalu terlihat "sempit"
+# ===========================================================================
+# ERAA muncul sebagai sinyal NR7 + 52W High pada 19 Sep 2026 padahal syarat
+# NR7-nya tidak pernah terpenuhi sekali pun dalam 20 hari bursa terakhir.
+# Sebabnya _merge_hourly_gap menempelkan bar harian HARI INI yang dirakit
+# dari candle per-jam. Pada pukul 10 pagi, High-Low bar itu baru beberapa
+# poin -- dan seluruh premis NR7 adalah "range hari ini TERSEMPIT dari 7 hari
+# terakhir". Bukan kontraksi volatilitas, cuma jam yang belum habis.
+
+def _df_dengan_bar_berjalan():
+    """250 hari normal + satu bar 'hari ini' yang sengaja sangat sempit."""
+    import numpy as np
+    import pandas as pd
+
+    n = 250
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    harga = np.linspace(1000, 2000, n)
+    # Sumbu atas dibuat tipis di SEMUA bar supaya tertinggi 52 minggu jatuh
+    # tepat di sekitar harga terakhir -- syarat "di area tertinggi 52 minggu"
+    # harus terpenuhi, kalau tidak yang menggagalkan deteksi adalah syarat
+    # itu dan bukan yang sedang diuji.
+    tinggi = harga * 1.002
+    rendah = harga * 0.958                       # range ~4,4% sehari-hari
+    df = pd.DataFrame({
+        "Open": harga, "High": tinggi, "Low": rendah,
+        "Close": harga, "Volume": np.full(n, 1_000_000.0)}, index=idx)
+    # Kemarin: range paling LEBAR (~6,2%) -- jadi kalau bar berjalan dibuang,
+    # yang tersisa jelas bukan NR7.
+    df.iloc[-2, df.columns.get_loc("Low")] = harga[-2] * 0.94
+    # Hari ini: sesi berjalan, rangenya baru 0,3%.
+    df.iloc[-1, df.columns.get_loc("High")] = harga[-1] * 1.002
+    df.iloc[-1, df.columns.get_loc("Low")] = harga[-1] * 0.999
+    return df
+
+
+def test_bar_sesi_berjalan_tidak_dianggap_nr7():
+    """INI bug-nya. Range 0,2% pada hari yang baru berjalan dua jam bukan
+    kontraksi volatilitas -- ia cuma belum selesai."""
+    from core.screening_pro import detect_nr7_52w
+
+    df = _df_dengan_bar_berjalan()
+
+    # Tanpa pengaman: bar sempit palsu itu lolos sebagai NR7.
+    tanpa = detect_nr7_52w(df)
+    assert tanpa is not None, (
+        "data uji tidak lagi mewakili kasusnya -- bar sempit palsu sudah "
+        "tidak lolos, jadi uji ini tidak membuktikan apa pun")
+
+    # Dengan pengaman: bar berjalan dibuang, hari sebelumnya rangenya normal.
+    dengan = detect_nr7_52w(df, abaikan_bar_terakhir=True)
+    assert dengan is None, (
+        "bar sesi berjalan masih dipakai -- sinyal NR7 akan menyala untuk "
+        "hampir semua saham tiap pagi")
+
+
+def test_sl_tidak_dihitung_dari_low_yang_masih_bergerak():
+    """Ikut rusak diam-diam: SL diambil dari Low bar NR7, dan Low sesi
+    berjalan belum final. Jadi bukan cuma sinyalnya yang salah, level
+    stopnya pun dihitung dari angka yang masih bisa turun."""
+    from core.screening_pro import detect_nr7_52w
+
+    df = _df_dengan_bar_berjalan()
+    berjalan = detect_nr7_52w(df)
+    if berjalan is None:
+        import pytest
+        pytest.skip("data uji tidak menghasilkan setup")
+    # Low sesi berjalan cuma 0,1% di bawah harga -> SL-nya tertekan ke lantai
+    # anti-noise, bukan ke level struktur yang dimaksud teorinya.
+    from core.screening_pro import NR7_MIN_SL_PCT
+    assert berjalan["nr7_sl_pct"] == NR7_MIN_SL_PCT, (
+        "SL dari bar berjalan ternyata tidak menyentuh lantai -- periksa "
+        "ulang premis uji ini")
+
+
+def test_aplikasi_benar_benar_meneruskan_penanda_bar_berjalan():
+    """Pengaman di core tidak ada gunanya kalau pemanggilnya tidak memakainya.
+    Dibaca dari berkas supaya tambalan uji lain tidak ikut terbaca."""
+    import io
+    import os
+
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sumber = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
+    assert "abaikan_bar_terakhir=_bar_terakhir_sesi_berjalan(df)" in sumber, (
+        "web/app.py memanggil detect_nr7_52w tanpa memberi tahu bahwa bar "
+        "terakhir bisa jadi sesi yang belum tutup")
+
+
+def test_penanda_sesi_berjalan_mengenali_hari_ini():
+    import pandas as pd
+
+    import web.app as app_module
+
+    kemarin = pd.DataFrame(
+        {"Close": [1, 2]},
+        index=pd.to_datetime([pd.Timestamp.today().normalize() - pd.Timedelta(days=9),
+                              pd.Timestamp.today().normalize() - pd.Timedelta(days=8)]))
+    hari_ini = pd.DataFrame(
+        {"Close": [1, 2]},
+        index=pd.to_datetime([pd.Timestamp.today().normalize() - pd.Timedelta(days=1),
+                              pd.Timestamp.today().normalize()]))
+    assert app_module._bar_terakhir_sesi_berjalan(kemarin) is False
+    assert app_module._bar_terakhir_sesi_berjalan(hari_ini) is True
+
+
+def test_pencatat_sinyal_menolak_yang_tidak_ketat():
+    """Pengaman BERLAPIS. Pemanggil di web/app.py sudah menyaring, tapi
+    pengaman itu ada di berkas lain -- dan teori yang win rate-nya sedang
+    diukur tidak boleh bergantung pada satu baris di tempat yang jauh."""
+    longgar = _nr7_item(kode="LONG", ketat=False)
+    assert asyncio.run(record_nr7_52w_signals([longgar])) == []
+
+    # Tanpa field sama sekali (data cache lama) juga ditolak -- menolak itu
+    # arah yang aman: paling buruk sinyal tertunda satu siklus.
+    tanpa = _nr7_item(kode="TANP")
+    del tanpa["nr7_ketat"]
+    assert asyncio.run(record_nr7_52w_signals([tanpa])) == []

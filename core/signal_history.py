@@ -1390,6 +1390,12 @@ async def record_nr7_52w_signals(items: list[dict], price_lookup=None) -> list[d
     candidates = [
         it for it in items
         if it.get("is_nr7_52w")
+        # Ambang KETAT (close >= 98% dari 52W high), bukan ambang longgar
+        # yang dipakai tab saringan supaya daftarnya bisa dilihat lebih
+        # banyak. Pemanggil di web/app.py sudah menyaring, tapi pengaman itu
+        # ada di berkas LAIN -- dan teori yang win rate-nya sedang diukur
+        # tidak boleh bergantung pada satu baris di tempat yang jauh.
+        and it.get("nr7_ketat")
         and _is_finite_pos(it.get("nr7_sl_pct"))
         and _is_finite_pos(it.get("nr7_tp1_pct"))
         and _is_finite_pos(it.get("harga"))

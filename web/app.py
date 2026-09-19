@@ -3422,6 +3422,32 @@ async def _signal_auto_loop():
             print(f"⚠️ signal auto loop error tak terduga: {type(e).__name__}: {e}")
 
 
+def _bar_terakhir_sesi_berjalan(df) -> bool:
+    """True kalau baris terakhir df adalah sesi HARI INI (WIB).
+
+    Dipakai untuk memberi tahu detect_nr7_52w bahwa bar itu BELUM SELESAI.
+    _merge_hourly_gap menempelkan bar harian hari ini yang dirakit dari
+    candle per-jam, dan pada bar yang belum tutup High-Low-nya masih jauh
+    lebih kecil daripada nanti -- cukup untuk membuat syarat "range tersempit
+    dari 7 hari" menyala palsu untuk hampir semua saham tiap pagi.
+
+    Hari ini dianggap belum selesai sepanjang hari, bukan cuma sampai jam
+    tutup. Kalaupun sesinya sudah berakhir, bar rakitan dari candle per-jam
+    tetap belum tentu memuat lelang penutupan -- dan menunggu satu hari untuk
+    memastikan jauh lebih murah daripada mencatat sinyal dari angka yang
+    masih bergerak.
+    """
+    try:
+        idx = df.index[-1]
+        tgl = idx.date() if hasattr(idx, "date") else None
+        if tgl is None:
+            return False
+        from datetime import datetime as _d
+        return tgl >= _d.now(_WIB).date()
+    except Exception:
+        return False
+
+
 def _compute_confidence_items(data, shares, market_close) -> list[dict]:
     """Loop CPU-bound MURNI (indikator teknikal, Minervini, confluence,
     pattern, entry-level) per ticker -- diekstrak dari _confidence_raw_signals
@@ -3593,7 +3619,9 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
             # NR7_52W_LONGGAR_PCT). Satu deteksi melayani dua ambang:
             # pencatat sinyal tetap ketat, tab saringan boleh melonggar atas
             # pilihan pembaca -- tanpa pemindaian kedua.
-            nr7 = detect_nr7_52w(df, dekat_pct=NR7_52W_LONGGAR_PCT)
+            nr7 = detect_nr7_52w(
+                df, dekat_pct=NR7_52W_LONGGAR_PCT,
+                abaikan_bar_terakhir=_bar_terakhir_sesi_berjalan(df))
             if nr7:
                 item.update(nr7)
             items.append(item)

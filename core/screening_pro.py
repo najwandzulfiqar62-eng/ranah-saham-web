@@ -471,11 +471,36 @@ NR7_52W_MIN_BARS = 240
 NR7_52W_WINDOW = 252
 
 
-def detect_nr7_52w(df: pd.DataFrame, dekat_pct: float = NR7_52W_NEAR_PCT) -> dict | None:
+def detect_nr7_52w(df: pd.DataFrame, dekat_pct: float = NR7_52W_NEAR_PCT,
+                   abaikan_bar_terakhir: bool = False) -> dict | None:
     """Deteksi setup NR7 + 52W High pada bar TERAKHIR df (harian). Return
     dict level SL/TP berbasis teori kalau setup valid (entry ditentukan saat
     perekaman = harga pasar), else None. MURNI (tanpa I/O) -- mudah ditest
-    dgn df sintetis."""
+    dgn df sintetis.
+
+    `abaikan_bar_terakhir` WAJIB diisi True kalau baris terakhir adalah sesi
+    HARI INI yang BELUM TUTUP.
+
+    BUG NYATA 19 Sep 2026 (ERAA muncul sebagai sinyal teori ini padahal
+    syarat NR7-nya tidak pernah terpenuhi sekali pun dalam 20 hari): pemanggil
+    di web/app.py menempelkan bar harian hari ini yang dirakit dari candle
+    per-jam (_merge_hourly_gap). Bar itu BELUM SELESAI -- pada pukul 10 pagi
+    range-nya baru beberapa poin. Padahal seluruh premis NR7 adalah "range
+    hari ini TERSEMPIT dari 7 hari terakhir". Hari yang belum berakhir hampir
+    selalu tersempit, jadi syaratnya menyala untuk hampir semua saham tiap
+    pagi -- bukan kontraksi volatilitas, cuma jam yang belum habis.
+
+    Ikut rusak diam-diam: SL diambil dari Low bar itu, dan Low sesi berjalan
+    juga belum final. Jadi bukan cuma sinyalnya yang salah, level stopnya pun
+    dihitung dari angka yang masih bergerak.
+
+    Membuang bar berjalan sekaligus mengembalikan teorinya ke bentuk asli
+    (Crabel 1990): bar NR7 dikenali SESUDAH tutup, lalu ekspansinya
+    ditradingkan di sesi berikutnya -- yang persis dilakukan pencatat sinyal
+    (entry di harga pasar hari ini).
+    """
+    if df is not None and abaikan_bar_terakhir and len(df):
+        df = df.iloc[:-1]
     if df is None or len(df) < NR7_52W_MIN_BARS:
         return None  # butuh ~1 tahun data utk 52W high yang sah
     # Buang baris OHLC NaN dulu -- yfinance kerap mengembalikan bar terakhir
