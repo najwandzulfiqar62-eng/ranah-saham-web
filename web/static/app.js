@@ -1630,6 +1630,10 @@ async function loadNr7(){
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Membaca kandidat NR7 + 52W High…</p>';
   let d; try{d=await api('/api/screener/nr7')}catch(e){body.innerHTML=errBox(e.message);return}
   const items=d.items||[];
+  if(d.menyiapkan){
+    body.innerHTML=`<section class="panel">${emptyState('Data sedang disiapkan di latar belakang. Halaman ini sengaja TIDAK memindai sendiri — memindai 178 saham atas permintaan pengunjung akan membuat seluruh aplikasi tersendat. Coba lagi sebentar lagi.','clock')}</section>`;
+    return;
+  }
   const tr=items.map(r=>`<tr data-k="${r.kode}" style="cursor:pointer">
     <td class="tk">${tickerTag(r.kode)}</td>
     <td class="hide-xs">${secTag(r.sektor)}</td>

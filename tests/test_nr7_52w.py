@@ -301,8 +301,10 @@ def test_saringan_nr7_membaca_cache_bukan_memindai_ulang(monkeypatch):
 
     dipanggil = []
 
-    async def _cache_palsu():
-        dipanggil.append("cache")
+    def _cache_palsu(key):
+        dipanggil.append(key)
+        if key != "confidence:raw":
+            return None
         return [
             {"kode": "AAAA", "harga": 1000, "sektor": "Energi", "is_nr7_52w": True,
              "nr7_low": 980, "high_52w": 1010, "pct_from_52w_high": -1.0,
@@ -313,10 +315,16 @@ def test_saringan_nr7_membaca_cache_bukan_memindai_ulang(monkeypatch):
             {"kode": "CCCC", "harga": 200},          # bukan setup NR7
         ]
 
-    monkeypatch.setattr(app_module, "_confidence_raw_signals", _cache_palsu)
+    async def _jangan_dibangun():
+        raise AssertionError(
+            "saringan memicu hitungan dingin -- memindai 178 emiten atas "
+            "permintaan pengunjung membekukan seluruh aplikasi")
+
+    monkeypatch.setattr(app_module, "_cache_get", _cache_palsu)
+    monkeypatch.setattr(app_module, "_confidence_raw_signals", _jangan_dibangun)
     hasil = asyncio.run(app_module.screener_nr7())
 
-    assert dipanggil == ["cache"], "saringan memicu pemindaian sendiri"
+    assert dipanggil == ["confidence:raw"], dipanggil
     kode = [x["kode"] for x in hasil["items"]]
     assert "CCCC" not in kode, "saham tanpa setup NR7 ikut masuk"
     # Yang PALING DEKAT tertinggi 52 minggu lebih dulu -- itu inti teorinya
@@ -334,10 +342,7 @@ def test_saringan_nr7_selalu_menyebut_risikonya(monkeypatch):
 
     import web.app as app_module
 
-    async def _kosong():
-        return []
-
-    monkeypatch.setattr(app_module, "_confidence_raw_signals", _kosong)
+    monkeypatch.setattr(app_module, "_cache_get", lambda k: [])
     hasil = asyncio.run(app_module.screener_nr7())
     assert "HIGH RISK" in (hasil.get("risiko") or "")
     assert hasil["items"] == [] and hasil["total"] == 0
@@ -351,13 +356,61 @@ def test_target_nr7_tetap_kelipatan_risiko(monkeypatch):
 
     import web.app as app_module
 
-    async def _satu():
-        return [{"kode": "AAAA", "harga": 1000, "is_nr7_52w": True,
-                 "pct_from_52w_high": -1.0, "nr7_sl_pct": 3.0,
-                 "nr7_tp1_pct": 6.0, "nr7_tp2_pct": 9.0, "nr7_tp3_pct": 12.0}]
+    satu = [{"kode": "AAAA", "harga": 1000, "is_nr7_52w": True,
+             "pct_from_52w_high": -1.0, "nr7_sl_pct": 3.0,
+             "nr7_tp1_pct": 6.0, "nr7_tp2_pct": 9.0, "nr7_tp3_pct": 12.0}]
 
-    monkeypatch.setattr(app_module, "_confidence_raw_signals", _satu)
+    monkeypatch.setattr(app_module, "_cache_get", lambda k: satu)
     r = asyncio.run(app_module.screener_nr7())["items"][0]
     assert r["tp1_pct"] == r["sl_pct"] * 2
     assert r["tp2_pct"] == r["sl_pct"] * 3
     assert r["tp3_pct"] == r["sl_pct"] * 4
+
+
+def test_saringan_nr7_menjawab_seketika_saat_cache_masih_dingin(monkeypatch):
+    """Tepat sesudah restart, cache confidence:raw kosong. Kalau tab ini
+    membangunnya, satu orang yang kebetulan membukanya duluan membuat SEMUA
+    pengunjung lain menunggu ~63 detik -- termasuk file statis, karena
+    asyncio itu satu utas. Itu persis keluhan "lag ketika mau kirim
+    pertanyaan di forum" yang dulu dilacak ke loop yang sama.
+
+    Jawabannya harus SEKETIKA dengan penanda 'menyiapkan', bukan menunggu."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def _jangan_dibangun():
+        raise AssertionError("cache dingin memicu pemindaian 178 emiten")
+
+    monkeypatch.setattr(app_module, "_cache_get", lambda k: None)
+    monkeypatch.setattr(app_module, "_cache_get_stale", lambda k: None)
+    monkeypatch.setattr(app_module, "_confidence_raw_signals", _jangan_dibangun)
+
+    hasil = asyncio.run(app_module.screener_nr7())
+    assert hasil["menyiapkan"] is True
+    assert hasil["items"] == []
+    # Peringatannya tetap ikut walau daftarnya belum ada -- kalau tidak,
+    # tampilan pertama yang dilihat orang adalah daftar tanpa peringatan.
+    assert "HIGH RISK" in (hasil.get("risiko") or "")
+
+
+def test_saringan_nr7_memakai_data_basi_daripada_menghitung_ulang(monkeypatch):
+    """Serve-stale: data agak lama jauh lebih baik daripada memicu hitungan
+    yang menahan seluruh server. Pola yang sama dipakai di seluruh aplikasi."""
+    import asyncio
+
+    import web.app as app_module
+
+    basi = [{"kode": "AAAA", "harga": 100, "is_nr7_52w": True,
+             "pct_from_52w_high": -1.0, "nr7_sl_pct": 3.0}]
+
+    async def _jangan_dibangun():
+        raise AssertionError("membangun ulang padahal ada data basi")
+
+    monkeypatch.setattr(app_module, "_cache_get", lambda k: None)
+    monkeypatch.setattr(app_module, "_cache_get_stale", lambda k: basi)
+    monkeypatch.setattr(app_module, "_confidence_raw_signals", _jangan_dibangun)
+
+    hasil = asyncio.run(app_module.screener_nr7())
+    assert hasil["total"] == 1
+    assert not hasil.get("menyiapkan")

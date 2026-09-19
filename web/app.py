@@ -6358,7 +6358,27 @@ async def screener_nr7():
     Sinyal -- tapi tidak ada satu tempat pun untuk MELIHAT kandidatnya
     sebelum ia jadi sinyal. Teori yang tidak bisa dilihat sulit dinilai.
     """
-    items = await _confidence_raw_signals()
+    # CACHE SAJA -- TIDAK PERNAH memicu hitungan dingin.
+    #
+    # _confidence_raw_signals() akan membangun ulang kalau cachenya kosong,
+    # dan bangunan itu memindai 178 emiten (~63 detik terukur). Sebuah TAB
+    # SARINGAN tidak boleh bisa memicu itu: cukup satu orang membuka tab ini
+    # tepat sesudah restart, dan semua pengunjung lain ikut menunggu. Ini
+    # persis keluhan "lag ketika mau kirim pertanyaan di forum" yang dulu
+    # dilacak ke loop yang sama, dan persis alasan saringan harmonic memakai
+    # penanda 'menyiapkan' alih-alih memindai atas permintaan pengunjung.
+    #
+    # Yang mengisi cache ini auto-cycle/pemanas, bukan pengunjung.
+    items = _cache_get("confidence:raw")
+    if items is None:
+        items = _cache_get_stale("confidence:raw")
+    if items is None:
+        return _py({"items": [], "total": 0, "universe": 0, "menyiapkan": True,
+                    "catatan": "Data sedang disiapkan di latar belakang. "
+                               "Coba lagi sebentar lagi.",
+                    "risiko": "HIGH RISK. Breakout dari koil sempit bisa gagal, "
+                              "dan karena SL-nya ketat ia juga gampang tersentuh "
+                              "lebih dulu."})
     kandidat = [it for it in (items or []) if it.get("is_nr7_52w")]
     # Yang paling dekat dengan tertinggi 52 minggu lebih dulu: itu inti
     # teorinya (anchor psikologis), bukan sekadar urutan yang enak dilihat.
@@ -6710,7 +6730,11 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
     # menguap saat idx.co.id tidak terjangkau -- lihat core/x15_store.py.
     try:
         from core.x15_store import simpan_filing
-        baru = simpan_filing(results)
+        # DI THREAD, bukan langsung. sqlite3 itu I/O sinkron: menulis ratusan
+        # baris di tengah fungsi async menahan event loop selama tulisannya
+        # berlangsung, dan riwayat 90 hari berarti ini terpanggil 90 kali
+        # berturut-turut. Kecil satuannya, tidak kecil kalikannya.
+        baru = await asyncio.to_thread(simpan_filing, results)
         if baru:
             print(f"ℹ️ x15: {baru} filing baru disimpan ({tanggal_iso})", flush=True)
     except Exception as e:
@@ -6827,7 +6851,7 @@ async def _fetch_x15_history_for_kode(kode: str, days: int = 90) -> list[dict]:
 
         from core.x15_store import ambil_untuk_kode
         sejak = (_dt.now(_WIB) - _td(days=days)).strftime("%Y-%m-%d")
-        items = ambil_untuk_kode(kode, sejak)
+        items = await asyncio.to_thread(ambil_untuk_kode, kode, sejak)
         n_simpanan = len(items)
     except Exception as e:
         print(f"⚠️ x15: simpanan tidak terbaca: {type(e).__name__}: {e}",
@@ -6880,8 +6904,9 @@ async def api_pemegang_saham(kode: str):
             from datetime import datetime as _dt2, timedelta as _td2
 
             from core.x15_store import ambil_untuk_kode
-            raw_items = ambil_untuk_kode(
-                kode, (_dt2.now(_WIB) - _td2(days=90)).strftime("%Y-%m-%d"))
+            raw_items = await asyncio.to_thread(
+                ambil_untuk_kode, kode,
+                (_dt2.now(_WIB) - _td2(days=90)).strftime("%Y-%m-%d"))
         except Exception:
             raw_items = []
         if not raw_items:
