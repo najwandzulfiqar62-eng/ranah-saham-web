@@ -1625,10 +1625,11 @@ let mvPenuhSaja = false;
 // setupnya terdeteksi, dicatat, muncul di Audit Sinyal, tapi tidak ada satu
 // tempat pun untuk MELIHAT kandidatnya sebelum jadi sinyal. Teori yang tidak
 // bisa dilihat sulit dinilai.
+let nr7Dekat = 98;   // ambang "dekat tertinggi 52 minggu"; 98 = teori aslinya
 async function loadNr7(){
   const body=$('#uniBody');
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Membaca kandidat NR7 + 52W High…</p>';
-  let d; try{d=await api('/api/screener/nr7')}catch(e){body.innerHTML=errBox(e.message);return}
+  let d; try{d=await api('/api/screener/nr7?dekat='+nr7Dekat)}catch(e){body.innerHTML=errBox(e.message);return}
   const items=d.items||[];
   if(d.menyiapkan){
     body.innerHTML=`<section class="panel">${emptyState('Data sedang disiapkan di latar belakang. Halaman ini sengaja TIDAK memindai sendiri — memindai 178 saham atas permintaan pengunjung akan membuat seluruh aplikasi tersendat. Coba lagi sebentar lagi.','clock')}</section>`;
@@ -1638,7 +1639,7 @@ async function loadNr7(){
     <td class="tk">${tickerTag(r.kode)}</td>
     <td class="hide-xs">${secTag(r.sektor)}</td>
     <td>Rp${fmt(r.harga)}</td>
-    <td class="${r.pct_from_52w_high>=-2?'up':''}">${fmt(r.pct_from_52w_high,1)}%<div class="muted" style="font-size:9.5px">high ${fmt(r.high_52w)}</div></td>
+    <td class="${r.ketat?'up':''}">${fmt(r.pct_from_52w_high,1)}%<div class="muted" style="font-size:9.5px">high ${fmt(r.high_52w)}${r.ketat?'':' · longgar'}</div></td>
     <td style="color:var(--bear);font-size:12px">−${fmt(r.sl_pct,1)}%<div class="muted" style="font-size:9.5px">di bawah ${fmt(r.nr7_low)}</div></td>
     <td style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.5">
       <span style="color:var(--bull)">+${fmt(r.tp1_pct,1)}%</span> <span class="muted">2R</span><br>
@@ -1649,11 +1650,19 @@ async function loadNr7(){
   body.innerHTML=`<section class="panel">
     <p class="insight muted" style="font-size:13px;margin-bottom:8px">${escapeHtml(d.catatan||'')}</p>
     <div style="border-left:3px solid var(--bear);background:color-mix(in srgb,var(--bear) 8%,transparent);padding:8px 10px;border-radius:0 6px 6px 0;font-size:12px;line-height:1.5;margin-bottom:6px"><b style="color:var(--bear)">HIGH RISK</b> — ${escapeHtml(d.risiko||'')}</div>
-    <div style="margin:10px 0 8px"><span class="muted" style="font-size:11px">${items.length} kandidat dari ${d.universe||0} saham yang dipantau</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0 8px">
+      <span class="muted" style="font-size:12px;margin-right:2px">Dekat 52W high:</span>
+      ${[98,95,92,90].map(v=>`<button class="chip ${nr7Dekat===v?'active':''}" data-nr7d="${v}" title="Rata-rata ${(d.rata2_per_hari||{})[v]||'?'} kandidat/hari">≥${v}%</button>`).join('')}
+      <span class="muted" style="font-size:11px">${items.length} kandidat dari ${d.universe||0} saham${d.dekat!==98?` · ${d.n_ketat||0} di antaranya ketat (≥98%)`:''}</span>
+    </div>
+    ${d.dekat!==98?`<p class="muted" style="font-size:11px;line-height:1.5;margin:-2px 0 10px">Ambang dilonggarkan dari 98% ke ${d.dekat}%. Yang ditandai <b>longgar</b> TIDAK dicatat sebagai sinyal di Audit Sinyal — teori yang sedang diukur win rate-nya tetap memakai 98%, supaya angkanya masih bisa dibandingkan.</p>`:''}
     ${items.length?'':emptyState('Tidak ada setup NR7 + 52W hari ini. Ini teori yang memang jarang kena — ia menuntut dua hal bertemu sekaligus (range tersempit 7 hari DAN harga di area tertinggi 52 minggu), jadi hari tanpa hasil itu wajar.')}
     <div style="overflow-x:auto"><table class="ctable" id="nr7Tabel"><thead><tr><th>Saham</th><th class="hide-xs">Sektor</th><th>Harga</th><th>vs 52W High</th><th>SL</th><th>Target</th><th class="hide-xs">Likuiditas</th></tr></thead><tbody>${tr}</tbody></table></div>
     </section>`;
   body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+  body.querySelectorAll('[data-nr7d]').forEach(b=>b.addEventListener('click',()=>{
+    nr7Dekat=Number(b.dataset.nr7d)||98; loadNr7();
+  }));
   staggerRows(body.querySelector('#nr7Tabel'), 12);
 }
 
@@ -6203,7 +6212,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v55';
+const APP_VERSION='v56';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

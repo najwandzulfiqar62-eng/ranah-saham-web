@@ -447,6 +447,15 @@ def _score_minervini(df: pd.DataFrame, name: str,
 NR7_MIN_SL_PCT = MIN_SL_PCT_GLOBAL   # = 3.0, lihat core/trading_plan.py
 NR7_MAX_SL_PCT = 7.0     # plafon: kalau "tersempit dari 7 hari" pun >7%, bukan setup NR7 ketat -> skip
 NR7_52W_NEAR_PCT = 0.98  # close >= 98% dari 52W high = "di area tertinggi 52 minggu"
+# Ambang PALING LONGGAR yang masih dideteksi, dipakai HANYA untuk ditampilkan
+# di saringan. Deteksinya dijalankan sekali dengan ambang ini, lalu dua
+# pemakainya menyaring sendiri-sendiri:
+#   - pencatat sinyal  -> tetap menuntut `nr7_ketat` (>= NR7_52W_NEAR_PCT)
+#   - tab saringan     -> boleh melonggar sampai sini, atas pilihan pembaca
+# Dipisah begini supaya "ingin melihat lebih banyak" tidak diam-diam
+# mengubah teori yang sedang diukur win rate-nya di Audit Sinyal. Satu
+# deteksi, dua ambang -- bukan dua pemindaian.
+NR7_52W_LONGGAR_PCT = 0.90
 # Jendela "52 minggu" = 252 hari bursa, ANGKA KONVENSI PASAR AS. BEI cuma
 # ~244 hari bursa setahun (libur nasional lebih banyak), jadi mensyaratkan
 # >=252 BARIS berarti menuntut LEBIH dari setahun penuh data BEI -- syarat
@@ -462,7 +471,7 @@ NR7_52W_MIN_BARS = 240
 NR7_52W_WINDOW = 252
 
 
-def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
+def detect_nr7_52w(df: pd.DataFrame, dekat_pct: float = NR7_52W_NEAR_PCT) -> dict | None:
     """Deteksi setup NR7 + 52W High pada bar TERAKHIR df (harian). Return
     dict level SL/TP berbasis teori kalau setup valid (entry ditentukan saat
     perekaman = harga pasar), else None. MURNI (tanpa I/O) -- mudah ditest
@@ -491,7 +500,7 @@ def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
     # --- 52W High: close di/dekat tertinggi 52 minggu ---
     high_52w = float(high.tail(NR7_52W_WINDOW).max())
     last_close = float(close.iloc[-1])
-    if high_52w <= 0 or last_close < high_52w * NR7_52W_NEAR_PCT:
+    if high_52w <= 0 or last_close < high_52w * dekat_pct:
         return None  # belum di area tertinggi 52 minggu
 
     # --- SL: di bawah Low bar NR7 + buffer kecil ATR ---
@@ -516,6 +525,10 @@ def detect_nr7_52w(df: pd.DataFrame) -> dict | None:
     # --- TP: R-multiples (risk-reward) ---
     return {
         "is_nr7_52w": True,
+        # Apakah ia memenuhi ambang KETAT (teori aslinya), terlepas dari
+        # ambang yang dipakai saat memanggil. Pencatat sinyal memakai ini;
+        # tanpanya, melonggarkan tampilan akan diam-diam melonggarkan teori.
+        "nr7_ketat": last_close >= high_52w * NR7_52W_NEAR_PCT,
         "nr7_sl_pct": round(sl_pct, 2),
         "nr7_tp1_pct": round(sl_pct * 2, 2),
         "nr7_tp2_pct": round(sl_pct * 3, 2),

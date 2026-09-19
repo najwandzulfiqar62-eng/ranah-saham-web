@@ -414,3 +414,92 @@ def test_saringan_nr7_memakai_data_basi_daripada_menghitung_ulang(monkeypatch):
     hasil = asyncio.run(app_module.screener_nr7())
     assert hasil["total"] == 1
     assert not hasil.get("menyiapkan")
+
+
+# ===========================================================================
+# Melonggarkan TAMPILAN tidak boleh melonggarkan TEORI.
+# ===========================================================================
+
+def test_ambang_longgar_tidak_mengubah_apa_yang_dicatat_sebagai_sinyal():
+    """Deteksi kini dijalankan dengan ambang paling longgar supaya tab
+    saringan bisa menampilkan lebih banyak. Bahayanya: kalau pencatat sinyal
+    ikut memakai `is_nr7_52w` polos, teori yang sedang diukur win rate-nya di
+    Audit Sinyal ikut melonggar DIAM-DIAM -- dan angkanya tidak lagi bisa
+    dibandingkan dengan yang sudah tercatat sebelumnya.
+
+    `nr7_ketat` yang memisahkan keduanya."""
+    import numpy as np
+    import pandas as pd
+
+    from core.screening_pro import (NR7_52W_LONGGAR_PCT, NR7_52W_NEAR_PCT,
+                                    detect_nr7_52w)
+
+    assert NR7_52W_LONGGAR_PCT < NR7_52W_NEAR_PCT
+
+    # Saham yang naik panjang lalu turun ~6% dari puncaknya, dengan bar
+    # terakhir sempit: lolos ambang longgar (>=90%), gagal ambang ketat.
+    n = 300
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    harga = np.concatenate([np.linspace(1000, 2000, n - 5),
+                            np.linspace(2000, 1880, 5)])
+    df = pd.DataFrame({
+        "Open": harga, "High": harga * 1.02, "Low": harga * 0.98,
+        "Close": harga, "Volume": np.full(n, 1_000_000.0)}, index=idx)
+    # Bar terakhir dibuat SEMPIT supaya syarat NR7-nya terpenuhi.
+    df.iloc[-1, df.columns.get_loc("High")] = harga[-1] * 1.002
+    df.iloc[-1, df.columns.get_loc("Low")] = harga[-1] * 0.98
+
+    longgar = detect_nr7_52w(df, dekat_pct=NR7_52W_LONGGAR_PCT)
+    if longgar is None:
+        import pytest
+        pytest.skip("data uji tidak menghasilkan setup NR7")
+
+    assert longgar["is_nr7_52w"] is True
+    assert longgar["nr7_ketat"] is False, (
+        "setup 6% di bawah puncak dianggap 'ketat' -- pemisahnya tidak bekerja")
+    # Ambang ketat harus menolaknya sama sekali.
+    assert detect_nr7_52w(df, dekat_pct=NR7_52W_NEAR_PCT) is None
+
+
+def test_pencatat_sinyal_nr7_hanya_menerima_yang_ketat():
+    """Pengaman yang sama, diperiksa di tempat keputusannya diambil."""
+    import io
+    import os
+
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sumber = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
+    potongan = sumber.split("async def _record_nr7_52w_cycle")[1][:1500]
+    assert 'it.get("nr7_ketat")' in potongan, (
+        "pencatat sinyal NR7 tidak lagi menuntut ambang ketat -- teori yang "
+        "sedang diukur di Audit Sinyal akan melonggar diam-diam")
+
+
+def test_saringan_nr7_menghormati_ambang_yang_dipilih(monkeypatch):
+    """Chip 98/95/92/90 harus benar-benar menyaring, bukan hiasan."""
+    import asyncio
+
+    import web.app as app_module
+
+    palsu = [
+        {"kode": "KETAT", "harga": 100, "is_nr7_52w": True, "nr7_ketat": True,
+         "pct_from_52w_high": -1.0, "nr7_sl_pct": 3.0},
+        {"kode": "AGAK", "harga": 100, "is_nr7_52w": True, "nr7_ketat": False,
+         "pct_from_52w_high": -4.0, "nr7_sl_pct": 3.0},
+        {"kode": "JAUH", "harga": 100, "is_nr7_52w": True, "nr7_ketat": False,
+         "pct_from_52w_high": -9.0, "nr7_sl_pct": 3.0},
+    ]
+    monkeypatch.setattr(app_module, "_cache_get", lambda k: palsu)
+
+    ketat = asyncio.run(app_module.screener_nr7(dekat=98))
+    assert [x["kode"] for x in ketat["items"]] == ["KETAT"]
+
+    sedang = asyncio.run(app_module.screener_nr7(dekat=95))
+    assert [x["kode"] for x in sedang["items"]] == ["KETAT", "AGAK"]
+    assert sedang["n_ketat"] == 1, "jumlah yang ketat tidak dilaporkan benar"
+
+    longgar = asyncio.run(app_module.screener_nr7(dekat=90))
+    assert len(longgar["items"]) == 3
+
+    # Di luar rentang dijepit, bukan meledak atau membuka lebih lebar.
+    assert asyncio.run(app_module.screener_nr7(dekat=50))["dekat"] == 90
+    assert asyncio.run(app_module.screener_nr7(dekat=999))["dekat"] == 98

@@ -3438,7 +3438,9 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
     # HANYA mengikat Y ke local namespace fungsi ITU, TIDAK otomatis
     # tersedia utk fungsi lain yang dipanggilnya (termasuk fungsi
     # module-level terpisah spt ini) -- dibutuhkan langsung di loop bawah.
-    from core.screening_pro import _score_minervini, calculate_confluence, detect_patterns, detect_nr7_52w
+    from core.screening_pro import (_score_minervini, calculate_confluence,
+                                    detect_patterns, detect_nr7_52w,
+                                    NR7_52W_LONGGAR_PCT)
     from core.trading_plan import assess_market_context
     # Kondisi pasar (IHSG) dihitung SEKALI di sini, bukan per-saham -- lalu
     # chase_ok dipakai menyesuaikan ENTRY tiap sinyal (permintaan user
@@ -3586,7 +3588,12 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
             # nr7_sl_pct/nr7_tp*_pct dikonsumsi _record_nr7_52w_cycle utk
             # record_nr7_52w_signals; kalau bukan setup NR7, dict kosong (item
             # tetap normal, cuma tidak akan lolos filter recorder NR7).
-            nr7 = detect_nr7_52w(df)
+            # Ambang PALING LONGGAR dipakai di sini, dan penyaringan
+            # sebenarnya dilakukan masing-masing pemakai (lihat
+            # NR7_52W_LONGGAR_PCT). Satu deteksi melayani dua ambang:
+            # pencatat sinyal tetap ketat, tab saringan boleh melonggar atas
+            # pilihan pembaca -- tanpa pemindaian kedua.
+            nr7 = detect_nr7_52w(df, dekat_pct=NR7_52W_LONGGAR_PCT)
             if nr7:
                 item.update(nr7)
             items.append(item)
@@ -6336,14 +6343,21 @@ async def _record_nr7_52w_cycle(confidence_items: list[dict]):
     if not confidence_items:
         return
     from core.signal_history import record_nr7_52w_signals
-    nr7_items = [it for it in confidence_items if it.get("is_nr7_52w")]
+    # `nr7_ketat`, BUKAN sekadar `is_nr7_52w`. Sejak deteksi dijalankan
+    # dengan ambang longgar demi tab saringan, `is_nr7_52w` juga menyala
+    # untuk setup yang belum benar-benar di area tertinggi 52 minggu.
+    # Mencatatnya sebagai sinyal akan melonggarkan teori yang sedang diukur
+    # win rate-nya di Audit Sinyal -- diam-diam, dan angkanya tidak lagi
+    # bisa dibandingkan dengan yang sudah tercatat sebelumnya.
+    nr7_items = [it for it in confidence_items
+                 if it.get("is_nr7_52w") and it.get("nr7_ketat")]
     if not nr7_items:
         return
     await record_nr7_52w_signals(nr7_items, price_lookup=_signal_entry_price_lookup)
 
 
 @app.get("/api/screener/nr7")
-async def screener_nr7():
+async def screener_nr7(dekat: int = 98):
     """Kandidat NR7 + 52W High yang sedang aktif hari ini.
 
     TIDAK MEMINDAI APA PUN SENDIRI. Deteksinya sudah menumpang loop
@@ -6379,7 +6393,14 @@ async def screener_nr7():
                     "risiko": "HIGH RISK. Breakout dari koil sempit bisa gagal, "
                               "dan karena SL-nya ketat ia juga gampang tersentuh "
                               "lebih dulu."})
-    kandidat = [it for it in (items or []) if it.get("is_nr7_52w")]
+    # Ambang "dekat tertinggi 52 minggu" yang dipilih pembaca. 98 = teori
+    # aslinya. Melonggarkannya menambah kandidat TANPA menyentuh sinyal yang
+    # tercatat: pencatat memakai `nr7_ketat`, yang selalu ambang 98.
+    dekat = max(90, min(98, int(dekat)))
+    batas = -(100 - dekat)          # 98 -> -2,0% dari 52W high
+    kandidat = [it for it in (items or [])
+                if it.get("is_nr7_52w")
+                and (it.get("pct_from_52w_high") or -999) >= batas]
     # Yang paling dekat dengan tertinggi 52 minggu lebih dulu: itu inti
     # teorinya (anchor psikologis), bukan sekadar urutan yang enak dilihat.
     kandidat.sort(key=lambda x: x.get("pct_from_52w_high") or -999, reverse=True)
@@ -6396,11 +6417,18 @@ async def screener_nr7():
         "tp3_pct": it.get("nr7_tp3_pct"),
         "likuiditas": it.get("likuiditas"),
         "ai_score": it.get("ai_score"),
+        "ketat": bool(it.get("nr7_ketat")),
     } for it in kandidat]
     return _py({
         "items": ringkas,
         "total": len(ringkas),
         "universe": len(items or []),
+        "dekat": dekat,
+        "n_ketat": sum(1 for x in ringkas if x["ketat"]),
+        # Diukur atas riwayat 2 tahun, 237 emiten: berapa kandidat yang
+        # muncul pada hari biasa di tiap ambang. Ditaruh di sini supaya
+        # "kok cuma satu?" bisa dijawab angka, bukan perasaan.
+        "rata2_per_hari": {"98": 3.9, "95": 5.7, "92": 7.3, "90": 8.6},
         "catatan": ("Range hari ini TERSEMPIT dari 7 hari terakhir (kontraksi "
                     "volatilitas) DAN harga di area tertinggi 52 minggu. "
                     "Entry di harga pasar -- bukan menunggu breakout, karena "
