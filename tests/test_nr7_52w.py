@@ -280,3 +280,84 @@ def test_signal_report_returns_both_theories_for_same_kode_with_own_plans(clean_
     assert by_src["NR7_52W"]["entry_price"] == 1195.0
     assert by_src["NR7_52W"]["sl_pct"] != by_src["TOP_PICK"]["sl_pct"]
     assert by_src["NR7_52W"]["tp_pct"] != by_src["TOP_PICK"]["tp_pct"]
+
+
+# ===========================================================================
+# Saringan NR7 + 52W: teori yang tidak bisa dilihat sulit dinilai.
+# ===========================================================================
+# Sampai 19 Sep 2026 teori ini cuma berjalan diam-diam sebagai pencatat
+# sinyal -- setupnya terdeteksi, dicatat, muncul di Audit Sinyal, tapi tidak
+# ada satu tempat pun untuk MELIHAT kandidatnya sebelum ia jadi sinyal.
+
+def test_saringan_nr7_membaca_cache_bukan_memindai_ulang(monkeypatch):
+    """Aturan penskalaan #1: permintaan pengunjung tidak boleh memicu
+    pengambilan dingin. Deteksi NR7 sudah menumpang loop confidence, jadi
+    saringan ini cukup membaca hasil yang sudah ada -- pemindaian keempat
+    atas ratusan emiten akan membekukan event loop persis seperti yang
+    sudah berkali-kali diperbaiki di tempat lain."""
+    import asyncio
+
+    import web.app as app_module
+
+    dipanggil = []
+
+    async def _cache_palsu():
+        dipanggil.append("cache")
+        return [
+            {"kode": "AAAA", "harga": 1000, "sektor": "Energi", "is_nr7_52w": True,
+             "nr7_low": 980, "high_52w": 1010, "pct_from_52w_high": -1.0,
+             "nr7_sl_pct": 3.0, "nr7_tp1_pct": 6.0, "nr7_tp2_pct": 9.0,
+             "nr7_tp3_pct": 12.0, "likuiditas": "Tinggi", "ai_score": 70},
+            {"kode": "BBBB", "harga": 500, "is_nr7_52w": True,
+             "pct_from_52w_high": -0.2, "nr7_sl_pct": 4.0},
+            {"kode": "CCCC", "harga": 200},          # bukan setup NR7
+        ]
+
+    monkeypatch.setattr(app_module, "_confidence_raw_signals", _cache_palsu)
+    hasil = asyncio.run(app_module.screener_nr7())
+
+    assert dipanggil == ["cache"], "saringan memicu pemindaian sendiri"
+    kode = [x["kode"] for x in hasil["items"]]
+    assert "CCCC" not in kode, "saham tanpa setup NR7 ikut masuk"
+    # Yang PALING DEKAT tertinggi 52 minggu lebih dulu -- itu inti teorinya
+    # (anchor psikologis), bukan urutan yang kebetulan enak dilihat.
+    assert kode == ["BBBB", "AAAA"], f"urutan tidak mengikuti jarak ke 52W high: {kode}"
+    assert hasil["total"] == 2
+    assert hasil["universe"] == 3
+
+
+def test_saringan_nr7_selalu_menyebut_risikonya(monkeypatch):
+    """Teori ini ditandai HIGH RISK sejak lahir: breakout dari koil sempit
+    bisa gagal, dan SL yang ketat gampang tersentuh lebih dulu. Menampilkan
+    daftarnya tanpa kalimat itu mengubah peringatan jadi rekomendasi."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def _kosong():
+        return []
+
+    monkeypatch.setattr(app_module, "_confidence_raw_signals", _kosong)
+    hasil = asyncio.run(app_module.screener_nr7())
+    assert "HIGH RISK" in (hasil.get("risiko") or "")
+    assert hasil["items"] == [] and hasil["total"] == 0
+
+
+def test_target_nr7_tetap_kelipatan_risiko(monkeypatch):
+    """TP1/TP2/TP3 = 2R/3R/4R dari sl_pct. Kalau hubungan itu putus, daftar
+    ini menampilkan imbal-risiko yang tidak sesuai teorinya -- persis bug
+    GJTL/MLBI/BSSR yang pernah terjadi saat SL dilebarkan tanpa menskala TP."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def _satu():
+        return [{"kode": "AAAA", "harga": 1000, "is_nr7_52w": True,
+                 "pct_from_52w_high": -1.0, "nr7_sl_pct": 3.0,
+                 "nr7_tp1_pct": 6.0, "nr7_tp2_pct": 9.0, "nr7_tp3_pct": 12.0}]
+
+    monkeypatch.setattr(app_module, "_confidence_raw_signals", _satu)
+    r = asyncio.run(app_module.screener_nr7())["items"][0]
+    assert r["tp1_pct"] == r["sl_pct"] * 2
+    assert r["tp2_pct"] == r["sl_pct"] * 3
+    assert r["tp3_pct"] == r["sl_pct"] * 4

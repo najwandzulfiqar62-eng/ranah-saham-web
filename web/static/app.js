@@ -1219,6 +1219,7 @@ function setMode(m){
   else if(m==='signal')loadSignal();
   else if(m==='bsjp')loadBsjp();
   else if(m==='harmonic')loadHarmonic();
+  else if(m==='nr7')loadNr7();
   else if(m==='filter')loadFilter(filterMode);
   else if(m==='fundamental')loadFundamentalScreen();
   else if(m==='custom'){
@@ -1618,6 +1619,39 @@ let mvMinPotensi = 0;
 // Tampilkan hanya yang 8/8 kriteria. Ini pilihan TAMPILAN di atas daftar yang
 // sudah disaring server (minimal 7/8), bukan saringan kedua yang bersaing.
 let mvPenuhSaja = false;
+
+// NR7 + 52W High: kontraksi volatilitas tepat di area tertinggi 52 minggu.
+// Sampai sekarang teori ini cuma berjalan diam-diam sebagai pencatat sinyal --
+// setupnya terdeteksi, dicatat, muncul di Audit Sinyal, tapi tidak ada satu
+// tempat pun untuk MELIHAT kandidatnya sebelum jadi sinyal. Teori yang tidak
+// bisa dilihat sulit dinilai.
+async function loadNr7(){
+  const body=$('#uniBody');
+  body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Membaca kandidat NR7 + 52W High…</p>';
+  let d; try{d=await api('/api/screener/nr7')}catch(e){body.innerHTML=errBox(e.message);return}
+  const items=d.items||[];
+  const tr=items.map(r=>`<tr data-k="${r.kode}" style="cursor:pointer">
+    <td class="tk">${tickerTag(r.kode)}</td>
+    <td class="hide-xs">${secTag(r.sektor)}</td>
+    <td>Rp${fmt(r.harga)}</td>
+    <td class="${r.pct_from_52w_high>=-2?'up':''}">${fmt(r.pct_from_52w_high,1)}%<div class="muted" style="font-size:9.5px">high ${fmt(r.high_52w)}</div></td>
+    <td style="color:var(--bear);font-size:12px">−${fmt(r.sl_pct,1)}%<div class="muted" style="font-size:9.5px">di bawah ${fmt(r.nr7_low)}</div></td>
+    <td style="font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.5">
+      <span style="color:var(--bull)">+${fmt(r.tp1_pct,1)}%</span> <span class="muted">2R</span><br>
+      <span style="color:var(--bull)">+${fmt(r.tp2_pct,1)}%</span> <span class="muted">3R</span><br>
+      <span style="color:var(--bull)">+${fmt(r.tp3_pct,1)}%</span> <span class="muted">4R</span></td>
+    <td class="hide-xs">${r.likuiditas||'—'}</td>
+  </tr>`).join('');
+  body.innerHTML=`<section class="panel">
+    <p class="insight muted" style="font-size:13px;margin-bottom:8px">${escapeHtml(d.catatan||'')}</p>
+    <div style="border-left:3px solid var(--bear);background:color-mix(in srgb,var(--bear) 8%,transparent);padding:8px 10px;border-radius:0 6px 6px 0;font-size:12px;line-height:1.5;margin-bottom:6px"><b style="color:var(--bear)">HIGH RISK</b> — ${escapeHtml(d.risiko||'')}</div>
+    <div style="margin:10px 0 8px"><span class="muted" style="font-size:11px">${items.length} kandidat dari ${d.universe||0} saham yang dipantau</span></div>
+    ${items.length?'':emptyState('Tidak ada setup NR7 + 52W hari ini. Ini teori yang memang jarang kena — ia menuntut dua hal bertemu sekaligus (range tersempit 7 hari DAN harga di area tertinggi 52 minggu), jadi hari tanpa hasil itu wajar.')}
+    <div style="overflow-x:auto"><table class="ctable" id="nr7Tabel"><thead><tr><th>Saham</th><th class="hide-xs">Sektor</th><th>Harga</th><th>vs 52W High</th><th>SL</th><th>Target</th><th class="hide-xs">Likuiditas</th></tr></thead><tbody>${tr}</tbody></table></div>
+    </section>`;
+  body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+  staggerRows(body.querySelector('#nr7Tabel'), 12);
+}
 
 async function loadScreenerPro(){
   const body=$('#uniBody');
@@ -6165,7 +6199,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v54';
+const APP_VERSION='v55';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

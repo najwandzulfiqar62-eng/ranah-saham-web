@@ -6342,6 +6342,56 @@ async def _record_nr7_52w_cycle(confidence_items: list[dict]):
     await record_nr7_52w_signals(nr7_items, price_lookup=_signal_entry_price_lookup)
 
 
+@app.get("/api/screener/nr7")
+async def screener_nr7():
+    """Kandidat NR7 + 52W High yang sedang aktif hari ini.
+
+    TIDAK MEMINDAI APA PUN SENDIRI. Deteksinya sudah menumpang loop
+    confidence (_compute_confidence_items memanggil detect_nr7_52w karena df
+    tiap emiten sudah di tangan di sana), jadi di sini cukup membaca cache
+    yang sudah dihangatkan pemanas dan menyaringnya. Biayanya satu pembacaan
+    cache, bukan pemindaian keempat -- aturan yang sama yang membuat
+    permintaan pengunjung tidak pernah memicu pengambilan dingin.
+
+    Kenapa perlu ada: sampai sekarang NR7+52W cuma berjalan diam-diam sebagai
+    pencatat sinyal. Setupnya terdeteksi, dicatat, lalu muncul di Audit
+    Sinyal -- tapi tidak ada satu tempat pun untuk MELIHAT kandidatnya
+    sebelum ia jadi sinyal. Teori yang tidak bisa dilihat sulit dinilai.
+    """
+    items = await _confidence_raw_signals()
+    kandidat = [it for it in (items or []) if it.get("is_nr7_52w")]
+    # Yang paling dekat dengan tertinggi 52 minggu lebih dulu: itu inti
+    # teorinya (anchor psikologis), bukan sekadar urutan yang enak dilihat.
+    kandidat.sort(key=lambda x: x.get("pct_from_52w_high") or -999, reverse=True)
+    ringkas = [{
+        "kode": it.get("kode"),
+        "harga": it.get("harga"),
+        "sektor": it.get("sektor"),
+        "nr7_low": it.get("nr7_low"),
+        "high_52w": it.get("high_52w"),
+        "pct_from_52w_high": it.get("pct_from_52w_high"),
+        "sl_pct": it.get("nr7_sl_pct"),
+        "tp1_pct": it.get("nr7_tp1_pct"),
+        "tp2_pct": it.get("nr7_tp2_pct"),
+        "tp3_pct": it.get("nr7_tp3_pct"),
+        "likuiditas": it.get("likuiditas"),
+        "ai_score": it.get("ai_score"),
+    } for it in kandidat]
+    return _py({
+        "items": ringkas,
+        "total": len(ringkas),
+        "universe": len(items or []),
+        "catatan": ("Range hari ini TERSEMPIT dari 7 hari terakhir (kontraksi "
+                    "volatilitas) DAN harga di area tertinggi 52 minggu. "
+                    "Entry di harga pasar -- bukan menunggu breakout, karena "
+                    "breakout kerap palsu. SL di bawah Low bar sempit itu, "
+                    "TP kelipatan risiko (2R/3R/4R)."),
+        "risiko": ("HIGH RISK. Breakout dari koil sempit bisa gagal, dan "
+                   "karena SL-nya ketat ia juga gampang tersentuh lebih dulu. "
+                   "Itu sifat teorinya, bukan cacat penyetelannya."),
+    })
+
+
 async def _record_minervini_harmonic_cycle():
     """Catat sinyal "Minervini x Harmonic" (source teori independen ke-5).
 

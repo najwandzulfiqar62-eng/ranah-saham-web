@@ -274,6 +274,10 @@ DIMAAFKAN = {
     "matchMedia", "getComputedStyle", "LightweightCharts", "Image", "File",
     "Uint8Array", "innerHeight",          # global browser
     "toast",                              # dipasang sbg window.toast
+    # Didefinisikan di index.html baris ~223 sebagai window.escapeHtml,
+    # dan pemeriksa ini cuma membaca app.js. Sudah pernah dilaporkan sebagai
+    # temuan palsu sekali; dicatat di sini supaya tidak terulang.
+    "escapeHtml",
     "bar", "Discount", "pos", "isR", "isP", "im",   # celah parser
 }
 
