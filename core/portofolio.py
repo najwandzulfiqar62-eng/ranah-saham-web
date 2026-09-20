@@ -59,7 +59,52 @@ def ensure_porto_tables() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_porto_user "
                      "ON porto_transaksi(user_id, kode)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS porto_modal (
+                user_id INTEGER PRIMARY KEY,
+                rupiah REAL NOT NULL,
+                diubah_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
     _tabel_siap = True
+
+
+def set_modal(user_id: int, rupiah: float) -> float:
+    """Simpan modal yang siap dipakai anggota ini."""
+    if not (rupiah and rupiah > 0):
+        raise ValueError("Modal harus lebih dari 0.")
+    ensure_porto_tables()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO porto_modal (user_id, rupiah) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET rupiah = excluded.rupiah, "
+            "diubah_at = datetime('now')",
+            (int(user_id), float(rupiah)))
+    return float(rupiah)
+
+
+def get_modal(user_id: int) -> float:
+    ensure_porto_tables()
+    with get_db() as conn:
+        r = conn.execute("SELECT rupiah FROM porto_modal WHERE user_id = ?",
+                         (int(user_id),)).fetchone()
+    return float(r["rupiah"]) if r else 0.0
+
+
+def ringkas_modal(user_id: int) -> dict:
+    """Modal total, yang sudah terpakai, dan sisanya.
+
+    "Terpakai" dihitung dari HARGA BELI, bukan harga sekarang: yang
+    ditanyakan "sisa uang saya berapa", dan untung-rugi mengambang tidak
+    menambah atau mengurangi uang yang bisa dibelanjakan.
+    """
+    modal = get_modal(user_id)
+    posisi = posisi_user(user_id)
+    terpakai = sum(p["modal"] for p in posisi)
+    return {"modal": modal, "terpakai": terpakai,
+            "sisa": max(0.0, modal - terpakai),
+            "n_posisi": len(posisi),
+            "kode": [p["kode"] for p in posisi]}
 
 
 def catat(user_id: int, kode: str, arah: str, lot: float, harga: float) -> dict:

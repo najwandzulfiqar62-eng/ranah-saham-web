@@ -7525,7 +7525,10 @@ _WA_BANTUAN = (
     "• *jual KODE LOT HARGA* — catat penjualan + untung/ruginya "
     "(tanpa harga = pakai harga pasar, tanpa lot = jual semua)\n"
     "• *porto* — posisimu: untung/rugi, harus apa, dan level menambahnya\n"
-    "• *hapus KODE* — batalkan catatan yang salah ketik\n\n"
+    "• *hapus KODE* — batalkan catatan yang salah ketik\n"
+    "• *modal 50jt* — catat modalmu\n"
+    "• *racik* — saran belanja dari SISA modalmu, di luar saham yang sudah "
+    "kamu pegang\n\n"
     "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
     "perlu diputuskan: menyentuh stop, menyentuh level yang pernah "
     "disebutkan, atau untung besar. Paling banyak beberapa pesan sehari._\n\n"
@@ -7794,11 +7797,29 @@ async def _wa_porto(user: dict | None, aksi: str, kode: str,
     sinkron, dan menahan event loop di sini berarti menahan SEMUA permintaan
     lain -- pelajaran yang sudah berkali-kali dibayar di berkas ini.
     """
-    from core.portofolio import catat, hapus_kode, posisi_kode, posisi_user
+    from core.portofolio import (catat, hapus_kode, posisi_kode, posisi_user,
+                                 ringkas_modal)
 
     if not user:
         return "Akunmu belum dikenali. Daftar dulu di ranahsaham.com ya."
     uid = user["id"]
+
+    if aksi == "MODAL":
+        if harga <= 0:
+            return ("Modalnya berapa? Ketik `modal 50jt` atau "
+                    "`modal 50000000`.")
+        from core.portofolio import set_modal
+        await asyncio.to_thread(set_modal, uid, harga)
+        ring = await asyncio.to_thread(ringkas_modal, uid)
+        baris = [f"Modal dicatat: *{_rp(harga)}*."]
+        if ring["n_posisi"]:
+            baris.append(f"{_rp(ring['terpakai'])} sudah di {ring['n_posisi']} "
+                         f"posisi, sisa *{_rp(ring['sisa'])}*.")
+        baris += ["", "Ketik `racik` untuk saran belanja dari sisa modalmu."]
+        return "\n".join(baris)
+
+    if aksi == "RACIK":
+        return await _wa_racik(user)
 
     if aksi == "KODE_ASING":
         return (f"Kode *{kode}* tidak saya kenali.\n\n"
@@ -7889,6 +7910,141 @@ async def _wa_porto(user: dict | None, aksi: str, kode: str,
         return "Maaf, posisimu tidak bisa dihitung sekarang. Coba lagi sebentar lagi."
     bersih = [b for b in baris if not isinstance(b, Exception)]
     return _wa_fmt_porto(bersih, None if isinstance(pasar, Exception) else pasar)
+
+
+# Pita skor Minervini yang DIUTAMAKAN saat meracik.
+#
+# Dugaan penulis 21 Sep 2026: "saya kalo screen nyari yg minervini skor 70
+# sih karena bakalan ke 100 dan naik; kalo nilainya di atas itu kadang
+# koreksi atau turun". Diukur sebelum dipakai (361 kali saham baru lolos
+# aturan sekarang, 237 emiten, 2 tahun, dinilai 20 hari bursa):
+#
+#   skor 65-75   n= 82   hasil +5,47%   puncak 17,98%   terburuk -10,59%   menang 46,4%
+#   skor <80     n=172   hasil +2,86%   puncak 16,38%   terburuk -11,12%   menang 43,6%
+#   skor 80+     n=189   hasil +5,75%   puncak 20,04%   terburuk -11,29%   menang 41,3%
+#
+# Dugaannya BENAR, tapi bukan pada batas yang dikiranya. Pada 65-75 hasilnya
+# setara skor tinggi dengan peluang menang lebih baik (46,4% vs 41,3%) dan
+# jatuh terdalam lebih dangkal. Sedangkan "di bawah 80" justru LEBIH BURUK,
+# karena menyeret masuk pita 75-80 yang paling lemah dari semuanya (+0,48%,
+# n=90). Jadi yang dipakai 65-75, bukan <80.
+#
+# Ini PENGUTAMAAN, bukan penyaringan keras: kalau pita ini kosong hari itu,
+# kandidat di luarnya tetap dipakai dan hal itu disebutkan.
+RACIK_SKOR_MIN = float(os.getenv("RACIK_SKOR_MIN", "65"))
+RACIK_SKOR_MAKS = float(os.getenv("RACIK_SKOR_MAKS", "75"))
+RACIK_MAKS_SAHAM = int(os.getenv("RACIK_MAKS_SAHAM", "4"))
+RACIK_RISIKO_PCT = float(os.getenv("RACIK_RISIKO_PCT", "1.0"))
+
+
+def _racik_kandidat(items: list[dict], punya: set) -> tuple[list[dict], list[dict]]:
+    """(diutamakan, cadangan) dari saringan Minervini, tanpa yang sudah dipegang.
+
+    Yang sudah dipegang dibuang: menyarankan menambah saham yang sudah ada
+    di portofolio itu keputusan yang berbeda (menambah konsentrasi), dan
+    pertanyaannya "sisa modal saya sebaiknya dibelikan apa".
+    """
+    utama, cadangan = [], []
+    for it in items or []:
+        kode = str(it.get("ticker") or "").replace(".JK", "").upper()
+        if not kode or kode in punya:
+            continue
+        r = it.get("rencana_entry") or {}
+        entry = r.get("harga_pemicu") or it.get("harga")
+        sl = r.get("cicil_sl")
+        if not (entry and sl and sl < entry):
+            continue
+        calon = {"kode": kode, "entry": float(entry), "stop_loss": float(sl),
+                 "skor": it.get("skor"), "kriteria": it.get("criteria_met"),
+                 "potensi_pct": r.get("potensi_pct")}
+        skor = it.get("skor") or 0
+        (utama if RACIK_SKOR_MIN <= skor <= RACIK_SKOR_MAKS else cadangan).append(calon)
+    utama.sort(key=lambda x: -(x.get("potensi_pct") or 0))
+    cadangan.sort(key=lambda x: -(x.get("potensi_pct") or 0))
+    return utama, cadangan
+
+
+def _wa_fmt_racik(hasil: dict, ring: dict, dari_pita: bool) -> str:
+    """Saran belanja: berapa lot, di harga berapa, dengan sisa modal berapa.
+
+    Nama kunci mengikuti build_portfolio apa adanya (posisi/harga/nilai/
+    sisa_modal) -- bukan ditebak. Menebak nama kunci menghasilkan kolom yang
+    diam-diam kosong, bukan error.
+    """
+    pos = (hasil or {}).get("posisi") or []
+    baris = [f"*Saran belanja* — sisa modal {_rp(ring['sisa'])}"]
+    if ring["n_posisi"]:
+        baris.append(f"_Dari modal {_rp(ring['modal'])}, {_rp(ring['terpakai'])} "
+                     f"sudah di {ring['n_posisi']} posisi "
+                     f"({', '.join(ring['kode'])})._")
+    if not pos:
+        baris += ["", "_Tidak ada kandidat yang muat di sisa modalmu hari ini._",
+                  "Coba lagi besok, atau ubah modalnya lewat `modal 50jt`."]
+        return "\n".join(baris)
+
+    baris.append(f"_Diutamakan skor Minervini {RACIK_SKOR_MIN:.0f}–"
+                 f"{RACIK_SKOR_MAKS:.0f}: pita yang peluang menangnya paling "
+                 f"baik (46% vs 41% di skor tinggi), dan jatuh terdalamnya "
+                 f"paling dangkal._")
+    if not dari_pita:
+        baris.append("_⚠ Hari ini tidak ada kandidat di pita itu, jadi "
+                     "yang dipakai skor di luarnya._")
+
+    baris.append("")
+    for p in pos:
+        baris.append(f"*{p['kode']}* {p.get('lot', 0):g} lot @{_rp(p.get('harga'))} "
+                     f"= {_rp(p.get('nilai'))}")
+        rinci = [f"SL {_rp(p.get('stop_loss'))} ({p.get('sl_pct')}%)"]
+        if p.get("skor") is not None:
+            rinci.append(f"skor {p['skor']:g}")
+        if p.get("potensi_pct") is not None:
+            rinci.append(f"ruang naik +{p['potensi_pct']:.1f}%")
+        baris.append("   " + " · ".join(rinci))
+        baris.append(f"   _risiko kalau SL kena: {_rp(p.get('risiko_rp'))}_")
+
+    baris += ["", f"_Total belanja {_rp(hasil.get('total_nilai'))}, "
+                  f"tersisa {_rp(hasil.get('sisa_modal'))}._"]
+    if hasil.get("total_risiko_rp") is not None:
+        baris.append(f"_Kalau SEMUA stop kena: rugi {_rp(hasil['total_risiko_rp'])} "
+                     f"({hasil.get('total_risiko_pct')}% modal)._")
+    baris += ["", "Kalau jadi beli, catat dengan `beli KODE HARGA LOT`.",
+              "_Bukan ajakan membeli/menjual — keputusan tetap di kamu._"]
+    return "\n".join(baris)
+
+
+async def _wa_racik(user: dict) -> str:
+    from core.portofolio import ringkas_modal
+    from core.risk_management import build_portfolio
+
+    ring = await asyncio.to_thread(ringkas_modal, user["id"])
+    if not ring["modal"]:
+        return ("Belum tahu modalmu berapa.\n\n"
+                "Ketik `modal 50jt` (atau `modal 50000000`) dulu, "
+                "lalu `racik` lagi.")
+    if ring["sisa"] < 100_000:
+        return (f"Sisa modalmu tinggal {_rp(ring['sisa'])} — belum cukup "
+                f"untuk satu posisi yang masuk akal.\n\n"
+                f"_Dari {_rp(ring['modal'])}, {_rp(ring['terpakai'])} sudah "
+                f"dipakai di {ring['n_posisi']} posisi._")
+
+    # CACHE SAJA. Saringan Minervini dihangatkan pemanas; memicu pemindaian
+    # dari perintah bot berarti satu orang membuat semua pengunjung
+    # menunggu -- aturan yang sama dipegang tab NR7 dan `screener`.
+    mv = (_cache_get(SCREENERPRO_CACHE_KEY) or {}).get("items") or []
+    if not mv:
+        return ("Saringan Minervini sedang disiapkan di latar belakang. "
+                "Coba lagi sebentar lagi.")
+
+    utama, cadangan = _racik_kandidat(mv, set(ring["kode"]))
+    dipakai = utama or cadangan
+    if not dipakai:
+        return ("Tidak ada kandidat Minervini hari ini di luar saham yang "
+                "sudah kamu pegang.")
+
+    hasil = await asyncio.to_thread(
+        build_portfolio, ring["sisa"], dipakai[:RACIK_MAKS_SAHAM * 3],
+        RACIK_RISIKO_PCT, 40.0, RACIK_MAKS_SAHAM)
+    return _wa_fmt_racik(hasil or {}, ring, bool(utama))
 
 
 async def _porto_baris(p: dict) -> dict:
@@ -9453,7 +9609,37 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
     # "jual KODE [LOT] [HARGA]",
     # "hapus KODE", atau "porto" sendirian.
     porto_aksi, porto_kode, porto_harga, porto_lot = "", "", 0.0, 0.0
-    if kunci in {"porto", "portofolio", "posisi", "port", "posisiku"}:
+    if kunci in {"racik", "saran", "belanja"}:
+        porto_aksi = "RACIK"
+    elif kata and kata[0] == "modal" and len(kata) >= 2:
+        # "modal 50jt" / "modal 50 jt" / "modal 50000000". Singkatan jt/juta
+        # diterima karena itu yang dipakai orang saat mengetik cepat di HP.
+        # SATUANNYA DIBACA DULU, baru titiknya ditafsirkan.
+        #
+        # Titik di angka Indonesia punya DUA arti, dan mana yang berlaku
+        # ditentukan ada-tidaknya satuan: "50.000.000" pakai titik sebagai
+        # pemisah ribuan, sedangkan "1.5jt" memakainya sebagai koma desimal.
+        # Versi pertama membuang titik lebih dulu, jadi "1.5jt" terbaca
+        # "15jt" -- sepuluh kali lipat, tanpa satu pun tanda bahwa ada yang
+        # salah.
+        teks_modal = "".join(kata[1:]).lower()
+        kali = 1.0
+        for akhiran, n in (("juta", 1e6), ("jt", 1e6), ("ribu", 1e3),
+                           ("rb", 1e3), ("milyar", 1e9), ("miliar", 1e9),
+                           ("m", 1e9)):
+            if teks_modal.endswith(akhiran):
+                teks_modal, kali = teks_modal[:-len(akhiran)], n
+                break
+        if kali > 1:
+            teks_modal = teks_modal.replace(",", ".")      # desimal
+        else:
+            teks_modal = teks_modal.replace(".", "").replace(",", "")  # ribuan
+        try:
+            porto_harga = float(teks_modal) * kali
+        except ValueError:
+            porto_harga = 0.0
+        porto_aksi = "MODAL"
+    elif kunci in {"porto", "portofolio", "posisi", "port", "posisiku"}:
         # "port" ikut diterima. Perintah yang HAMPIR benar dijawab dengan
         # diam itu bentuk kegagalan yang paling membingungkan: orang tidak
         # tahu apakah botnya mati, pesannya tidak sampai, atau ketikannya

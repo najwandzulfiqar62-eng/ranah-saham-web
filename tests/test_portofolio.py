@@ -599,3 +599,132 @@ def test_nyangkut_menyebutkan_asumsi_menggandakan():
         None)
     assert "MENGGANDAKAN" in teks
     assert "porto" in teks, "tidak menawarkan jalan yang lebih tepat"
+
+
+# ---------------------------------------------------------------------------
+# RACIK: modal tersimpan -> saran belanja dari SISA modal
+# ---------------------------------------------------------------------------
+
+MV_PALSU = [
+    {"ticker": "ELSA", "skor": 72.5, "criteria_met": 7, "harga": 695,
+     "rencana_entry": {"harga_pemicu": 695, "cicil_sl": 660, "potensi_pct": 14.2}},
+    {"ticker": "WINS", "skor": 68.0, "criteria_met": 7, "harga": 610,
+     "rencana_entry": {"harga_pemicu": 610, "cicil_sl": 575, "potensi_pct": 11.8}},
+    {"ticker": "ANTM", "skor": 91.0, "criteria_met": 8, "harga": 1680,
+     "rencana_entry": {"harga_pemicu": 1680, "cicil_sl": 1580, "potensi_pct": 9.4}},
+    {"ticker": "BBCA", "skor": 74.0, "criteria_met": 7, "harga": 8450,
+     "rencana_entry": {"harga_pemicu": 8450, "cicil_sl": 8000, "potensi_pct": 10.0}},
+]
+
+
+def test_pita_skor_mengutamakan_65_sampai_75(porto):
+    """Diukur 21 Sep 2026 (361 kejadian, 2 tahun):
+
+      skor 65-75  hasil +5,47%  menang 46,4%  terburuk -10,59%
+      skor 80+    hasil +5,75%  menang 41,3%  terburuk -11,29%
+
+    Dugaan penulis benar pada pita ini. TAPI revisinya ("di bawah 80")
+    justru lebih buruk (+2,86%), karena menyeret masuk pita 75-80 yang
+    paling lemah dari semuanya (+0,48%, n=90)."""
+    import web.app as app_module
+
+    assert app_module.RACIK_SKOR_MIN == 65
+    assert app_module.RACIK_SKOR_MAKS == 75, (
+        "ambang atas 80 akan menyeret masuk pita 75-80 yang terukur paling lemah")
+
+    utama, cadangan = app_module._racik_kandidat(MV_PALSU, set())
+    # BBCA skor 74 memang di dalam pita, jadi ia ikut diutamakan.
+    assert set(c["kode"] for c in utama) == {"ELSA", "WINS", "BBCA"}
+    assert "ANTM" in [c["kode"] for c in cadangan], "skor 91 seharusnya cadangan"
+
+
+def test_saham_yang_sudah_dipegang_tidak_disarankan_lagi(porto):
+    """Pertanyaannya "sisa modal saya sebaiknya dibelikan apa". Menyarankan
+    menambah saham yang sudah dipegang itu keputusan yang berbeda --
+    menambah konsentrasi, bukan menambah pilihan."""
+    import web.app as app_module
+
+    utama, cadangan = app_module._racik_kandidat(MV_PALSU, {"ELSA"})
+    semua = [c["kode"] for c in utama + cadangan]
+    assert "ELSA" not in semua
+    assert "WINS" in semua
+
+
+def test_kandidat_tanpa_level_sl_dibuang(porto):
+    """Tanpa SL, ukuran posisinya tidak bisa dihitung dari risiko -- dan
+    menebaknya berarti menyarankan lot yang tidak berdasar apa pun."""
+    import web.app as app_module
+
+    rusak = [{"ticker": "XXXX", "skor": 70, "harga": 100,
+              "rencana_entry": {"harga_pemicu": 100}},              # tanpa SL
+             {"ticker": "YYYY", "skor": 70, "harga": 100,
+              "rencana_entry": {"harga_pemicu": 100, "cicil_sl": 120}}]  # SL di ATAS
+    utama, cadangan = app_module._racik_kandidat(rusak, set())
+    assert utama + cadangan == []
+
+
+def test_racik_memakai_sisa_modal_bukan_modal_penuh(porto, monkeypatch):
+    import asyncio
+
+    import web.app as app_module
+
+    u = {"id": 910}
+    porto.set_modal(u["id"], 50_000_000)
+    asyncio.run(app_module._wa_porto(u, "BELI", "BBCA", 8000, 5))   # Rp4jt
+    monkeypatch.setattr(app_module, "_cache_get",
+                        lambda k: {"items": MV_PALSU}
+                        if k == app_module.SCREENERPRO_CACHE_KEY else None)
+
+    teks = asyncio.run(app_module._wa_racik(u))
+    assert "Rp46.000.000" in teks, "sisa modal tidak dipakai"
+    assert "Rp4.000.000 sudah di 1 posisi" in teks
+    assert "BBCA" in teks.split("_Diutamakan")[0], "BBCA disebut sebagai posisi lama"
+    assert "ELSA" in teks and "WINS" in teks
+
+
+def test_racik_tanpa_modal_meminta_modalnya_dulu(porto):
+    import asyncio
+
+    import web.app as app_module
+
+    teks = asyncio.run(app_module._wa_racik({"id": 911}))
+    assert "modal 50jt" in teks
+
+
+def test_racik_tidak_pernah_memicu_pemindaian(porto, monkeypatch):
+    """Aturan yang sama dipegang tab NR7 dan `screener`: saringan Minervini
+    dihangatkan pemanas, dan memicu pemindaian dari perintah bot berarti
+    satu orang membuat semua pengunjung menunggu."""
+    import asyncio
+
+    import web.app as app_module
+
+    u = {"id": 912}
+    porto.set_modal(u["id"], 50_000_000)
+    monkeypatch.setattr(app_module, "_cache_get", lambda k: None)
+
+    async def _jangan(*a, **k):
+        raise AssertionError("racik memicu pemindaian Minervini")
+
+    monkeypatch.setattr(app_module, "screenerpro", _jangan)
+    teks = asyncio.run(app_module._wa_racik(u))
+    assert "sedang disiapkan" in teks
+
+
+@pytest.mark.parametrize("ketikan,harap", [
+    ("modal 50jt", 50_000_000), ("modal 50 juta", 50_000_000),
+    ("modal 500rb", 500_000), ("modal 50000000", 50_000_000),
+    ("modal 1.5jt", 1_500_000),
+])
+def test_modal_menerima_cara_tulis_yang_biasa_dipakai(client, wa_bersih,
+                                                       ketikan, harap):
+    """Yang mengetik di HP menulis "50jt", bukan "50000000"."""
+    from core.access import list_users
+    from core.portofolio import get_modal
+    from tests.test_wa_bot import _daftarkan_approved
+
+    _daftarkan_approved()
+    balas = _japri(client, ketikan)
+    assert "Modal dicatat" in balas, f"{ketikan!r} tidak dikenali"
+    uid = [u for u in list_users("approved") if u.get("phone")][0]["id"]
+    assert get_modal(uid) == harap
