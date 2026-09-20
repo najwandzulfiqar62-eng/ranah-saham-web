@@ -161,7 +161,10 @@ def test_kedua_jalur_keluar_memakai_gaya_yang_sama():
     notify = io.open(os.path.join(akar, "core", "whatsapp_notify.py"),
                      encoding="utf-8").read()
 
-    perintah = app.split("async def api_wa_command")[1][:900]
+    # Jendelanya dilebarkan seiring fungsi itu tumbuh (pengecekan asal
+    # percakapan untuk perintah portofolio, 21 Sep 2026). Ini pemeriksaan
+    # kasar yang gunanya memastikan pemanggilannya ADA, bukan di mana.
+    perintah = app.split("async def api_wa_command")[1][:2500]
     assert "siap_kirim" in perintah, "balasan perintah tidak dirapikan"
     kirim = notify.split("async def send_wa_text")[1][:900]
     assert "siap_kirim" in kirim, "siaran tidak dirapikan"

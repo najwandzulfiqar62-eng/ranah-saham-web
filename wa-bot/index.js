@@ -116,9 +116,18 @@ async function startSock() {
     if (type !== "notify" || !GROUP_JID) return;
     for (const msg of messages || []) {
       try {
-        // Hanya grup yang dikonfigurasi, dan JANGAN pernah menanggapi pesan
-        // bot sendiri (kalau tidak, satu balasan bisa memicu balasan lagi).
-        if (msg.key?.remoteJid !== GROUP_JID || msg.key?.fromMe) continue;
+        // JANGAN pernah menanggapi pesan bot sendiri -- satu balasan bisa
+        // memicu balasan lagi tanpa henti.
+        if (msg.key?.fromMe) continue;
+        const asal = msg.key?.remoteJid || "";
+        const dariGrup = asal === GROUP_JID;
+        // Japri ikut dilayani sejak 21 Sep 2026, untuk perintah portofolio.
+        // Isinya posisi dan nominal uang seseorang, jadi ia TIDAK BOLEH
+        // dijawab di grup -- app Python yang menolaknya di sana, dan japri
+        // adalah satu-satunya tempat yang layak untuk data seperti itu.
+        // Grup LAIN tetap diabaikan: bot ini melayani satu grup saja.
+        const dariJapri = !dariGrup && asal.endsWith("@s.whatsapp.net");
+        if (!dariGrup && !dariJapri) continue;
         const isi = msg.message?.conversation
           || msg.message?.extendedTextMessage?.text
           || "";
@@ -140,7 +149,12 @@ async function startSock() {
         const res = await fetch(`${APP_BASE_URL}/api/wa/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${SECRET}` },
-          body: JSON.stringify({ from: pengirim, candidates: kandidat, text: isi }),
+          // `chat` = tempat percakapannya (grup atau japri), BERBEDA dari
+          // `from` yang menunjuk orangnya. Tanpa ini app Python tidak punya
+          // cara tahu pesan datang dari mana, dan perintah portofolio --
+          // yang isinya nominal uang -- tidak bisa ditolak di grup.
+          body: JSON.stringify({ from: pengirim, candidates: kandidat,
+                                 text: isi, chat: asal, grup: dariGrup }),
         });
         if (!res.ok) {
           console.warn(`[wa-bot] /api/wa/command menjawab ${res.status}`);
@@ -162,9 +176,9 @@ async function startSock() {
             if (!berkas.ok) throw new Error(`status ${berkas.status}`);
             const buf = Buffer.from(await berkas.arrayBuffer());
             if (media.kind === "image") {
-              await sock.sendMessage(GROUP_JID, { image: buf, caption: media.caption || "" }, { quoted: msg });
+              await sock.sendMessage(asal, { image: buf, caption: media.caption || "" }, { quoted: msg });
             } else {
-              await sock.sendMessage(GROUP_JID, {
+              await sock.sendMessage(asal, {
                 document: buf,
                 mimetype: media.mimetype || "application/octet-stream",
                 fileName: media.filename || "lampiran",
@@ -175,7 +189,11 @@ async function startSock() {
             console.warn(`[wa-bot] Gagal mengirim ${media.jenis}: ${e.message}`);
           }
         }
-        if (reply) await kirimTeks(GROUP_JID, reply, media ? undefined : msg);
+        // KE ASAL PESAN, bukan selalu ke grup. Kalau baris ini tetap
+        // GROUP_JID, jawaban `porto` yang diminta lewat japri justru
+        // TERKIRIM KE GRUP -- posisi dan nominal uang seseorang dibacakan
+        // ke semua orang. Persis kebocoran yang mau dicegah.
+        if (reply) await kirimTeks(asal, reply, media ? undefined : msg);
       } catch (e) {
         console.error("[wa-bot] Gagal memproses pesan:", e);
       }

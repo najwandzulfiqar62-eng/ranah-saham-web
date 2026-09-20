@@ -7423,6 +7423,11 @@ _WA_BANTUAN = (
     "• *ihsg* — analisis pasar/indeks\n"
     "• *nyangkut KODE HARGA* — posisi merugi: kondisi pasar, level average "
     "down yang masuk akal, dan syaratnya\n\n"
+    "*Portofolio kamu* — japri saja, isinya pribadi:\n"
+    "• *beli KODE HARGA LOT* — catat pembelian (mis. `beli BBCA 8000 5`)\n"
+    "• *jual KODE [LOT]* — catat penjualan; tanpa lot = jual semua\n"
+    "• *porto* — posisimu: untung/rugi, harus apa, dan level menambahnya\n"
+    "• *hapus KODE* — batalkan catatan yang salah ketik\n\n"
     "_Bukan ajakan membeli/menjual._"
 )
 
@@ -7671,6 +7676,223 @@ async def _wa_blok_sinyal_emiten(kode: str) -> list[str]:
     # ditulis mirip, tapi karena memanggil fungsi yang sama.
     baris += _anjuran_sinyal(terbaru, _kode_lolos_hari_ini(), _peta_harmonic_hari_ini())
     return baris
+
+
+from core.portofolio import LEMBAR_PER_LOT as PORTO_LEMBAR_PER_LOT
+
+# Perintah yang menyentuh posisi pribadi. Dipisah sebagai himpunan karena
+# dipakai dua kali: untuk mengenali perintahnya, dan untuk MENOLAKNYA di
+# grup.
+_PORTO_PERINTAH = {"porto", "portofolio", "posisi", "beli", "jual", "hapus"}
+
+
+async def _wa_porto(user: dict | None, aksi: str, kode: str,
+                    harga: float, lot: float) -> str:
+    """Jalankan perintah portofolio dan susun balasannya.
+
+    Seluruh penulisan ke basis data lewat asyncio.to_thread: sqlite3 itu I/O
+    sinkron, dan menahan event loop di sini berarti menahan SEMUA permintaan
+    lain -- pelajaran yang sudah berkali-kali dibayar di berkas ini.
+    """
+    from core.portofolio import catat, hapus_kode, posisi_kode, posisi_user
+
+    if not user:
+        return "Akunmu belum dikenali. Daftar dulu di ranahsaham.com ya."
+    uid = user["id"]
+
+    if aksi in ("BELI", "JUAL"):
+        try:
+            if aksi == "JUAL" and not lot:
+                # "jual BBCA" tanpa jumlah = jual SEMUA. Disebutkan balik di
+                # jawabannya, supaya yang salah ketik langsung sadar.
+                p = await asyncio.to_thread(posisi_kode, uid, kode)
+                if not p:
+                    return f"Kamu belum punya catatan posisi *{kode}*."
+                lot = p["lot"]
+            hasil = await asyncio.to_thread(catat, uid, kode, aksi, lot, harga or 0)
+        except ValueError as e:
+            return f"{e}"
+        if aksi == "BELI":
+            return (f"Dicatat: *BELI {kode}* {lot:g} lot @{_rp(harga)}.\n"
+                    f"Posisi sekarang {hasil['lot']:g} lot, "
+                    f"rata-rata {_rp(hasil['harga_avg'])}.\n\n"
+                    f"Ketik `porto` untuk melihat semuanya.")
+        sisa = (f"Sisa {hasil['lot']:g} lot @{_rp(hasil['harga_avg'])}."
+                if hasil["lot"] > 0 else "Posisi ditutup seluruhnya.")
+        return f"Dicatat: *JUAL {kode}* {lot:g} lot. {sisa}"
+
+    if aksi == "HAPUS":
+        n = await asyncio.to_thread(hapus_kode, uid, kode)
+        if not n:
+            return f"Tidak ada catatan *{kode}* untuk dihapus."
+        return (f"{n} catatan *{kode}* dihapus.\n"
+                f"_Ini membatalkan CATATAN, bukan mencatat penjualan. "
+                f"Kalau kamu benar-benar menjual, pakai `jual {kode}`._")
+
+    posisi = await asyncio.to_thread(posisi_user, uid)
+    if not posisi:
+        return _wa_fmt_porto([], None)
+
+    # Harga & level diambil BERSAMAAN, dengan batas konkurensi: tiap posisi
+    # memanggil averagedown() yang sendirinya membaca cache harga. Tanpa
+    # batas, portofolio berisi 20 emiten akan menembak semuanya sekaligus.
+    sem = asyncio.Semaphore(5)
+
+    async def _satu(p):
+        async with sem:
+            return await _porto_baris(p)
+
+    baris, pasar = await asyncio.gather(
+        asyncio.gather(*[_satu(p) for p in posisi], return_exceptions=True),
+        ihsg(), return_exceptions=True)
+    if isinstance(baris, Exception):
+        return "Maaf, posisimu tidak bisa dihitung sekarang. Coba lagi sebentar lagi."
+    bersih = [b for b in baris if not isinstance(b, Exception)]
+    return _wa_fmt_porto(bersih, None if isinstance(pasar, Exception) else pasar)
+
+
+async def _porto_baris(p: dict) -> dict:
+    """Satu posisi + harga sekarang + level yang bisa ditindaklanjuti.
+
+    "Entry di mana" bukan tambahan, itu intinya. Portofolio tanpa jawaban
+    "lalu saya harus apa, di harga berapa" cuma jadi kalkulator untung-rugi
+    -- dan itu sudah ada di aplikasi sekuritas mana pun.
+
+    Levelnya datang dari MESIN YANG SAMA dengan perintah `nyangkut`
+    (averagedown -> suggestions: support + batas bawah estimasi wajar), jadi
+    dua perintah ini tidak mungkin menyebut level yang berbeda untuk saham
+    dan harga rata-rata yang sama. Kalau ada yang gagal diambil, posisinya
+    tetap tampil tanpa levelnya -- kehilangan satu bagian jauh lebih baik
+    daripada kehilangan seluruh jawabannya.
+    """
+    hasil = dict(p)
+    try:
+        d = await averagedown(p["kode"], avg_price=p["harga_avg"], lots=1, add_lots=1)
+    except Exception:
+        d = {}
+    harga = d.get("current_price")
+    hasil["harga"] = harga
+    hasil["rekomendasi"] = d.get("recommendation")
+    hasil["wajar"] = d.get("fair_value_verdict")
+    hasil["level"] = [x for x in (d.get("suggestions") or []) if x.get("price")][:2]
+    if harga and p["harga_avg"]:
+        hasil["untung_pct"] = (harga / p["harga_avg"] - 1) * 100
+        hasil["untung_rp"] = (harga - p["harga_avg"]) * p["lot"] * PORTO_LEMBAR_PER_LOT
+    else:
+        hasil["untung_pct"] = None
+        hasil["untung_rp"] = None
+    return hasil
+
+
+def _rp_tanda(x) -> str:
+    """Rupiah dengan tanda MINUS DI DEPAN: -Rp76.000, bukan Rp-76.000.
+
+    Terdengar sepele, tapi "Rp-76.000" terbaca sekilas seperti angka rusak,
+    dan di kolom untung-rugi itu justru angka yang paling dipelototi.
+    """
+    if x is None:
+        return "—"
+    nilai = float(x)
+    return ("-" if nilai < 0 else "") + _rp(abs(nilai))
+
+
+def _porto_aksi(b: dict, pasar_rawan: bool) -> list[str]:
+    """Perintahnya, lalu levelnya. Satu baris aksi + paling banyak satu baris
+    level -- bentuk yang sama dengan kartu sinyal supaya orang tidak perlu
+    belajar dua tata letak."""
+    naik = b.get("untung_pct")
+    rek = (b.get("rekomendasi") or "").upper()
+    keluar = []
+
+    if naik is None:
+        return ["   ▸ _harga belum terambil, coba lagi sebentar lagi_"]
+
+    if naik <= -15:
+        aksi, alasan = "TINJAU ULANG", f"rugi {naik:.1f}%, cek apakah alasan belinya masih berlaku"
+    elif naik < 0 and "SELL" in rek:
+        aksi, alasan = "WASPADA", "masih rugi dan teknikalnya melemah"
+    elif naik < 0:
+        aksi, alasan = "TAHAN", "rugi tapi teknikalnya belum rusak"
+    elif naik >= 20:
+        aksi, alasan = "AMANKAN SEBAGIAN", f"untung {naik:+.1f}%, kunci sebagian & sisakan runner"
+    else:
+        aksi, alasan = "HOLD", f"untung {naik:+.1f}%"
+    keluar.append(f"   ▸ *{aksi}* — {alasan}")
+
+    # LEVEL MENAMBAH. Cuma untuk yang sedang rugi: menambah di posisi yang
+    # sudah untung itu keputusan yang sama sekali berbeda (menambah risiko
+    # pada untung yang belum direalisasikan), dan menyarankannya di sini
+    # akan terbaca seperti anjuran padahal bukan.
+    if naik < 0 and b.get("level"):
+        bagian = " · ".join(
+            f"{x.get('label')} {_rp(x.get('price'))}"
+            + (f" → rata-rata {_rp(x['new_avg_price'])}" if x.get("new_avg_price") else "")
+            for x in b["level"])
+        keluar.append(f"   ↪ Kalau mau menambah: {bagian}")
+        # Penafiannya SEKALI di kaki pesan, bukan diulang tiap posisi.
+        # Kalimat yang sama tercetak empat kali berhenti dibaca pada
+        # pengulangan kedua -- dan justru kalimat inilah yang paling penting
+        # untuk sampai.
+    return keluar
+
+
+def _wa_fmt_porto(posisi: list[dict], pasar: dict | None) -> str:
+    """Portofolio anggota: untung/rugi, perintahnya, dan levelnya."""
+    if not posisi:
+        return "\n".join([
+            "*Portofolio kamu* masih kosong.",
+            "",
+            "Catat posisimu dengan:",
+            "• `beli BBCA 8000 5` — 5 lot di harga 8.000",
+            "• `jual BBCA 3` — jual 3 lot",
+            "• `hapus BBCA` — batalkan catatan (salah ketik)",
+            "",
+            "_Catatan ini pribadi, cuma kamu yang bisa melihatnya._",
+        ])
+
+    modal = sum(p["modal"] for p in posisi)
+    untung = sum(p["untung_rp"] for p in posisi if p.get("untung_rp") is not None)
+    pct = (untung / modal * 100) if modal else 0.0
+
+    baris = [f"*Portofolio kamu* — {len(posisi)} posisi · modal {_rp(modal)}"]
+    pasar_rawan = False
+    if pasar:
+        bear = (pasar.get("bearish_score") or 0) > (pasar.get("bullish_score") or 0)
+        turun = (pasar.get("daily_change") or 0) <= -1.0
+        pasar_rawan = bear or turun
+        ubah = pasar.get("daily_change")
+        baris.append(f"_IHSG {pasar.get('prediction') or '-'}"
+                     + (f" {ubah:+.2f}%" if ubah is not None else "") + "._")
+
+    for nama, saring in (("Untung", lambda x: (x.get("untung_pct") or 0) >= 0),
+                         ("Rugi", lambda x: (x.get("untung_pct") or 0) < 0)):
+        bagian = [b for b in posisi if b.get("untung_pct") is not None and saring(b)]
+        if not bagian:
+            continue
+        baris += ["", f"*{nama}* ({len(bagian)})"]
+        for b in bagian:
+            kepala = (f"*{b['kode']}* {b['lot']:g} lot @{_rp(b['harga_avg'])} "
+                      f"→ {_rp(b.get('harga'))}")
+            n = b.get("untung_pct")
+            kepala += f"  *{n:+.1f}%*" if n is not None else ""
+            if b.get("untung_rp") is not None:
+                kepala += f" ({_rp_tanda(b['untung_rp'])})"
+            baris.append(kepala)
+            baris += _porto_aksi(b, pasar_rawan)
+
+    belum = [b for b in posisi if b.get("untung_pct") is None]
+    if belum:
+        baris += ["", "*Harga belum terambil*",
+                  "• " + " · ".join(f"*{b['kode']}*" for b in belum)]
+
+    baris += ["", f"_Mengambang: {_rp_tanda(untung)} ({pct:+.2f}%)._"]
+    if any((b.get("untung_pct") or 0) < 0 and b.get("level") for b in posisi):
+        ekor = (" — dan IHSG sedang lemah, tunggu pasarnya stabil dulu."
+                if pasar_rawan else ".")
+        baris.append("_Level menambah datang dari support & batas bawah estimasi "
+                     "wajar. Menambah TIDAK wajib" + ekor + "_")
+    baris.append("_Bukan ajakan membeli/menjual — keputusan tetap di kamu._")
+    return "\n".join(baris)
 
 
 def _wa_fmt_nyangkut(kode: str, avg: float, d: dict, pasar: dict | None) -> str:
@@ -8841,7 +9063,8 @@ async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
     return None, ", ".join(dicoba) or "(tanpa identitas)"
 
 
-async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = None
+async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = None,
+                             dari_grup: bool = True
                              ) -> tuple[str | None, dict | None]:
     """(teks balasan, media) untuk satu pesan grup. Teks None = memang tidak
     perlu dibalas (bukan perintah -- obrolan biasa TIDAK boleh disahut).
@@ -8894,6 +9117,30 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid and harga_avg > 0:
             kode_nyangkut, avg_nyangkut = calon, harga_avg
 
+    # Perintah portofolio. Bentuknya "beli KODE HARGA [LOT]", "jual KODE [LOT]",
+    # "hapus KODE", atau "porto" sendirian.
+    porto_aksi, porto_kode, porto_harga, porto_lot = "", "", 0.0, 0.0
+    if kunci in {"porto", "portofolio", "posisi"}:
+        porto_aksi = "LIHAT"
+    elif kata and kata[0] in {"beli", "jual", "hapus"} and len(kata) >= 2:
+        calon = _norm_kode(kata[1])
+        if calon in kode_valid:
+            def _angka_wa(teks):
+                try:
+                    return float(str(teks).replace(".", "").replace(",", "."))
+                except (TypeError, ValueError):
+                    return 0.0
+            if kata[0] == "hapus":
+                porto_aksi, porto_kode = "HAPUS", calon
+            elif kata[0] == "beli" and len(kata) >= 3:
+                porto_harga = _angka_wa(kata[2])
+                porto_lot = _angka_wa(kata[3]) if len(kata) >= 4 else 1.0
+                if porto_harga > 0 and porto_lot > 0:
+                    porto_aksi, porto_kode = "BELI", calon
+            elif kata[0] == "jual":
+                porto_lot = _angka_wa(kata[2]) if len(kata) >= 3 else 0.0
+                porto_aksi, porto_kode = "JUAL", calon
+
     # "news"/"berita" sendirian = berita pasar; dengan kode = berita emiten itu.
     minta_berita = kunci in {"news", "berita"}
     kode_berita = ""
@@ -8903,7 +9150,7 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             kode_berita, minta_berita = calon, True
 
     if (not kode_lacak and not kode_laporan and not minta_berita and not kode_nyangkut
-            and not kode_harmonic and not adalah_kode
+            and not kode_harmonic and not adalah_kode and not porto_aksi
             and kunci not in {"sinyal", "screener", "minervini", "breakout",
                               "kepemilikan", "x15", "ihsg", "pasar", "harmonic",
                               "harmonik", "bantuan", "help", "menu"}):
@@ -8947,6 +9194,17 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
                                          await harmonic_kode(kode_harmonic)), None
         if kunci in {"harmonic", "harmonik"}:
             return _wa_fmt_harmonic_screener(await screener_harmonic()), None
+        if porto_aksi:
+            # PRIVASI. Isinya nominal uang orang, dan grup ini berisi banyak
+            # anggota. Ditolak di grup, bukan disensor sebagian: menyamarkan
+            # rupiah tapi tetap menyebut kode dan jumlah lot sama saja
+            # membocorkan posisi seseorang ke seluruh grup.
+            if dari_grup:
+                return ("Posisi portofolio itu pribadi — saya tidak menampilkannya "
+                        "di grup.\n\nChat saya *japri* (klik nama bot ini) "
+                        "lalu ketik `porto`.", None)
+            return await _wa_porto(user, porto_aksi, porto_kode,
+                                   porto_harga, porto_lot), None
         if kode_nyangkut:
             # Konteks pasar ikut diambil: menambah posisi saat IHSG rontok
             # itu keputusan yang berbeda. Kalau gagal, panduannya tetap
@@ -9017,8 +9275,17 @@ async def api_wa_command(request: Request):
     _wa_pastikan_bot(request)
     body = await request.json()
     kandidat = [str(x) for x in (body.get("candidates") or []) if x]
+    # Asal percakapan. GAGAL-TERTUTUP: kalau sidecar belum diperbarui dan
+    # tidak mengirimnya, anggap GRUP. Menolak perintah portofolio karena
+    # salah tebak cuma merepotkan; membocorkan posisi seseorang ke grup
+    # karena salah tebak tidak bisa ditarik kembali.
+    dari_grup = bool(body.get("grup", True))
+    chat = str(body.get("chat") or "")
+    if chat:
+        dari_grup = chat.endswith("@g.us")
     balasan, media = await _wa_handle_command(
-        str(body.get("from") or ""), str(body.get("text") or ""), kandidat)
+        str(body.get("from") or ""), str(body.get("text") or ""), kandidat,
+        dari_grup=dari_grup)
     # SATU titik keluar untuk SELURUH balasan perintah. Gaya penulisannya
     # diberlakukan di sini, bukan dititipkan ke dua belas penyusun pesan --
     # aturan gaya yang harus diingat orang di banyak tempat adalah aturan
