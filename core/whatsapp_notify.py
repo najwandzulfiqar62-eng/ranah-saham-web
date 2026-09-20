@@ -73,6 +73,11 @@ async def send_wa_text(text: str) -> bool:
     admin) cukup cek return value, tidak perlu try/except sendiri."""
     if not WA_BOT_URL or not WA_BOT_SECRET:
         return False
+    # Titik keluar kedua (yang pertama /api/wa/command): siaran & ringkasan
+    # harian. Gaya penulisannya diberlakukan di sini juga supaya tidak ada
+    # jalur yang luput -- lihat core/wa_format.py.
+    from core.wa_format import siap_kirim
+    text = siap_kirim(text)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             res = await client.post(

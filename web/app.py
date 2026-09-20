@@ -8034,6 +8034,13 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None, dengan_kepala: bool = True) 
     return "\n".join(baris)
 
 
+# Berapa emiten yang dapat KARTU lengkap, dan berapa yang cuma disebut
+# namanya. Dipisah karena keduanya menjawab kebutuhan yang berbeda: kartu
+# untuk memutuskan, indeks untuk memastikan tidak ada yang terlewat.
+_WA_SINYAL_KARTU = int(os.getenv("WA_SINYAL_KARTU", "8"))
+_WA_SINYAL_MAKS = int(os.getenv("WA_SINYAL_MAKS", "20"))
+
+
 def _wa_fmt_sinyal(rep: dict) -> str:
     """Rekomendasi sinyal, DIKELOMPOKKAN PER EMITEN.
 
@@ -8108,7 +8115,7 @@ def _wa_fmt_sinyal(rep: dict) -> str:
     kelompok.sort(key=lambda k: k[2], reverse=True)
 
     total_emiten = len(kelompok)
-    kelompok = kelompok[:20]
+    kelompok = kelompok[:_WA_SINYAL_MAKS]
     if total_emiten > len(kelompok):
         baris[0] += f" — {len(kelompok)} teratas dari {total_emiten} emiten aktif"
     else:
@@ -8128,47 +8135,111 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         rekap = s.get("emiten_rekap")
         if rekap:
             kepala += f" · {rekap['jumlah_sinyal']} sinyal"
+        # Asal sinyal ikut di KEPALA, bukan baris sendiri di bawah. Di daftar
+        # 20 emiten, baris provenance memakan 20 baris untuk keterangan yang
+        # muat di ujung judul.
+        jejak = _sumber_wa(s.get("source"))
+        if s.get("pattern"):
+            jejak += f" · {s['pattern']}"
+        kepala += f" · _{jejak}_"
         isi = [kepala]
 
-        # Riwayat: sejak kapan, dari harga berapa, sudah naik berapa.
+        # Riwayat DIGABUNG jadi satu baris.
+        #
+        # Daftar ini memuat sampai 20 emiten. Tiga baris riwayat per emiten
+        # berarti 60 baris yang, di WhatsApp, dilipat di balik "Baca
+        # selengkapnya" dan praktis tidak terbaca di grup. Yang dicari orang
+        # saat melihat DAFTAR cuma "saham apa, statusnya apa, levelnya
+        # berapa"; rinciannya sudah tersedia dengan mengetik kodenya, dan
+        # kalimat penutup pesan ini memang menyebut itu.
+        riwayat = []
         if rekap:
-            isi.append(f"   Pertama {rekap['tanggal_pertama']} di "
-                       f"{_rp(rekap['entry_pertama'])} → {rekap['dari_pertama_pct']:+.1f}%")
+            riwayat.append(f"sejak {rekap['tanggal_pertama']} "
+                           f"{_rp(rekap['entry_pertama'])} → "
+                           f"{rekap['dari_pertama_pct']:+.1f}%")
             if rekap["entry_terendah"] < rekap["entry_pertama"]:
-                isi.append(f"   Entry terendah {_rp(rekap['entry_terendah'])} → "
-                           f"{rekap['dari_terendah_pct']:+.1f}%")
+                riwayat.append(f"terendah {_rp(rekap['entry_terendah'])} → "
+                               f"{rekap['dari_terendah_pct']:+.1f}%")
         elif s.get("mulai_dilacak"):
-            isi.append(f"   Sejak {s['mulai_dilacak']} di {_rp(s.get('entry_price'))}"
-                       + (f" → {s['sejak_sinyal_return_pct']:+.1f}%"
-                          if s.get("sejak_sinyal_return_pct") is not None else ""))
+            ubah = (f" → {s['sejak_sinyal_return_pct']:+.1f}%"
+                    if s.get("sejak_sinyal_return_pct") is not None else "")
+            riwayat.append(f"sejak {s['mulai_dilacak']} "
+                           f"{_rp(s.get('entry_price'))}{ubah}")
         if s.get("puncak_return_pct") is not None:
             tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
-            isi.append(f"   Puncak *{s['puncak_return_pct']:+.1f}%*{tgl}")
+            riwayat.append(f"puncak *{s['puncak_return_pct']:+.1f}%*{tgl}")
+        if riwayat:
+            isi.append("   " + " · ".join(riwayat))
 
-        # Yang bisa ditindaklanjuti SEKARANG: sinyal terbarunya.
-        isi.append(f"   *Sinyal terbaru* ({_status_wa(s.get('status'))}): "
-                   f"entry {_rp(s.get('entry_price'))} · SL {_rp(s.get('sl_price'))}")
+        # Level DIGABUNG satu baris, dan status TIDAK diulang: judul
+        # bagian di atas sudah menyebut "Menunggu entry" / "Sedang
+        # berjalan", jadi mengulangnya di tiap kartu cuma menambah kata
+        # tanpa menambah informasi.
         tercapai = s.get("tp_level_hit") or 0
-        tp = []
+        level = [f"entry {_rp(s.get('entry_price'))}", f"SL {_rp(s.get('sl_price'))}"]
         for n, harga in ((1, s.get("tp_price")), (2, s.get("tp2_price")), (3, s.get("tp3_price"))):
             if harga is not None:
-                tp.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
-        if tp:
-            isi.append("   " + " · ".join(tp))
+                level.append(f"{'✅' if tercapai >= n else ''}TP{n} {_rp(harga)}")
+        isi.append("   *Sinyal terbaru*: " + " · ".join(level))
 
         # ANJURAN, bukan cuma angka. Permintaan user: bot harus bertindak
         # seperti asisten -- "ini misalkan udah naik, hold; jika yang sudah
         # punya barang; atau jika belum, bisa entry di berapa". Aturannya
         # dipusatkan di _anjuran_sinyal() supaya kartu ini dan balasan KODE
         # EMITEN tidak bisa lagi berbeda diam-diam.
-        isi += [f"   {b}" for b in _anjuran_sinyal(s, lolos_hari_ini, harmonic_peta)]
+        # Bentuk PADAT, bukan versi panjang.
+        #
+        # _anjuran_sinyal() memang ditulis untuk WhatsApp, dengan alasan
+        # "di sana pesannya dibaca satu per satu dan ruangnya tidak
+        # terbatas". Premis itu benar untuk SATU emiten dan keliru untuk
+        # daftar berisi 20: yang terjadi bukan dibaca satu per satu,
+        # melainkan dilipat WhatsApp di balik "Baca selengkapnya".
+        #
+        # _anjuran_ringkas() memakai fungsi keputusan yang SAMA
+        # (_keputusan_dasar), jadi daftar dan jawaban per-emiten tidak
+        # mungkin menyimpulkan hal berbeda -- yang berbeda cuma banyaknya
+        # kata. Levelnya ikut terbawa, jadi yang bisa ditindaklanjuti tidak
+        # hilang.
+        ring = _anjuran_ringkas(s, lolos_hari_ini, harmonic_peta) or {}
+        if ring.get("aksi"):
+            ekor = " — " + "; ".join(ring.get("baris") or []) if ring.get("baris") else ""
+            isi.append(f"   ▸ *{ring['aksi']}*{ekor}")
 
-        jejak = _sumber_wa(s.get("source"))
-        if s.get("pattern"):
-            jejak += f" · {s['pattern']}"
-        isi.append(f"   _{jejak}_")
+        # Level MASUK LAGI tetap disebut, walau bentuknya padat.
+        #
+        # Bentuk ringkas tidak membawanya (di web ia ada di kolom lain), dan
+        # tanpa baris ini "HOLD, stop naik ke 400" menjawab yang sudah
+        # punya barang tapi tidak menjawab yang belum -- padahal "kalau mau
+        # masuk, di harga berapa" justru pertanyaan yang paling sering
+        # ditanyakan di grup. Terseness yang membuang jawaban bukan
+        # keringkasan, itu kehilangan.
+        ml = s.get("masuk_lagi") or {}
+        area = sorted([a for a in (ml.get("deep"), ml.get("pullback")) if a],
+                      key=lambda a: a["entry"])
+        if area:
+            teks = f"area terbaik {_rp(area[0]['entry'])} (SL {_rp(area[0]['sl'])})"
+            if len(area) > 1:
+                teks += f" · alternatif lebih dangkal {_rp(area[1]['entry'])}"
+            naik = (s.get("sejak_sinyal_return_pct")
+                    or (s.get("emiten_rekap") or {}).get("dari_pertama_pct") or 0)
+            if naik > 3:
+                teks += " · _jangan dikejar di harga sekarang_"
+            isi.append(f"   ↪ Belum punya: {teks}")
+
         return isi
 
+    # KARTU untuk yang teratas, INDEKS untuk sisanya.
+    #
+    # Dua puluh kartu penuh tidak muat di satu pesan WhatsApp sepadat apa
+    # pun bentuknya -- yang terjadi bukan "dibaca satu per satu", melainkan
+    # dilipat di balik "Baca selengkapnya" dan dilewati. Memotongnya diam-
+    # diam lebih buruk lagi: emiten di urutan bawah hilang tanpa jejak.
+    #
+    # Jadi yang berperingkat atas tetap berkartu lengkap, sisanya disebut
+    # NAMANYA saja dalam satu baris. Tidak ada emiten yang hilang, dan
+    # rinciannya tetap sejangkauan satu ketikan -- persis yang sudah
+    # ditawarkan kalimat penutup pesan ini.
+    sisa_kartu = _WA_SINYAL_KARTU
     for nama_blok, status, catatan in (
             ("Menunggu entry", "PENDING_ENTRY", "harga belum menyentuh area entry"),
             ("Sedang berjalan", "OPEN", "sudah entry, posisi masih terbuka")):
@@ -8176,8 +8247,13 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         if not bagian:
             continue
         baris += ["", f"*{nama_blok}* ({len(bagian)}) — _{catatan}_", ""]
-        for kode, s, sk in bagian:
+        berkartu = bagian[:max(0, sisa_kartu)]
+        sisa_kartu -= len(berkartu)
+        for kode, s, sk in berkartu:
             baris += _kartu(kode, s, sk)
+        ringkas = bagian[len(berkartu):]
+        if ringkas:
+            baris.append("• " + " · ".join(f"*{k}*" for k, _, _ in ringkas))
 
     baris += ["", "_Sinyal yang sudah kena TP1/TP2 TETAP di daftar selama posisinya "
                   "belum ditutup — TP berikutnya masih berlaku._",
@@ -8897,6 +8973,13 @@ async def api_wa_command(request: Request):
     kandidat = [str(x) for x in (body.get("candidates") or []) if x]
     balasan, media = await _wa_handle_command(
         str(body.get("from") or ""), str(body.get("text") or ""), kandidat)
+    # SATU titik keluar untuk SELURUH balasan perintah. Gaya penulisannya
+    # diberlakukan di sini, bukan dititipkan ke dua belas penyusun pesan --
+    # aturan gaya yang harus diingat orang di banyak tempat adalah aturan
+    # yang cepat atau lambat berbeda-beda. Lihat core/wa_format.py.
+    if balasan:
+        from core.wa_format import siap_kirim
+        balasan = siap_kirim(balasan)
     return {"reply": balasan, "media": media}
 
 

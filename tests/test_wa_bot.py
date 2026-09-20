@@ -233,9 +233,12 @@ def test_sinyal_menyebut_puncak_sejak_muncul(client, wa_bersih, monkeypatch):
     _daftarkan_approved()
 
     hasil = _kirim(client, "sinyal").json()["reply"]
-    assert "Sejak 2026-07-01 di Rp400" in hasil
+    # Kata-katanya dipadatkan 20 Sep 2026 ("sejak TGL HARGA", tanpa "di")
+    # karena riwayat kini digabung satu baris bersama puncaknya -- isinya
+    # sama, barisnya sepertiga. Lihat core/wa_format.py.
+    assert "sejak 2026-07-01 Rp400" in hasil
     assert "+87.2%" in hasil or "+87.3%" in hasil
-    assert "Puncak *+132.5%*" in hasil and "2026-08-20" in hasil
+    assert "puncak *+132.5%*" in hasil and "2026-08-20" in hasil
     # Puncak terjauh ikut diringkas di atas, beserta penyangkalannya.
     assert "*Puncak terjauh sejak sinyal muncul*" in hasil
     assert "bukan hasil yang direalisasikan" in hasil
@@ -710,8 +713,14 @@ def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa
     # dingin di lingkungan tes, jadi keputusannya HOLD -- BUKAN "FULL TP".
     # Menjual seluruh posisi karena DATANYA yang belum siap adalah kerugian
     # yang disebabkan aplikasinya sendiri.
-    assert "*Sudah punya*: HOLD" in hasil and "sudah habis di TP1" in hasil
-    assert "stop ke titik impas (Rp400)" in hasil
+    # DAFTAR memakai bentuk padat (_anjuran_ringkas), jawaban PER-EMITEN
+    # memakai bentuk panjang (_anjuran_sinyal). Keputusannya diambil fungsi
+    # yang sama, jadi keduanya tidak mungkin berbeda isi -- yang berbeda
+    # cuma banyaknya kata. Diubah 20 Sep 2026: dua puluh anjuran panjang
+    # dalam satu pesan justru dilipat WhatsApp dan tidak terbaca.
+    assert "▸ *HOLD*" in hasil
+    assert "Target habis di TP1" in hasil
+    assert "Stop naik ke 400" in hasil   # bentuk padat, level sama
     assert "FULL TP" not in hasil
     # Area masuk dipimpin yang PALING DALAM (Rp500), pullback jadi
     # alternatif -- diurutkan dari harganya, bukan dari namanya.
@@ -720,13 +729,17 @@ def test_sinyal_memberi_anjuran_untuk_yang_sudah_punya_dan_yang_belum(client, wa
     assert "jangan" in hasil and "dikejar" in hasil
     # Tidak ada level masuk lagi -> pakai entry sinyalnya, tapi tetap
     # "kalau harga menyentuh", bukan disuruh beli di harga sekarang.
-    assert "masuk kalau harga menyentuh Rp1.000, SL Rp940" in hasil
+    # Tanpa level "masuk lagi", yang ditawarkan tetap entry sinyalnya --
+    # dan tetap sebagai level yang DITUNGGU, bukan ajakan beli di harga
+    # sekarang. Kata-katanya padat, levelnya sama.
+    assert "Beli lagi 1.000 · SL 940" in hasil
     # Belum entry -> pasang beli, bukan disuruh HOLD.
-    assert "*Belum punya*: pasang beli di Rp250, SL Rp235" in hasil
-    assert "stop tetap Rp940" in hasil
+    # Yang belum kena entry: perintahnya MENUNGGU, dengan levelnya.
+    assert "▸ *TUNGGU*" in hasil and "Beli 250 · SL 235" in hasil
+    assert "Stop 940" in hasil   # bentuk padat, level sama
     # Yang belum kena TP tetap HOLD -- perintah jual TIDAK boleh muncul di
     # posisi yang masih berjalan normal.
-    assert "*Sudah punya*: HOLD, stop tetap Rp940" in hasil
+    assert "▸ *HOLD* — Stop 940" in hasil   # bentuk padat, keputusan sama
 
 
 def test_digest_harian_hanya_mengabarkan_yang_sudah_menyentuh_area_masuk(monkeypatch):
