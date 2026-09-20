@@ -306,7 +306,7 @@ def test_pengambilan_harga_punya_tenggat():
 
     akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sumber = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
-    potongan = sumber.split("async def _porto_baris")[1][:1600]
+    potongan = sumber.split("async def _porto_baris")[1][:3000]
     assert "wait_for" in potongan, "pengambilan harga tanpa tenggat"
 
 
@@ -532,3 +532,70 @@ def test_jual_emiten_yang_tidak_dipegang(porto):
 
     balas = asyncio.run(app_module._wa_porto({"id": 606}, "JUAL", "BBCA", 9000, 3))
     assert "belum punya catatan posisi" in balas
+
+
+# ---------------------------------------------------------------------------
+# RATA-RATA BARU HARUS MENJAWAB PERTANYAAN YANG SESUNGGUHNYA
+# ---------------------------------------------------------------------------
+
+def test_rata_rata_baru_memakai_jumlah_lot_yang_sebenarnya(porto, monkeypatch):
+    """BUG NYATA 21 Sep 2026. Dipanggil dengan lots=1, add_lots=1 --
+    artinya "pegang 1 lot, tambah 1 lot". Untuk posisi 189 lot, angka yang
+    keluar mengandaikan MENGGANDAKAN posisi (menambah 189 lot, belasan juta
+    rupiah) tanpa pernah menyebutkannya.
+
+    Yang membaca melihat "rata-rata jadi Rp702" dan wajar mengira itu
+    murah; menambah 1 lot sungguhan cuma menggeser rata-ratanya dari 718 ke
+    718. Benar secara aritmatika, tapi menjawab pertanyaan yang tidak
+    pernah diajukan."""
+    import asyncio
+
+    import web.app as app_module
+    from core.risk_management import calculate_average_down
+
+    dilihat = {}
+
+    async def _averagedown(kode, avg_price, lots, add_lots=1, target_price=None):
+        dilihat["lots"] = lots
+        dilihat["add_lots"] = add_lots
+        calc = calculate_average_down(avg_price, lots, 687, add_lots)
+        return {"current_price": 695, "recommendation": "HOLD",
+                "suggestions": [{"label": "Support S1", "price": 687,
+                                 **(calc or {})}]}
+
+    monkeypatch.setattr(app_module, "averagedown", _averagedown)
+    b = asyncio.run(app_module._porto_baris(
+        {"kode": "ELSA", "lot": 189, "harga_avg": 718, "modal": 189 * 718 * 100}))
+
+    assert dilihat["lots"] == 189, "lot yang dipegang tidak diteruskan"
+    assert dilihat["add_lots"] == 94, "tambahannya bukan setengah posisi"
+    # 189 lot @718 + 94 lot @687 -> ~708, BUKAN 702 (yang butuh +189 lot).
+    baru = b["level"][0]["new_avg_price"]
+    assert 706 < baru < 710, f"rata-rata baru {baru} tidak masuk akal"
+
+
+def test_jumlah_lot_yang_diandaikan_disebutkan():
+    """"Rata-rata jadi Rp708" tanpa menyebut berapa lot yang harus dibeli
+    untuk sampai ke sana bukan informasi, itu jebakan."""
+    import web.app as app_module
+
+    b = {"kode": "ELSA", "lot": 189, "harga_avg": 718, "harga": 695,
+         "untung_pct": -3.2, "untung_rp": -434700, "lot_tambah": 94,
+         "level": [{"label": "Support S1", "price": 687, "new_avg_price": 708}]}
+    baris = "\n".join(app_module._porto_aksi(b, False))
+    assert "menambah 94 lot" in baris
+
+
+def test_nyangkut_menyebutkan_asumsi_menggandakan():
+    """`nyangkut` tidak tahu berapa lot yang dipegang, jadi 1:1 satu-satunya
+    andaian yang tersedia -- tapi ia harus DIKATAKAN."""
+    import web.app as app_module
+
+    teks = app_module._wa_fmt_nyangkut(
+        "ELSA", 718,
+        {"current_price": 695,
+         "suggestions": [{"label": "Support S1", "price": 687,
+                          "new_avg_price": 702}]},
+        None)
+    assert "MENGGANDAKAN" in teks
+    assert "porto" in teks, "tidak menawarkan jalan yang lebih tepat"

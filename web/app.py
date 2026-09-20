@@ -7917,8 +7917,26 @@ async def _porto_baris(p: dict) -> dict:
         # emiten yang lambat bisa membuat seluruh `porto` menggantung.
         # Lebih baik satu baris tampil tanpa harga daripada seluruh
         # portofolio tidak muncul.
+        # LOT SUNGGUHAN, bukan 1.
+        #
+        # BUG NYATA 21 Sep 2026: dipanggil dengan lots=1, add_lots=1 --
+        # artinya "pegang 1 lot, tambah 1 lot". Untuk posisi 189 lot, itu
+        # rata-rata baru yang mengandaikan MENGGANDAKAN posisi (menambah 189
+        # lot, belasan juta rupiah) tanpa pernah menyebutkannya. Yang membaca
+        # melihat "rata-rata jadi Rp702" dan wajar mengira itu murah;
+        # menambah 1 lot sungguhan cuma menggeser rata-ratanya dari 718 ke
+        # 718. Angka yang benar secara aritmatika tapi menjawab pertanyaan
+        # yang tidak pernah diajukan.
+        #
+        # Sekarang memakai jumlah lot yang benar-benar dipegang, dan
+        # tambahannya SETENGAH posisi -- besaran yang wajar, dan yang
+        # penting: DISEBUTKAN di layar.
+        lot_punya = max(1, int(p.get("lot") or 1))
+        lot_tambah = max(1, round(lot_punya / 2))
+        hasil["lot_tambah"] = lot_tambah
         d = await asyncio.wait_for(
-            averagedown(p["kode"], avg_price=p["harga_avg"], lots=1, add_lots=1),
+            averagedown(p["kode"], avg_price=p["harga_avg"],
+                        lots=lot_punya, add_lots=lot_tambah),
             timeout=PORTO_TIMEOUT_HARGA)
     except Exception:
         d = {}
@@ -7976,11 +7994,16 @@ def _porto_aksi(b: dict, pasar_rawan: bool) -> list[str]:
     # pada untung yang belum direalisasikan), dan menyarankannya di sini
     # akan terbaca seperti anjuran padahal bukan.
     if naik < 0 and b.get("level"):
+        n = b.get("lot_tambah")
         bagian = " · ".join(
             f"{x.get('label')} {_rp(x.get('price'))}"
             + (f" → rata-rata {_rp(x['new_avg_price'])}" if x.get("new_avg_price") else "")
             for x in b["level"])
-        keluar.append(f"   ↪ Kalau mau menambah: {bagian}")
+        # Jumlah lot yang diandaikan DISEBUTKAN. "Rata-rata jadi Rp702" tanpa
+        # menyebut berapa lot yang harus dibeli untuk sampai ke sana bukan
+        # informasi, itu jebakan.
+        kepala = f"Kalau menambah {n:g} lot" if n else "Kalau mau menambah"
+        keluar.append(f"   ↪ {kepala}: {bagian}")
         # Penafiannya SEKALI di kaki pesan, bukan diulang tiap posisi.
         # Kalimat yang sama tercetak empat kali berhenti dibaca pada
         # pengulangan kedua -- dan justru kalimat inilah yang paling penting
@@ -8103,7 +8126,19 @@ def _wa_fmt_nyangkut(kode: str, avg: float, d: dict, pasar: dict | None) -> str:
             rata_baru = it.get("new_avg_price")
             ekor = f" → rata-rata jadi {_rp(rata_baru)}" if rata_baru else ""
             baris.append(f"• {it.get('label')}: {_rp(it.get('price'))}{ekor}")
+        # ASUMSINYA DISEBUTKAN. Rata-rata baru itu dihitung dengan
+        # mengandaikan penambahan SEBANYAK posisi yang sudah dipegang --
+        # perintah ini tidak tahu berapa lot milikmu, jadi 1:1 satu-satunya
+        # andaian yang tersedia. Tanpa menyebutkannya, "rata-rata jadi
+        # Rp702" terbaca seperti sesuatu yang bisa dicapai dengan menambah
+        # sedikit, padahal ia menuntut menggandakan posisi.
+        baris.append("_Rata-rata baru di atas mengandaikan kamu MENGGANDAKAN "
+                     "posisi (menambah sebanyak yang sudah dipegang). "
+                     "Menambah lebih sedikit menggeser rata-rata jauh lebih "
+                     "tipis._")
         baris.append("_Level dari support & batas bawah estimasi wajar, bukan tebakan._")
+        baris.append("_Catat posisimu lewat `beli KODE HARGA LOT`, lalu `porto` "
+                     "menghitungnya dengan jumlah lotmu yang sebenarnya._")
     else:
         baris += ["", "_Tidak ada level support di bawah harga sekarang yang bisa "
                       "dipakai sebagai area menambah._"]
