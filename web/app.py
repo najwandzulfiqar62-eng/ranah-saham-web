@@ -7522,7 +7522,8 @@ _WA_BANTUAN = (
     "down yang masuk akal, dan syaratnya\n\n"
     "*Portofolio kamu* — japri saja, isinya pribadi:\n"
     "• *beli KODE HARGA LOT* — catat pembelian (mis. `beli BBCA 8000 5`)\n"
-    "• *jual KODE [LOT]* — catat penjualan; tanpa lot = jual semua\n"
+    "• *jual KODE LOT HARGA* — catat penjualan + untung/ruginya "
+    "(tanpa harga = pakai harga pasar, tanpa lot = jual semua)\n"
     "• *porto* — posisimu: untung/rugi, harus apa, dan level menambahnya\n"
     "• *hapus KODE* — batalkan catatan yang salah ketik\n\n"
     "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
@@ -7813,25 +7814,52 @@ async def _wa_porto(user: dict | None, aksi: str, kode: str,
         ])
 
     if aksi in ("BELI", "JUAL"):
+        sebelum = None
         try:
-            if aksi == "JUAL" and not lot:
-                # "jual BBCA" tanpa jumlah = jual SEMUA. Disebutkan balik di
-                # jawabannya, supaya yang salah ketik langsung sadar.
-                p = await asyncio.to_thread(posisi_kode, uid, kode)
-                if not p:
+            if aksi == "JUAL":
+                # Posisi SEBELUM penjualan dibaca dulu: harga rata-ratanya
+                # yang jadi dasar menghitung untung/rugi, dan sesudah
+                # penjualan posisinya bisa saja sudah habis.
+                sebelum = await asyncio.to_thread(posisi_kode, uid, kode)
+                if not sebelum:
                     return f"Kamu belum punya catatan posisi *{kode}*."
-                lot = p["lot"]
+                if not lot:
+                    lot = sebelum["lot"]       # "jual BBCA" = jual SEMUA
+                if not harga:
+                    # BUG NYATA 21 Sep 2026: `jual` tidak pernah meminta
+                    # harga, lalu pencatatan menolak harga 0 -- perintahnya
+                    # SELALU gagal dengan "Harga harus lebih dari 0", pesan
+                    # yang tidak menunjuk ke mana pun. Sekarang harga pasar
+                    # dipakai kalau tidak disebutkan.
+                    harga = await _signal_entry_price_lookup(kode) or 0
             hasil = await asyncio.to_thread(catat, uid, kode, aksi, lot, harga or 0)
         except ValueError as e:
+            if aksi == "JUAL" and "Harga" in str(e):
+                return (f"Harga pasar *{kode}* sedang tidak terambil, jadi "
+                        f"untung/ruginya tidak bisa dihitung.\n\n"
+                        f"Sebutkan harga jualnya: `jual {kode} {lot:g} 8000`")
             return f"{e}"
+
         if aksi == "BELI":
             return (f"Dicatat: *BELI {kode}* {lot:g} lot @{_rp(harga)}.\n"
                     f"Posisi sekarang {hasil['lot']:g} lot, "
                     f"rata-rata {_rp(hasil['harga_avg'])}.\n\n"
                     f"Ketik `porto` untuk melihat semuanya.")
-        sisa = (f"Sisa {hasil['lot']:g} lot @{_rp(hasil['harga_avg'])}."
-                if hasil["lot"] > 0 else "Posisi ditutup seluruhnya.")
-        return f"Dicatat: *JUAL {kode}* {lot:g} lot. {sisa}"
+
+        # UNTUNG/RUGI YANG DIREALISASIKAN. Inilah yang sebenarnya ingin
+        # diketahui orang saat menjual -- "tadi beli di berapa, jadi ini
+        # untung apa rugi?" Tanpa itu, mencatat penjualan cuma pembukuan
+        # yang tidak menjawab apa pun.
+        avg = sebelum["harga_avg"]
+        laba = (harga - avg) * lot * PORTO_LEMBAR_PER_LOT
+        pct = (harga / avg - 1) * 100 if avg else 0.0
+        baris = [f"Dicatat: *JUAL {kode}* {lot:g} lot @{_rp(harga)}.",
+                 f"Rata-ratamu {_rp(avg)} → "
+                 f"*{'Untung' if laba >= 0 else 'Rugi'} {_rp_tanda(abs(laba))}* "
+                 f"({pct:+.1f}%)"]
+        baris.append(f"Sisa {hasil['lot']:g} lot @{_rp(hasil['harga_avg'])}."
+                     if hasil["lot"] > 0 else "Posisi ditutup seluruhnya.")
+        return "\n".join(baris)
 
     if aksi == "HAPUS":
         n = await asyncio.to_thread(hapus_kode, uid, kode)
@@ -9386,7 +9414,8 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon in kode_valid and harga_avg > 0:
             kode_nyangkut, avg_nyangkut = calon, harga_avg
 
-    # Perintah portofolio. Bentuknya "beli KODE HARGA [LOT]", "jual KODE [LOT]",
+    # Perintah portofolio. Bentuknya "beli KODE HARGA [LOT]",
+    # "jual KODE [LOT] [HARGA]",
     # "hapus KODE", atau "porto" sendirian.
     porto_aksi, porto_kode, porto_harga, porto_lot = "", "", 0.0, 0.0
     if kunci in {"porto", "portofolio", "posisi", "port", "posisiku"}:

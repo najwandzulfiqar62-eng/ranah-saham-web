@@ -435,3 +435,100 @@ def test_direktori_emiten_gagal_dimuat_tidak_menyalahkan_pengguna(client, wa_ber
     balas = _japri(client, "beli BBCA 8000 5")
     assert "tidak saya kenali" not in balas
     assert "BELI BBCA" in balas
+
+
+# ---------------------------------------------------------------------------
+# MENJUAL: yang ingin diketahui orang adalah UNTUNG ATAU RUGINYA
+# ---------------------------------------------------------------------------
+
+def test_jual_menyebut_rata_rata_dan_untung_ruginya(porto):
+    """Permintaan penulis 21 Sep 2026: "jualnya kasih tau juga avg brp dong
+    biar tau untung rugi nya". Mencatat penjualan tanpa itu cuma pembukuan
+    yang tidak menjawab apa pun."""
+    import asyncio
+
+    import web.app as app_module
+
+    u = {"id": 601}
+    asyncio.run(app_module._wa_porto(u, "BELI", "BBCA", 8000, 10))
+    balas = asyncio.run(app_module._wa_porto(u, "JUAL", "BBCA", 9000, 3))
+
+    assert "Rata-ratamu Rp8.000" in balas, "harga rata-rata tidak disebut"
+    assert "Untung" in balas and "Rp300.000" in balas
+    assert "+12.5%" in balas
+    assert "Sisa 7 lot" in balas
+
+
+def test_jual_rugi_disebut_rugi(porto):
+    """Bukan "untung -Rp560.000". Kata yang salah di angka merah itu jenis
+    ketidakjujuran kecil yang merusak kepercayaan pada angka yang lain."""
+    import asyncio
+
+    import web.app as app_module
+
+    u = {"id": 602}
+    asyncio.run(app_module._wa_porto(u, "BELI", "BBCA", 8000, 10))
+    balas = asyncio.run(app_module._wa_porto(u, "JUAL", "BBCA", 7200, 10))
+    assert "Rugi Rp800.000" in balas and "-10.0%" in balas
+    assert "Untung" not in balas
+    assert "ditutup seluruhnya" in balas
+
+
+def test_jual_tanpa_harga_memakai_harga_pasar(porto, monkeypatch):
+    """BUG NYATA 21 Sep 2026: `jual` tidak pernah meminta harga, lalu
+    pencatatan menolak harga 0 -- perintahnya SELALU gagal dengan "Harga
+    harus lebih dari 0", pesan yang tidak menunjuk ke mana pun."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def _harga(kode):
+        return 8800.0
+
+    monkeypatch.setattr(app_module, "_signal_entry_price_lookup", _harga)
+    u = {"id": 603}
+    asyncio.run(app_module._wa_porto(u, "BELI", "BBCA", 8000, 5))
+    balas = asyncio.run(app_module._wa_porto(u, "JUAL", "BBCA", 0, 2))
+    assert "Harga harus lebih dari 0" not in balas
+    assert "Rp8.800" in balas and "Untung" in balas
+
+
+def test_jual_tanpa_harga_dan_pasar_mati_menyuruh_sebutkan_harganya(porto, monkeypatch):
+    """Kalau harga pasar tidak terambil, jangan gagal dengan pesan yang
+    tidak menunjuk ke mana pun -- sebutkan apa yang harus diketik."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def _kosong(kode):
+        return None
+
+    monkeypatch.setattr(app_module, "_signal_entry_price_lookup", _kosong)
+    u = {"id": 604}
+    asyncio.run(app_module._wa_porto(u, "BELI", "BBCA", 8000, 5))
+    balas = asyncio.run(app_module._wa_porto(u, "JUAL", "BBCA", 0, 2))
+    assert "jual BBCA 2 8000" in balas
+
+
+def test_jual_semua_tanpa_menyebut_lot(porto, monkeypatch):
+    import asyncio
+
+    import web.app as app_module
+
+    async def _harga(kode):
+        return 8800.0
+
+    monkeypatch.setattr(app_module, "_signal_entry_price_lookup", _harga)
+    u = {"id": 605}
+    asyncio.run(app_module._wa_porto(u, "BELI", "BBCA", 8000, 7))
+    balas = asyncio.run(app_module._wa_porto(u, "JUAL", "BBCA", 0, 0))
+    assert "7 lot" in balas and "ditutup seluruhnya" in balas
+
+
+def test_jual_emiten_yang_tidak_dipegang(porto):
+    import asyncio
+
+    import web.app as app_module
+
+    balas = asyncio.run(app_module._wa_porto({"id": 606}, "JUAL", "BBCA", 9000, 3))
+    assert "belum punya catatan posisi" in balas
