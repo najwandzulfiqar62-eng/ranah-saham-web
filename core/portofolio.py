@@ -31,7 +31,20 @@ from core.database import get_db
 LEMBAR_PER_LOT = 100
 
 
+_tabel_siap = False
+
+
 def ensure_porto_tables() -> None:
+    """Sekali per proses, bukan tiap panggilan.
+
+    CREATE TABLE IF NOT EXISTS memang murah, tapi ia tetap menyentuh basis
+    data yang SAMA dipakai web -- dan fungsi ini dipanggil dari hampir
+    setiap operasi di modul ini. Membayarnya sekali saja menghilangkan
+    seluruh percakapan yang tidak perlu itu.
+    """
+    global _tabel_siap
+    if _tabel_siap:
+        return
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS porto_transaksi (
@@ -46,6 +59,7 @@ def ensure_porto_tables() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_porto_user "
                      "ON porto_transaksi(user_id, kode)")
+    _tabel_siap = True
 
 
 def catat(user_id: int, kode: str, arah: str, lot: float, harga: float) -> dict:

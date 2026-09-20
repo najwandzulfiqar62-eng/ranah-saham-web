@@ -242,3 +242,108 @@ def test_japri_dilayani(client, wa_bersih):
     balas = r.json()["reply"] or ""
     assert "Portofolio kamu" in balas
     assert "japri" not in balas
+
+
+# ---------------------------------------------------------------------------
+# JANGAN SAMPAI WEB IKUT LAG
+# ---------------------------------------------------------------------------
+# Bot dan web berbagi SATU proses dan SATU event loop. Perintah bot yang
+# menahan loop membuat seluruh aplikasi tersendat -- keluhan yang sudah
+# berkali-kali dibayar di proyek ini ("lag ketika mau kirim pertanyaan"
+# di forum, layar login muncul sendiri, file statis ikut menggantung).
+
+def test_porto_tidak_menahan_event_loop(porto, monkeypatch):
+    """Diukur, bukan diklaim. Portofolio 20 emiten -- lebih besar daripada
+    yang wajar -- dan event loop harus tetap bebas."""
+    import asyncio
+    import time
+
+    import web.app as app_module
+
+    for i in range(20):
+        porto.catat(99, f"EM{i:02d}", "BELI", 5, 1000)
+
+    async def _averagedown_palsu(kode, avg_price, lots, add_lots=1,
+                                 target_price=None):
+        await asyncio.sleep(0.02)          # seolah I/O jaringan
+        return {"current_price": 1100, "recommendation": "BUY",
+                "suggestions": [{"label": "Support S1", "price": 950}]}
+
+    async def _ihsg_palsu():
+        return {"prediction": "BEARISH", "daily_change": -0.3}
+
+    monkeypatch.setattr(app_module, "averagedown", _averagedown_palsu)
+    monkeypatch.setattr(app_module, "ihsg", _ihsg_palsu)
+
+    async def _jalan():
+        jeda = [0.0]
+
+        async def _pantau():
+            t = time.perf_counter()
+            while True:
+                await asyncio.sleep(0)
+                kini = time.perf_counter()
+                jeda[0] = max(jeda[0], kini - t)
+                t = kini
+
+        tugas = asyncio.create_task(_pantau())
+        teks = await app_module._wa_porto({"id": 99}, "LIHAT", "", 0, 0)
+        tugas.cancel()
+        return jeda[0], teks
+
+    jeda, teks = asyncio.run(_jalan())
+    assert "EM00" in teks
+    assert jeda < 0.05, (
+        f"event loop tertahan {jeda*1000:.0f} ms — web ikut tersendat")
+
+
+def test_pengambilan_harga_punya_tenggat():
+    """Satu emiten yang lambat tidak boleh menggantung seluruh `porto`.
+    Emiten yang dipegang seseorang belum tentu ada di universe yang
+    dihangatkan pemanas, jadi pengambilan dingin memang mungkin terjadi."""
+    import io
+    import os
+
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sumber = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
+    potongan = sumber.split("async def _porto_baris")[1][:1600]
+    assert "wait_for" in potongan, "pengambilan harga tanpa tenggat"
+
+
+def test_basis_data_disentuh_lewat_thread_bukan_event_loop():
+    """sqlite3 itu I/O SINKRON. Memanggilnya langsung di fungsi async
+    menahan seluruh proses selama tulisannya berlangsung -- dan basis data
+    ini sama dengan yang dipakai web."""
+    import io
+    import os
+
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sumber = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
+    fungsi = sumber.split("async def _wa_porto")[1].split("async def _porto_baris")[0]
+    for nama in ("catat", "hapus_kode", "posisi_user", "posisi_kode"):
+        assert f"asyncio.to_thread({nama}" in fungsi or \
+               f"to_thread({nama}," in fungsi, (
+            f"{nama}() dipanggil langsung di event loop")
+
+
+def test_tabel_dibuat_sekali_saja_per_proses(porto):
+    """ensure_porto_tables() dipanggil dari hampir setiap operasi. Kalau ia
+    menyentuh basis data tiap kali, perintah portofolio menambah lalu lintas
+    ke basis data yang sama dipakai web tanpa guna."""
+    import core.portofolio as pf
+
+    assert pf._tabel_siap is True, "penanda tidak terpasang"
+    dipanggil = []
+    asli = pf.get_db
+
+    def _catat_panggilan(*a, **k):
+        dipanggil.append(1)
+        return asli(*a, **k)
+
+    pf.get_db = _catat_panggilan
+    try:
+        pf.ensure_porto_tables()
+        pf.ensure_porto_tables()
+        assert not dipanggil, "tabel dibuat ulang padahal sudah siap"
+    finally:
+        pf.get_db = asli

@@ -7685,6 +7685,10 @@ from core.portofolio import LEMBAR_PER_LOT as PORTO_LEMBAR_PER_LOT
 # grup.
 _PORTO_PERINTAH = {"porto", "portofolio", "posisi", "beli", "jual", "hapus"}
 
+# Tenggat per posisi saat mengambil harga & level. Satu emiten yang lambat
+# tidak boleh menggantung seluruh jawaban `porto`.
+PORTO_TIMEOUT_HARGA = int(os.getenv("PORTO_TIMEOUT_HARGA", "10"))
+
 
 async def _wa_porto(user: dict | None, aksi: str, kode: str,
                     harga: float, lot: float) -> str:
@@ -7767,7 +7771,19 @@ async def _porto_baris(p: dict) -> dict:
     """
     hasil = dict(p)
     try:
-        d = await averagedown(p["kode"], avg_price=p["harga_avg"], lots=1, add_lots=1)
+        # BERTENGGAT. averagedown() memanggil _clean(), yang mengambil data
+        # dari Yahoo kalau cachenya dingin -- dan emiten yang dipegang
+        # seseorang belum tentu ada di universe yang dihangatkan pemanas.
+        #
+        # Pengambilan dingin itu I/O, jadi ia TIDAK menahan event loop
+        # (diukur: bagian sinkronnya cuma 0,1 ms per posisi). Yang
+        # dibahayakannya bukan web, melainkan jawaban ini sendiri: satu
+        # emiten yang lambat bisa membuat seluruh `porto` menggantung.
+        # Lebih baik satu baris tampil tanpa harga daripada seluruh
+        # portofolio tidak muncul.
+        d = await asyncio.wait_for(
+            averagedown(p["kode"], avg_price=p["harga_avg"], lots=1, add_lots=1),
+            timeout=PORTO_TIMEOUT_HARGA)
     except Exception:
         d = {}
     harga = d.get("current_price")
