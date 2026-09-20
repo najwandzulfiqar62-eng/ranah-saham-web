@@ -39,7 +39,11 @@ JATAH_HARIAN = 3
 JEDA_ULANG_JAM = 48
 
 # Jenis yang TIDAK terkena jatah harian: ini yang justru ditunggu orang.
-PENTING = {"tp", "sl"}
+# "pantau" ikut dikecualikan: levelnya DIPASANG SENDIRI oleh orangnya, jadi
+# ia memang sedang menunggu pesan itu. Menahannya karena jatah habis membuat
+# fiturnya tidak bisa dipercaya -- dan pantauan yang tidak bisa dipercaya
+# lebih buruk daripada tidak ada pantauan sama sekali.
+PENTING = {"tp", "sl", "pantau"}
 
 _tabel_siap = False
 

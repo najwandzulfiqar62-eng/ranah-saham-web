@@ -18,11 +18,24 @@ def porto():
 
     import core.portofolio as pf
     pf.ensure_porto_tables()
-    with get_db() as conn:
-        conn.execute("DELETE FROM porto_transaksi")
+
+    # wa_alert_kirim IKUT dibersihkan. Uji pantauan menulis ke sana, dan
+    # penjaga "sudah pernah dikirim" berlaku 48 jam -- jadi tanpa ini ujinya
+    # lolos sekali lalu GAGAL di jalankan berikutnya, dengan pesan yang
+    # sama sekali tidak menunjuk ke sebabnya. Uji yang tidak bisa diulang
+    # bukan uji.
+    import core.wa_alert as al
+    al.ensure_alert_tables()
+
+    def _bersih():
+        with get_db() as conn:
+            for t in ("porto_transaksi", "porto_pantau", "porto_modal",
+                      "wa_alert_kirim"):
+                conn.execute(f"DELETE FROM {t}")
+
+    _bersih()
     yield pf
-    with get_db() as conn:
-        conn.execute("DELETE FROM porto_transaksi")
+    _bersih()
 
 
 # ---------------------------------------------------------------------------
@@ -728,3 +741,139 @@ def test_modal_menerima_cara_tulis_yang_biasa_dipakai(client, wa_bersih,
     assert "Modal dicatat" in balas, f"{ketikan!r} tidak dikenali"
     uid = [u for u in list_users("approved") if u.get("phone")][0]["id"]
     assert get_modal(uid) == harap
+
+
+# ---------------------------------------------------------------------------
+# PANTAU: saham yang BELUM dipegang
+# ---------------------------------------------------------------------------
+# Peringatan posisi cuma melayani saham yang sudah dibeli. Padahal keputusan
+# yang paling sering diambil orang justru soal yang BELUM dibeli.
+
+def _pasang_harga(monkeypatch, peta):
+    import web.app as app_module
+
+    async def _harga(kode):
+        return peta.get(kode)
+
+    monkeypatch.setattr(app_module, "_signal_entry_price_lookup", _harga)
+
+
+def test_arah_pantauan_ditentukan_dari_harga_sekarang(porto, monkeypatch):
+    """"Pantau ELSA 695" saat harganya 720 jelas berarti menunggu TURUN.
+    Menanyakan arah di situ cuma menambah satu langkah untuk sesuatu yang
+    sudah jelas dari angkanya."""
+    import asyncio
+
+    import web.app as app_module
+
+    _pasang_harga(monkeypatch, {"ELSA": 720.0, "BBCA": 8450.0})
+    u = {"id": 960}
+    turun = asyncio.run(app_module._wa_pantau(u, "ELSA", 695, ""))
+    naik = asyncio.run(app_module._wa_pantau(u, "BBCA", 9000, ""))
+    assert "turun ke Rp695" in turun
+    assert "naik ke Rp9.000" in naik
+
+    daftar = porto.pantau_daftar(960)
+    arah = {p["kode"]: p["arah"] for p in daftar}
+    assert arah == {"ELSA": "bawah", "BBCA": "atas"}
+
+
+def test_memasang_ulang_menimpa_bukan_menumpuk(porto, monkeypatch):
+    """Orang yang mengoreksi angkanya bermaksud mengganti, bukan menambah
+    pantauan kedua untuk saham yang sama."""
+    import asyncio
+
+    import web.app as app_module
+
+    _pasang_harga(monkeypatch, {"ELSA": 720.0})
+    u = {"id": 961}
+    asyncio.run(app_module._wa_pantau(u, "ELSA", 695, ""))
+    asyncio.run(app_module._wa_pantau(u, "ELSA", 700, ""))
+    daftar = porto.pantau_daftar(961)
+    assert len(daftar) == 1 and daftar[0]["harga"] == 700
+
+
+def test_harga_tidak_terambil_tidak_memasang_pantauan_asal(porto, monkeypatch):
+    """Tanpa harga sekarang, arahnya tidak bisa ditentukan -- dan menebaknya
+    berarti memasang pantauan yang mungkin tidak akan pernah berbunyi."""
+    import asyncio
+
+    import web.app as app_module
+
+    _pasang_harga(monkeypatch, {})
+    balas = asyncio.run(app_module._wa_pantau({"id": 962}, "ELSA", 695, ""))
+    assert "tidak terambil" in balas
+    assert porto.pantau_daftar(962) == []
+
+
+def test_pantauan_berhenti_sesudah_tercapai(porto):
+    """Pantauan yang terus berbunyi tiap kali harganya bergoyang di sekitar
+    target bukan pengingat, itu gangguan."""
+    porto.pantau_tambah(963, "ELSA", 695, "bawah")
+    p = porto.pantau_daftar(963)[0]
+    porto.pantau_tandai_tercapai(p["id"])
+    assert porto.pantau_daftar(963) == []
+    assert len(porto.pantau_daftar(963, termasuk_tercapai=True)) == 1
+    assert p["id"] not in [x["id"] for x in porto.pantau_semua_aktif()]
+
+
+def test_pantauan_tidak_terkena_jatah_harian():
+    """Levelnya DIPASANG SENDIRI oleh orangnya, jadi ia memang sedang
+    menunggu pesan itu. Menahannya karena jatah habis membuat fiturnya tidak
+    bisa dipercaya -- dan pantauan yang tidak bisa dipercaya lebih buruk
+    daripada tidak ada pantauan sama sekali."""
+    import core.wa_alert as al
+
+    assert "pantau" in al.PENTING
+
+
+def test_harga_diambil_sekali_per_emiten(porto, monkeypatch):
+    """Dua puluh anggota memantau BBCA tidak boleh berarti dua puluh
+    permintaan harga."""
+    import asyncio
+
+    import web.app as app_module
+
+    for uid in range(970, 975):
+        porto.pantau_tambah(uid, "BBCA", 8000, "bawah")
+
+    dipanggil = []
+
+    async def _harga(kode):
+        dipanggil.append(kode)
+        return 9000.0          # di ATAS target 'bawah' -> belum kena
+
+    monkeypatch.setattr(app_module, "_signal_entry_price_lookup", _harga)
+    anggota = [{"id": uid, "phone": f"08123{uid}", "name": "x"}
+               for uid in range(970, 975)]
+    asyncio.run(app_module._jalankan_alert_pantau(anggota))
+    assert dipanggil == ["BBCA"], f"harga diambil {len(dipanggil)} kali"
+
+
+def test_pantauan_tercapai_dikirim_japri_lalu_berhenti(porto, monkeypatch):
+    import asyncio
+
+    import web.app as app_module
+    import core.whatsapp_notify as notify
+
+    porto.pantau_tambah(980, "ELSA", 695, "bawah")
+
+    async def _harga(kode):
+        return 690.0           # sudah di bawah target
+
+    terkirim = []
+
+    async def _kirim(teks, to=None):
+        terkirim.append((to, teks))
+        return True
+
+    monkeypatch.setattr(app_module, "_signal_entry_price_lookup", _harga)
+    monkeypatch.setattr(notify, "send_wa_text", _kirim)
+
+    n = asyncio.run(app_module._jalankan_alert_pantau(
+        [{"id": 980, "phone": "081234", "name": "x"}]))
+    assert n == 1
+    assert terkirim[0][0] == "081234", "tidak dikirim japri"
+    assert "ELSA" in terkirim[0][1] and "695" in terkirim[0][1]
+    # Sekali kena, berhenti.
+    assert porto.pantau_daftar(980) == []

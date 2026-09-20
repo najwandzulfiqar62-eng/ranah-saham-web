@@ -60,6 +60,19 @@ def ensure_porto_tables() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_porto_user "
                      "ON porto_transaksi(user_id, kode)")
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS porto_pantau (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                kode TEXT NOT NULL,
+                harga REAL NOT NULL,
+                arah TEXT NOT NULL CHECK(arah IN ('atas', 'bawah')),
+                dibuat_at TEXT NOT NULL DEFAULT (datetime('now')),
+                tercapai_at TEXT
+            )
+        """)
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pantau_unik "
+                     "ON porto_pantau(user_id, kode, arah)")
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS porto_modal (
                 user_id INTEGER PRIMARY KEY,
                 rupiah REAL NOT NULL,
@@ -209,3 +222,81 @@ def riwayat_kode(user_id: int, kode: str, batas: int = 20) -> list[dict]:
             "WHERE user_id = ? AND kode = ? ORDER BY id DESC LIMIT ?",
             (int(user_id), (kode or "").upper().strip(), int(batas))).fetchall()
     return [dict(r) for r in rows]
+
+
+# ===========================================================================
+# PANTAUAN HARGA -- untuk saham yang BELUM dipegang
+# ===========================================================================
+# Peringatan posisi cuma melayani saham yang sudah dibeli. Padahal keputusan
+# yang paling sering diambil orang justru soal yang BELUM dibeli: "kalau
+# ELSA sampai 695, saya masuk". Tanpa ini, satu-satunya cara menunggu level
+# adalah membuka aplikasi berkali-kali.
+#
+# Nyambung langsung dengan `racik`: bot menyarankan entry di 695, orangnya
+# menjawab `pantau ELSA 695`, dan ia dikabari saat harganya sampai.
+
+def pantau_tambah(user_id: int, kode: str, harga: float,
+                  arah: str = "") -> dict:
+    """Pasang satu pantauan harga.
+
+    `arah` boleh kosong -- akan ditentukan dari posisi target terhadap harga
+    sekarang oleh pemanggil (lihat web/app.py). Menebaknya di sini tidak
+    mungkin: modul ini sengaja tidak tahu harga pasar.
+    """
+    kode = (kode or "").upper().strip()
+    arah = (arah or "").lower().strip()
+    if not kode:
+        raise ValueError("Kode emiten kosong.")
+    if not (harga and harga > 0):
+        raise ValueError("Harga pantauan harus lebih dari 0.")
+    if arah not in ("atas", "bawah"):
+        raise ValueError("Arah harus 'atas' atau 'bawah'.")
+    ensure_porto_tables()
+    with get_db() as conn:
+        # Satu emiten + satu arah = satu pantauan. Memasang ulang MENIMPA,
+        # bukan menumpuk: orang yang mengoreksi angkanya bermaksud
+        # mengganti, bukan menambah pantauan kedua.
+        conn.execute(
+            "INSERT INTO porto_pantau (user_id, kode, harga, arah) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, kode, arah) DO UPDATE SET "
+            "harga = excluded.harga, dibuat_at = datetime('now'), "
+            "tercapai_at = NULL",
+            (int(user_id), kode, float(harga), arah))
+    return {"kode": kode, "harga": float(harga), "arah": arah}
+
+
+def pantau_daftar(user_id: int, termasuk_tercapai: bool = False) -> list[dict]:
+    ensure_porto_tables()
+    q = "SELECT * FROM porto_pantau WHERE user_id = ?"
+    if not termasuk_tercapai:
+        q += " AND tercapai_at IS NULL"
+    q += " ORDER BY kode, arah"
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(q, (int(user_id),)).fetchall()]
+
+
+def pantau_semua_aktif() -> list[dict]:
+    """Pantauan SELURUH anggota yang belum tercapai -- dipakai loop peringatan."""
+    ensure_porto_tables()
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM porto_pantau WHERE tercapai_at IS NULL").fetchall()]
+
+
+def pantau_tandai_tercapai(pantau_id: int) -> None:
+    """Sekali kena, berhenti. Pantauan harga yang terus berbunyi tiap kali
+    harganya bergoyang di sekitar target bukan pengingat, itu gangguan."""
+    ensure_porto_tables()
+    with get_db() as conn:
+        conn.execute("UPDATE porto_pantau SET tercapai_at = datetime('now') "
+                     "WHERE id = ?", (int(pantau_id),))
+
+
+def pantau_hapus(user_id: int, kode: str) -> int:
+    ensure_porto_tables()
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM porto_pantau WHERE user_id = ? AND kode = ?",
+            (int(user_id), (kode or "").upper().strip()))
+        return cur.rowcount or 0

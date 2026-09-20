@@ -102,7 +102,11 @@ def test_anggota_approved_dilayani(client, wa_bersih, monkeypatch):
     monkeypatch.setattr(app_module, "plan", _plan_palsu)
     monkeypatch.setattr(app_module, "_wa_report_data", _rd_palsu)
     balasan = _kirim(client, "bbca").json()["reply"]
-    assert "daftar" not in balasan.lower()
+    # Yang diperiksa: anggota ter-approve TIDAK menerima pesan undangan.
+    # Dicocokkan ke kalimat yang KHAS milik undangan itu -- "daftar" terlalu
+    # umum ("daftar pantauan" ikut kena), dan "ranahsaham.com" muncul sah di
+    # banyak balasan lain.
+    assert "tunggu persetujuan admin" not in balasan.lower()
     assert "BBCA" in balasan and "Rp9.000" in balasan
 
 
@@ -120,7 +124,8 @@ def test_pengirim_ber_lid_tetap_dikenali_lewat_kandidat_nomor(client, wa_bersih)
     }, headers={"Authorization": f"Bearer {SECRET}"})
 
     balasan = res.json()["reply"]
-    assert balasan is not None and "daftar" not in balasan.lower()
+    assert balasan is not None
+    assert "tunggu persetujuan admin" not in balasan.lower()
     assert "Bot Ranah Saham" in balasan
 
 

@@ -7375,6 +7375,65 @@ async def _wa_alert_loop():
         await asyncio.sleep(WA_ALERT_INTERVAL)
 
 
+async def _jalankan_alert_pantau(anggota: list[dict]) -> int:
+    """Periksa pantauan harga semua anggota. Return jumlah terkirim.
+
+    Harga diambil SEKALI per emiten walau dipantau banyak orang: dua puluh
+    anggota memantau BBCA tidak boleh berarti dua puluh permintaan harga.
+    """
+    from core.portofolio import (pantau_semua_aktif, pantau_tandai_tercapai)
+    from core.wa_alert import boleh_kirim, catat_kirim
+    from core.whatsapp_notify import send_wa_text
+
+    pantau = await asyncio.to_thread(pantau_semua_aktif)
+    if not pantau:
+        return 0
+    per_id = {u["id"]: u for u in anggota}
+    harga_kode: dict = {}
+    terkirim = 0
+
+    for p in pantau:
+        u = per_id.get(p["user_id"])
+        if not u:
+            continue                      # anggota tidak aktif/tanpa nomor
+        kode = p["kode"]
+        if kode not in harga_kode:
+            try:
+                harga_kode[kode] = await _signal_entry_price_lookup(kode)
+            except Exception:
+                harga_kode[kode] = None
+        harga = harga_kode.get(kode)
+        if not harga:
+            continue
+        kena = (harga <= p["harga"]) if p["arah"] == "bawah" else (harga >= p["harga"])
+        if not kena:
+            continue
+
+        kunci = f"{kode}:pantau:{round(p['harga'])}:{p['arah']}"
+        # Jenis "pantau" TIDAK terkena jatah harian: levelnya dipasang
+        # sendiri oleh orangnya, jadi ia memang sedang menunggu pesan ini.
+        # Menahannya karena jatah habis akan membuat fiturnya tidak bisa
+        # dipercaya -- dan pantauan yang tidak bisa dipercaya lebih buruk
+        # daripada tidak ada pantauan sama sekali.
+        if not await asyncio.to_thread(boleh_kirim, u["id"], "pantau", kunci):
+            continue
+        kata = "turun ke" if p["arah"] == "bawah" else "naik ke"
+        teks = (f"🔔 *{kode}* {kata} {_rp(harga)} — level yang kamu pantau "
+                f"({_rp(p['harga'])}).\n\n"
+                f"_Pantauan ini berhenti sekarang. Ketik `{kode}` untuk "
+                f"rencana tradingnya, atau `pantau {kode} <harga>` untuk "
+                f"memasang level baru._")
+        if await send_wa_text(teks, to=u["phone"]):
+            await asyncio.to_thread(pantau_tandai_tercapai, p["id"])
+            await asyncio.to_thread(catat_kirim, u["id"], kode, "pantau", kunci)
+            terkirim += 1
+        await asyncio.sleep(0)
+
+    if terkirim:
+        print(f"\u2139\ufe0f wa-alert: {terkirim} pantauan harga tercapai", flush=True)
+    return terkirim
+
+
 async def _jalankan_alert_posisi() -> int:
     """Periksa posisi SEMUA anggota, kirim yang layak. Return jumlah terkirim."""
     from core.access import list_users
@@ -7390,7 +7449,11 @@ async def _jalankan_alert_posisi() -> int:
     if not aktif:
         return 0
 
-    terkirim = 0
+    # PANTAUAN HARGA diperiksa lebih dulu: ia keadaan yang paling
+    # ditunggu orang (levelnya dipasang sendiri), dan tiap orang cuma dapat
+    # satu pesan per putaran.
+    terkirim = await _jalankan_alert_pantau(aktif)
+
     for u in aktif:
         try:
             posisi = await asyncio.to_thread(posisi_user, u["id"])
@@ -7528,7 +7591,9 @@ _WA_BANTUAN = (
     "• *hapus KODE* — batalkan catatan yang salah ketik\n"
     "• *modal 50jt* — catat modalmu\n"
     "• *racik* — saran belanja dari SISA modalmu, di luar saham yang sudah "
-    "kamu pegang\n\n"
+    "kamu pegang\n"
+    "• *pantau ELSA 695* — kabari kalau harganya menyentuh 695; `pantau` "
+    "saja = daftar pantauan, `lupakan KODE` = hapus\n\n"
     "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
     "perlu diputuskan: menyentuh stop, menyentuh level yang pernah "
     "disebutkan, atau untung besar. Paling banyak beberapa pesan sehari._\n\n"
@@ -7821,6 +7886,20 @@ async def _wa_porto(user: dict | None, aksi: str, kode: str,
     if aksi == "RACIK":
         return await _wa_racik(user)
 
+    if aksi == "PANTAU_LIHAT":
+        return await _wa_pantau(user, "", 0, "")
+    if aksi == "PANTAU":
+        return await _wa_pantau(user, kode, harga, "")
+    if aksi == "PANTAU_HAPUS":
+        return await _wa_pantau(user, kode, 0, "HAPUS")
+    if aksi == "SALAH_PANTAU":
+        return "\n".join([
+            "Mau dipantau di harga berapa?",
+            f"Contoh: `pantau {kode or 'ELSA'} 695`",
+            "",
+            "Ketik `pantau` untuk melihat daftar pantauanmu.",
+        ])
+
     if aksi == "KODE_ASING":
         return (f"Kode *{kode}* tidak saya kenali.\n\n"
                 f"Pakai kode emiten BEI 4 huruf, mis. `beli BBCA 8000 5`.")
@@ -8010,6 +8089,60 @@ def _wa_fmt_racik(hasil: dict, ring: dict, dari_pita: bool) -> str:
     baris += ["", "Kalau jadi beli, catat dengan `beli KODE HARGA LOT`.",
               "_Bukan ajakan membeli/menjual — keputusan tetap di kamu._"]
     return "\n".join(baris)
+
+
+async def _wa_pantau(user: dict, kode: str, harga: float, arah: str) -> str:
+    """Pasang / lihat / hapus pantauan harga."""
+    from core.portofolio import pantau_daftar, pantau_hapus, pantau_tambah
+
+    uid = user["id"]
+    if not kode:
+        daftar = await asyncio.to_thread(pantau_daftar, uid)
+        if not daftar:
+            return "\n".join([
+                "Belum ada pantauan harga.",
+                "",
+                "Pasang dengan `pantau ELSA 695` — saya kabari kalau harganya",
+                "menyentuh angka itu.",
+                "",
+                "_Arahnya ditentukan sendiri dari harga sekarang: target di",
+                "bawah harga = menunggu turun, di atas = menunggu naik._",
+            ])
+        baris = [f"*Pantauan harga* ({len(daftar)})"]
+        for p in daftar:
+            panah = "turun ke" if p["arah"] == "bawah" else "naik ke"
+            baris.append(f"• *{p['kode']}* {panah} {_rp(p['harga'])}")
+        baris += ["", "Hapus dengan `lupakan KODE`."]
+        return "\n".join(baris)
+
+    if arah == "HAPUS":
+        n = await asyncio.to_thread(pantau_hapus, uid, kode)
+        return (f"Pantauan *{kode}* dihapus." if n
+                else f"Tidak ada pantauan *{kode}*.")
+
+    # ARAHNYA DITENTUKAN DARI HARGA SEKARANG, bukan diminta ke pengguna.
+    # "Pantau ELSA 695" saat harganya 720 jelas berarti menunggu TURUN;
+    # menanyakan arah di situ cuma menambah satu langkah untuk sesuatu yang
+    # sudah jelas dari angkanya.
+    sekarang = await _signal_entry_price_lookup(kode)
+    if not sekarang:
+        return (f"Harga *{kode}* sedang tidak terambil, jadi arah pantauannya "
+                f"belum bisa ditentukan. Coba lagi sebentar lagi.")
+    arah = "bawah" if harga < sekarang else "atas"
+    try:
+        await asyncio.to_thread(pantau_tambah, uid, kode, harga, arah)
+    except ValueError as e:
+        return f"{e}"
+
+    jarak = (harga / sekarang - 1) * 100
+    kata = "turun" if arah == "bawah" else "naik"
+    return "\n".join([
+        f"Dipantau: *{kode}* {kata} ke {_rp(harga)}.",
+        f"Sekarang {_rp(sekarang)} ({jarak:+.1f}% dari target).",
+        "",
+        "_Saya kabari japri begitu menyentuh. Sekali kena, pantauannya "
+        "berhenti sendiri._",
+    ])
 
 
 async def _wa_racik(user: dict) -> str:
@@ -9609,7 +9742,23 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
     # "jual KODE [LOT] [HARGA]",
     # "hapus KODE", atau "porto" sendirian.
     porto_aksi, porto_kode, porto_harga, porto_lot = "", "", 0.0, 0.0
-    if kunci in {"racik", "saran", "belanja"}:
+    if kunci in {"pantau", "watchlist", "pantauan"}:
+        porto_aksi, porto_kode = "PANTAU_LIHAT", ""
+    elif kata and kata[0] in {"pantau", "lupakan"} and len(kata) >= 2:
+        calon = _norm_kode(kata[1])
+        if calon and kode_valid and calon not in kode_valid:
+            porto_aksi, porto_kode = "KODE_ASING", calon
+        elif kata[0] == "lupakan":
+            porto_aksi, porto_kode = "PANTAU_HAPUS", calon
+        elif len(kata) >= 3:
+            try:
+                porto_harga = float(kata[2].replace(".", "").replace(",", "."))
+            except ValueError:
+                porto_harga = 0.0
+            porto_aksi, porto_kode = ("PANTAU", calon) if porto_harga > 0 else ("SALAH_PANTAU", calon)
+        else:
+            porto_aksi, porto_kode = "SALAH_PANTAU", calon
+    elif kunci in {"racik", "saran", "belanja"}:
         porto_aksi = "RACIK"
     elif kata and kata[0] == "modal" and len(kata) >= 2:
         # "modal 50jt" / "modal 50 jt" / "modal 50000000". Singkatan jt/juta
