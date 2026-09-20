@@ -7799,6 +7799,19 @@ async def _wa_porto(user: dict | None, aksi: str, kode: str,
         return "Akunmu belum dikenali. Daftar dulu di ranahsaham.com ya."
     uid = user["id"]
 
+    if aksi == "KODE_ASING":
+        return (f"Kode *{kode}* tidak saya kenali.\n\n"
+                f"Pakai kode emiten BEI 4 huruf, mis. `beli BBCA 8000 5`.")
+    if aksi == "SALAH_BENTUK":
+        return "\n".join([
+            "Bentuk perintahnya begini:",
+            "• `beli BBCA 8000 5` — 5 lot di harga 8.000",
+            "• `jual BBCA 3` — jual 3 lot (tanpa angka = jual semua)",
+            "• `hapus BBCA` — batalkan catatan yang salah ketik",
+            "",
+            "Ketik `porto` untuk melihat posisimu.",
+        ])
+
     if aksi in ("BELI", "JUAL"):
         try:
             if aksi == "JUAL" and not lot:
@@ -9376,11 +9389,26 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
     # Perintah portofolio. Bentuknya "beli KODE HARGA [LOT]", "jual KODE [LOT]",
     # "hapus KODE", atau "porto" sendirian.
     porto_aksi, porto_kode, porto_harga, porto_lot = "", "", 0.0, 0.0
-    if kunci in {"porto", "portofolio", "posisi"}:
+    if kunci in {"porto", "portofolio", "posisi", "port", "posisiku"}:
+        # "port" ikut diterima. Perintah yang HAMPIR benar dijawab dengan
+        # diam itu bentuk kegagalan yang paling membingungkan: orang tidak
+        # tahu apakah botnya mati, pesannya tidak sampai, atau ketikannya
+        # salah -- dan ketiganya menuntut tindakan yang berbeda.
         porto_aksi = "LIHAT"
-    elif kata and kata[0] in {"beli", "jual", "hapus"} and len(kata) >= 2:
-        calon = _norm_kode(kata[1])
-        if calon in kode_valid:
+    elif kata and kata[0] in {"beli", "jual", "hapus"}:
+        # SELALU menjawab kalau kata pertamanya jelas perintah portofolio,
+        # walau sisanya tidak terbaca. Diam di sini membuat orang mengulang
+        # ketikan yang sama berkali-kali (terlihat nyata 21 Sep 2026).
+        porto_aksi = "SALAH_BENTUK"
+        calon = _norm_kode(kata[1]) if len(kata) >= 2 else ""
+        # `kode_valid` kosong berarti direktori emitennya GAGAL DIMUAT (lihat
+        # _load_ticker_directory, yang mengembalikan [] saat berkasnya tidak
+        # terbaca). Menyebut kode pengguna "tidak dikenal" karena berkas KITA
+        # tidak terbaca adalah menyalahkan orang atas kesalahan sendiri --
+        # jadi saat itu terjadi, kodenya diterima apa adanya.
+        if calon and kode_valid and calon not in kode_valid:
+            porto_aksi, porto_kode = "KODE_ASING", calon
+        elif calon and (calon in kode_valid or not kode_valid):
             def _angka_wa(teks):
                 try:
                     return float(str(teks).replace(".", "").replace(",", "."))

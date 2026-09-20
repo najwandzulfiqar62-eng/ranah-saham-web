@@ -347,3 +347,91 @@ def test_tabel_dibuat_sekali_saja_per_proses(porto):
         assert not dipanggil, "tabel dibuat ulang padahal sudah siap"
     finally:
         pf.get_db = asli
+
+
+# ---------------------------------------------------------------------------
+# DIAM ITU KEGAGALAN YANG PALING MEMBINGUNGKAN
+# ---------------------------------------------------------------------------
+# 21 Sep 2026: penulis mengetik `beli wins 593 122`, `porto`, `port`, `porto`
+# di japri dan tidak mendapat balasan apa pun. Dari luar, "bot mati", "pesan
+# tidak sampai", dan "ketikan saya salah" terlihat sama persis -- padahal
+# ketiganya menuntut tindakan yang sama sekali berbeda.
+
+def _japri(client, teks):
+    from tests.test_wa_bot import SECRET
+
+    return client.post("/api/wa/command",
+                       json={"from": "6281234567890@s.whatsapp.net", "text": teks,
+                             "chat": "6281234567890@s.whatsapp.net", "grup": False},
+                       headers={"Authorization": f"Bearer {SECRET}"}
+                       ).json()["reply"] or ""
+
+
+@pytest.mark.parametrize("ketikan", ["porto", "port", "portofolio", "posisi"])
+def test_berbagai_cara_menulis_porto_dijawab(client, wa_bersih, ketikan):
+    from tests.test_wa_bot import _daftarkan_approved
+
+    _daftarkan_approved()
+    assert "Portofolio kamu" in _japri(client, ketikan), f"{ketikan!r} tidak dijawab"
+
+
+def test_perintah_setengah_jadi_dijawab_dengan_contohnya(client, wa_bersih):
+    """`beli BBCA` tanpa harga dulu DIAM. Orang lalu mengulang ketikan yang
+    sama berkali-kali karena mengira pesannya tidak sampai."""
+    from tests.test_wa_bot import _daftarkan_approved
+
+    _daftarkan_approved()
+    balas = _japri(client, "beli BBCA")
+    assert "beli BBCA 8000 5" in balas
+
+
+def test_kode_asing_disebut_namanya(client, wa_bersih):
+    """Menyebut kode yang ditolak jauh lebih menolong daripada contoh umum:
+    yang salah ketik langsung melihat salahnya di mana."""
+    from tests.test_wa_bot import _daftarkan_approved
+
+    _daftarkan_approved()
+    balas = _japri(client, "beli ZZZZ 100 5")
+    assert "ZZZZ" in balas and "tidak saya kenali" in balas
+
+
+def test_pembelian_sungguhan_tetap_tercatat(client, wa_bersih):
+    from tests.test_wa_bot import _daftarkan_approved
+
+    _daftarkan_approved()
+    balas = _japri(client, "beli BBCA 593 122")
+    assert "BELI BBCA" in balas and "122 lot" in balas
+    assert "Rp593" in balas
+
+
+def test_sidecar_menerima_japri_bentuk_apa_pun():
+    """WhatsApp sedang berpindah ke LID: japri dari klien baru bisa datang
+    sebagai "12345@lid", bukan "@s.whatsapp.net". Penyaring yang menyebut
+    satu bentuk saja akan DIAM untuk bentuk yang lain -- dan diam tidak
+    meninggalkan jejak apa pun untuk ditelusuri."""
+    import io
+    import os
+
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = io.open(os.path.join(akar, "wa-bot", "index.js"), encoding="utf-8").read()
+    penanganan = js.split('sock.ev.on("messages.upsert"')[1].split("startSock()")[0]
+    assert '@s.whatsapp.net"' not in penanganan.split("dariJapri")[0][-400:], (
+        "penyaring japri masih terikat pada satu bentuk JID")
+    assert "@broadcast" in penanganan and "@newsletter" in penanganan
+    # Yang diabaikan HARUS meninggalkan jejak.
+    assert "diabaikan" in penanganan and "tidak dijawab" in penanganan
+
+
+def test_direktori_emiten_gagal_dimuat_tidak_menyalahkan_pengguna(client, wa_bersih,
+                                                                  monkeypatch):
+    """_load_ticker_directory() mengembalikan [] saat berkasnya tidak
+    terbaca. Menyebut kode pengguna "tidak dikenal" karena berkas KITA tidak
+    terbaca adalah menyalahkan orang atas kesalahan sendiri."""
+    import web.app as app_module
+    from tests.test_wa_bot import _daftarkan_approved
+
+    _daftarkan_approved()
+    monkeypatch.setattr(app_module, "_load_ticker_directory", lambda: [])
+    balas = _japri(client, "beli BBCA 8000 5")
+    assert "tidak saya kenali" not in balas
+    assert "BELI BBCA" in balas

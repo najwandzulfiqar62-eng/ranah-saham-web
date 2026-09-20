@@ -134,8 +134,20 @@ async function startSock() {
         // dijawab di grup -- app Python yang menolaknya di sana, dan japri
         // adalah satu-satunya tempat yang layak untuk data seperti itu.
         // Grup LAIN tetap diabaikan: bot ini melayani satu grup saja.
-        const dariJapri = !dariGrup && asal.endsWith("@s.whatsapp.net");
-        if (!dariGrup && !dariJapri) continue;
+        //
+        // SEMUA yang bukan grup/siaran dianggap japri -- BUKAN cuma
+        // "@s.whatsapp.net". WhatsApp sedang berpindah ke LID, dan japri
+        // dari klien baru bisa datang sebagai "12345@lid". Penyaring yang
+        // menyebut satu bentuk saja akan DIAM untuk bentuk yang lain, dan
+        // diam itu tidak meninggalkan jejak apa pun untuk ditelusuri.
+        const bukanOrang = asal.endsWith("@broadcast")
+          || asal.endsWith("@newsletter")
+          || asal.startsWith("status@");
+        const dariJapri = !dariGrup && !bukanOrang && Boolean(asal);
+        if (!dariGrup && !dariJapri) {
+          console.log(`[wa-bot] diabaikan (bukan grup/japri): ${asal}`);
+          continue;
+        }
         const isi = msg.message?.conversation
           || msg.message?.extendedTextMessage?.text
           || "";
@@ -152,7 +164,9 @@ async function startSock() {
           msg.key.participantAlt, msg.key.participant, msg.participant,
         ].filter((v) => typeof v === "string" && v);
         const pengirim = kandidat[0] || msg.key.remoteJid;
-        console.log(`[wa-bot] pesan grup dari ${kandidat.join(" | ") || "?"}: ${JSON.stringify(isi.slice(0, 60))}`);
+        console.log(`[wa-bot] pesan ${dariGrup ? "grup" : "japri"} `
+          + `(${asal}) dari ${kandidat.join(" | ") || "?"}: `
+          + JSON.stringify(isi.slice(0, 60)));
 
         // Waktu diukur di DUA titik: berapa lama app Python menjawab, dan
         // berapa lama WhatsApp menerima kiriman. Tanpa pemisahan itu,
@@ -176,7 +190,14 @@ async function startSock() {
         const { reply, media } = await res.json();
         const msApp = Date.now() - tMulai;
         // reply null = memang bukan perintah; obrolan biasa tidak disahut.
-        if (!reply && !media) continue;
+        if (!reply && !media) {
+          // DICATAT. "Bot menerima tapi memilih diam" dan "bot tidak pernah
+          // menerima pesannya" itu dua masalah yang sangat berbeda, dan
+          // tanpa baris ini keduanya terlihat sama persis dari luar.
+          console.log(`[wa-bot] tidak dijawab (bukan perintah): `
+            + JSON.stringify(isi.slice(0, 40)));
+          continue;
+        }
 
         // Berkasnya TIDAK ikut di JSON perintah (base64 ratusan KB akan
         // membengkakkan tiap balasan) -- diambil terpisah saat dibutuhkan.
