@@ -7530,6 +7530,11 @@ _WA_BANTUAN = (
     "• *racik* — saran belanja dari SISA modalmu, di luar saham yang sudah "
     "kamu pegang\n"
     "\n"
+    "*Yang tidak ada di aplikasi sekuritas:*\n"
+    "• *rapor* — pola kebiasaanmu sendiri dari catatan transaksi\n"
+    "• *uji* — putar ulang semua sinyal dengan TP/SL pilihanmu "
+    "(mis. `uji minervini tp12 sl3`)\n"
+    "• *cek KODE* — satu saham menurut lima teori sekaligus\n\n"
     "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
     "perlu diputuskan: menyentuh stop, menyentuh level yang pernah "
     "disebutkan, atau untung besar. Paling banyak beberapa pesan sehari._\n\n"
@@ -7819,6 +7824,18 @@ async def _wa_porto(user: dict | None, aksi: str, kode: str,
         baris += ["", "Ketik `racik` untuk saran belanja dari sisa modalmu."]
         return "\n".join(baris)
 
+    if aksi == "RAPOR":
+        return await _wa_rapor(user)
+
+    if aksi == "CEK":
+        return await _wa_cek(kode)
+
+    if aksi == "UJI":
+        peta = {"MINERVINI": "TOP_PICK", "TOPPICK": "TOP_PICK",
+                "NR7": "NR7_52W", "HARMONIC": "MINERVINI_HARMONIC",
+                "MVH": "MINERVINI_HARMONIC", "SMART": "SMART_MONEY"}
+        return await _wa_uji(peta.get(kode), harga, lot)
+
     if aksi == "RACIK":
         return await _wa_racik(user)
 
@@ -8013,6 +8030,235 @@ def _wa_fmt_racik(hasil: dict, ring: dict, dari_pita: bool) -> str:
     return "\n".join(baris)
 
 
+def _wa_fmt_rapor(selesai: list[dict]) -> str:
+    """Rapor kebiasaan. Menilai CARAMU, bukan sahamnya.
+
+    Aplikasi sekuritas punya semua data ini dan tidak satu pun memberitahu
+    apa POLANYA -- mereka menunjukkan hasil per transaksi, bukan kebiasaan
+    yang menghasilkannya.
+    """
+    from core.rapor import MIN_SAMPEL, efek_disposisi, per_kelompok, ringkas
+
+    r = ringkas(selesai)
+    if not r:
+        return "\n".join([
+            "*Rapor kebiasaan*",
+            "",
+            f"_Belum cukup data. Perlu minimal {MIN_SAMPEL} transaksi yang "
+            f"sudah DITUTUP (beli lalu dijual); sekarang "
+            f"{len(selesai)}._",
+            "",
+            "Catat jual-belimu lewat `beli` dan `jual`, lalu rapor ini akan "
+            "menunjukkan pola yang tidak terasa dari dalam.",
+        ])
+
+    baris = [f"*Rapor kebiasaan* \u2014 {r['n']} transaksi selesai",
+             f"Menang {r['menang']} \u00b7 kalah {r['kalah']} "
+             f"(*{r['menang_pct']:.0f}%*) \u00b7 total {_rp_tanda(r['hasil_rp'])}"]
+
+    # 1. EFEK DISPOSISI -- yang paling mahal, dan yang paling tidak terasa.
+    d = efek_disposisi(selesai)
+    if d and d["rasio"] and d["rasio"] >= 1.5:
+        baris += ["", f"\u26a0 *Kamu menahan yang rugi {d['rasio']:g}\u00d7 lebih lama*",
+                  f"   Yang untung dijual rata-rata setelah {d['hari_untung']:g} hari.",
+                  f"   Yang rugi ditahan rata-rata {d['hari_rugi']:g} hari.",
+                  "   _Pola paling umum yang menggerus hasil jangka panjang: "
+                  "untung kecil yang sering, rugi besar yang jarang._"]
+    elif d:
+        baris += ["", f"\u2713 *Lama menahan untung dan rugi seimbang* "
+                      f"({d['hari_untung']:g} vs {d['hari_rugi']:g} hari)",
+                  "   _Ini bagus, dan jarang. Kebanyakan orang menahan yang "
+                  "rugi jauh lebih lama._"]
+
+    # 2. BESAR menang vs BESAR kalah. Menang sering tapi kecil-kecil sambil
+    #    kalah jarang tapi besar adalah cara berbeda untuk rugi pelan-pelan.
+    if r["rata_menang_pct"] is not None and r["rata_kalah_pct"] is not None:
+        besar_menang, besar_kalah = r["rata_menang_pct"], abs(r["rata_kalah_pct"])
+        baris += ["", f"Rata-rata menang *+{besar_menang:.1f}%*, "
+                      f"rata-rata kalah *\u2212{besar_kalah:.1f}%*"]
+        if besar_kalah > besar_menang * 1.3:
+            baris.append("   \u26a0 _Kerugianmu lebih besar daripada keuntunganmu. "
+                         "Dengan pola ini, menang lebih sering pun belum tentu "
+                         "menghasilkan._")
+
+    # 3. EMITEN YANG BERULANG. "Saham ini tidak cocok untukmu" itu kesimpulan
+    #    yang cuma bisa diambil dari catatan sendiri, bukan dari analisis.
+    per_kode = per_kelompok(selesai, lambda t: t["kode"])
+    buruk = [k for k in per_kode if k["menang_pct"] <= 34]
+    bagus = [k for k in per_kode if k["menang_pct"] >= 66]
+    if buruk:
+        baris += ["", "\u26a0 *Emiten yang berulang kali merugikanmu*"]
+        for k in buruk[:3]:
+            baris.append(f"   \u2022 *{k['nama']}* {k['n']}\u00d7 masuk, "
+                         f"menang {k['menang']} ({_rp_tanda(k['hasil_rp'])})")
+    if bagus:
+        baris += ["", "\u2713 *Yang cocok untukmu*"]
+        for k in bagus[:3]:
+            baris.append(f"   \u2022 *{k['nama']}* {k['n']}\u00d7 masuk, "
+                         f"menang {k['menang']} ({_rp_tanda(k['hasil_rp'])})")
+
+    tb, tk = r["terbaik"], r["terburuk"]
+    baris += ["", f"Terbaik: *{tb['kode']}* {tb['hasil_pct']:+.1f}% \u00b7 "
+                  f"Terburuk: *{tk['kode']}* {tk['hasil_pct']:+.1f}%"]
+    baris += ["", "_Dihitung dari transaksi yang SUDAH ditutup saja \u2014 posisi "
+                  "berjalan belum punya hasil. Pasangan beli-jual dirangkai "
+                  "FIFO (yang dibeli lebih dulu, dijual lebih dulu)._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_uji(daftar: list[dict], sumber: str | None) -> str:
+    """Hasil putar-ulang beberapa aturan, supaya bisa dibandingkan.
+
+    Satu angka sendirian tidak memberi tahu apa pun -- "menang 58%" baru
+    berarti kalau ada pembandingnya.
+    """
+    if not daftar:
+        return "\n".join([
+            "*Uji aturan*",
+            "",
+            "_Belum ada bar harga tersimpan untuk memutar ulang sinyalnya._",
+            "Data itu disiapkan pemanas di latar belakang; coba lagi nanti.",
+        ])
+    nama = _sumber_wa(sumber) if sumber else "semua teori"
+    n = daftar[0]["n"]
+    baris = [f"*Uji aturan* \u2014 {nama}",
+             f"_{n} sinyal diputar ulang dengan TP/SL pilihanmu._", ""]
+    baris.append("```")
+    baris.append("  TP     SL    menang   hasil   hari")
+    for r in daftar:
+        menang = f"{r['menang_pct']:.0f}%" if r["menang_pct"] is not None else "  -"
+        baris.append(f"  +{r['tp_pct']:<4.0f} -{r['sl_pct']:<4.0f} {menang:>6}  "
+                     f"{r['hasil_rata_pct']:+6.2f}%  {r['hari_rata']:>4.0f}")
+    baris.append("```")
+
+    terbaik = max(daftar, key=lambda r: r["hasil_rata_pct"])
+    baris.append(f"Hasil terbaik: *TP +{terbaik['tp_pct']:.0f}% / "
+                 f"SL \u2212{terbaik['sl_pct']:.0f}%* "
+                 f"({terbaik['hasil_rata_pct']:+.2f}% per sinyal)")
+    if terbaik["menang_pct"] is not None and terbaik["menang_pct"] < 50:
+        baris.append("_Perhatikan: yang hasilnya terbaik justru BUKAN yang "
+                     "paling sering menang. Target lebih jauh lebih jarang "
+                     "kena, tapi yang kena membayar lebih banyak._")
+    baris += ["", "_Yang diputar ulang adalah sinyal yang BENAR-BENAR pernah "
+                  "dikeluarkan aplikasi ini, termasuk yang buruk \u2014 tidak ada "
+                  "yang bisa dipilih belakangan._",
+              "_Kalau TP dan SL sama-sama tersentuh di hari yang sama, yang "
+              "dihitung SL: dari bar harian tidak mungkin tahu mana yang lebih "
+              "dulu, dan menganggap TP duluan membuat angkanya berbohong._"]
+    return "\n".join(baris)
+
+
+async def _wa_uji(sumber: str | None, tp: float, sl: float) -> str:
+    from core.signal_history import get_signal_report
+    from core.uji_aturan import bandingkan
+
+    bar_peta = _cache_get("sinyal_puncak:v4")
+    if not bar_peta:
+        return _wa_fmt_uji([], sumber)
+    rep = await asyncio.to_thread(get_signal_report)
+    sinyal = rep.get("signals") or []
+
+    # Kalau user menyebut TP/SL sendiri, yang itu dipakai sebagai pusat dan
+    # dua tetangganya ikut diuji -- supaya jawabannya bukan satu angka
+    # telanjang melainkan perbandingan.
+    if tp and sl:
+        pilihan = [(tp, sl), (round(tp * 1.5), sl), (round(tp * 0.6) or 2, sl)]
+    else:
+        pilihan = [(5, 3), (8, 3), (12, 3), (20, 5)]
+    hasil = await asyncio.to_thread(bandingkan, sinyal, bar_peta, pilihan,
+                                    None, sumber)
+    return _wa_fmt_uji(hasil, sumber)
+
+
+def _wa_fmt_cek(kode: str, teori: list[dict], wr: dict) -> str:
+    """Satu saham menurut LIMA teori sekaligus.
+
+    Aplikasi sekuritas memberi SATU pendapat. Ini memberi lima yang kadang
+    TIDAK SEPAKAT -- dan ketidaksepakatan itu informasi, bukan kelemahan:
+    saham yang cuma lolos satu teori memang berbeda kedudukannya dari yang
+    lolos empat.
+    """
+    setuju = [t for t in teori if t["lolos"]]
+    baris = [f"*{kode}* \u2014 {len(setuju)} dari {len(teori)} teori setuju", ""]
+    for t in teori:
+        tanda = "\u2713" if t["lolos"] else "\u2717"
+        rinci = f" \u00b7 {t['rinci']}" if t.get("rinci") else ""
+        baris.append(f"{tanda} {t['nama']}{rinci}")
+
+    if wr:
+        baris += ["", "*Win rate tercatat teori yang setuju*"]
+        for t in setuju:
+            w = wr.get(t.get("source"))
+            if w and w.get("win_rate") is not None:
+                baris.append(f"\u2022 {t['nama']}: {w['win_rate']:.0f}% "
+                             f"dari {w.get('n_resolved') or w.get('n_total') or 0} sinyal")
+
+    if not setuju:
+        baris += ["", "_Tidak satu pun teori memasukkannya hari ini. Itu bukan "
+                      "berarti sahamnya buruk \u2014 cuma tidak sedang berbentuk "
+                      "setup yang dikenali aplikasi ini._"]
+    elif len(setuju) == 1:
+        baris += ["", "_Cuma satu teori yang setuju. Saham yang lolos satu "
+                      "saringan berbeda kedudukannya dari yang lolos beberapa._"]
+    baris += ["", f"Ketik `{kode}` untuk rencana trading lengkapnya.",
+              "_Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+async def _wa_cek(kode: str) -> str:
+    """Kumpulkan pendapat lima teori dari CACHE -- tanpa memindai apa pun."""
+    from core.signal_history import get_signal_report
+
+    mv = {str(x.get("ticker", "")).replace(".JK", ""): x
+          for x in ((_cache_get(SCREENERPRO_CACHE_KEY) or {}).get("items") or [])}
+    hm = {x.get("kode"): x for x in
+          ((_cache_get("screener_harmonic:v3:luas:bullish:10") or {}).get("items") or [])}
+    conf = {x.get("kode"): x for x in (_cache_get("confidence:raw") or [])}
+
+    m, h, c = mv.get(kode), hm.get(kode), conf.get(kode)
+    teori = [
+        {"nama": "Minervini", "source": "TOP_PICK", "lolos": bool(m),
+         "rinci": (f"{m.get('criteria_met')}/8 kriteria, skor {m.get('skor')}"
+                   if m else None)},
+        {"nama": "Harmonic", "source": "HARMONIC", "lolos": bool(h),
+         "rinci": (f"pola {h.get('pola')}" if h else "tidak ada pola")},
+        {"nama": "Minervini \u00d7 Harmonic", "source": "MINERVINI_HARMONIC",
+         "lolos": bool(m and h),
+         "rinci": "irisan dua saringan" if (m and h) else None},
+        {"nama": "NR7 + 52W High", "source": "NR7_52W",
+         "lolos": bool(c and c.get("is_nr7_52w") and c.get("nr7_ketat")),
+         "rinci": (f"SL {c.get('nr7_sl_pct')}%"
+                   if c and c.get("nr7_ketat") else None)},
+        {"nama": "Top Pick", "source": "TOP_PICK",
+         "lolos": bool(c and (c.get("confidence_score") or 0) >= 70),
+         "rinci": (f"confidence {c.get('confidence_score'):.0f}"
+                   if c and c.get("confidence_score") else None)},
+    ]
+    try:
+        rep = await asyncio.to_thread(get_signal_report)
+        wr = rep.get("stats_by_source") or {}
+    except Exception:
+        wr = {}
+    return _wa_fmt_cek(kode, teori, wr)
+
+
+async def _wa_rapor(user: dict) -> str:
+    from core.portofolio import ensure_porto_tables
+    from core.rapor import pasangkan_transaksi
+
+    def _ambil():
+        from core.database import get_db
+        ensure_porto_tables()
+        with get_db() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT id, kode, arah, lot, harga, dicatat_at "
+                "FROM porto_transaksi WHERE user_id = ? ORDER BY id",
+                (int(user["id"]),)).fetchall()]
+
+    transaksi = await asyncio.to_thread(_ambil)
+    return _wa_fmt_rapor(pasangkan_transaksi(transaksi))
+
+
 async def _wa_racik(user: dict) -> str:
     from core.portofolio import ringkas_modal
     from core.risk_management import build_portfolio
@@ -8109,6 +8355,20 @@ async def _porto_baris(p: dict) -> dict:
         hasil["untung_pct"] = None
         hasil["untung_rp"] = None
     return hasil
+
+
+def _angka_wa(teks) -> float:
+    """Angka dari teks yang diketik orang di HP. 0 kalau tidak terbaca.
+
+    Dipakai beberapa perintah portofolio, jadi ia tingkat modul -- versi
+    sebelumnya bersarang di dalam satu cabang, dan perintah lain yang
+    memanggilnya akan meledak dengan NameError saat dipakai, bukan saat
+    ditulis.
+    """
+    try:
+        return float(str(teks).replace(".", "").replace(",", "."))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _rp_tanda(x) -> str:
@@ -9610,7 +9870,25 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
     # "jual KODE [LOT] [HARGA]",
     # "hapus KODE", atau "porto" sendirian.
     porto_aksi, porto_kode, porto_harga, porto_lot = "", "", 0.0, 0.0
-    if kunci in {"racik", "saran", "belanja"}:
+    if kunci in {"rapor", "kebiasaan", "evaluasi"}:
+        porto_aksi = "RAPOR"
+    elif kata and kata[0] == "uji":
+        # "uji" / "uji minervini" / "uji tp8 sl3" / "uji nr7 tp12 sl4"
+        porto_aksi = "UJI"
+        for potong in kata[1:]:
+            if potong.startswith("tp"):
+                porto_harga = _angka_wa(potong[2:])
+            elif potong.startswith("sl"):
+                porto_lot = _angka_wa(potong[2:])
+            else:
+                porto_kode = potong.upper()
+    elif kata and kata[0] == "cek" and len(kata) >= 2:
+        calon = _norm_kode(kata[1])
+        if calon and kode_valid and calon not in kode_valid:
+            porto_aksi, porto_kode = "KODE_ASING", calon
+        elif calon:
+            porto_aksi, porto_kode = "CEK", calon
+    elif kunci in {"racik", "saran", "belanja"}:
         porto_aksi = "RACIK"
     elif kata and kata[0] == "modal" and len(kata) >= 2:
         # "modal 50jt" / "modal 50 jt" / "modal 50000000". Singkatan jt/juta
@@ -9660,11 +9938,6 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if calon and kode_valid and calon not in kode_valid:
             porto_aksi, porto_kode = "KODE_ASING", calon
         elif calon and (calon in kode_valid or not kode_valid):
-            def _angka_wa(teks):
-                try:
-                    return float(str(teks).replace(".", "").replace(",", "."))
-                except (TypeError, ValueError):
-                    return 0.0
             if kata[0] == "hapus":
                 porto_aksi, porto_kode = "HAPUS", calon
             elif kata[0] == "beli" and len(kata) >= 3:
