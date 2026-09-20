@@ -7680,11 +7680,6 @@ async def _wa_blok_sinyal_emiten(kode: str) -> list[str]:
 
 from core.portofolio import LEMBAR_PER_LOT as PORTO_LEMBAR_PER_LOT
 
-# Perintah yang menyentuh posisi pribadi. Dipisah sebagai himpunan karena
-# dipakai dua kali: untuk mengenali perintahnya, dan untuk MENOLAKNYA di
-# grup.
-_PORTO_PERINTAH = {"porto", "portofolio", "posisi", "beli", "jual", "hapus"}
-
 # Tenggat per posisi saat mengambil harga & level. Satu emiten yang lambat
 # tidak boleh menggantung seluruh jawaban `porto`.
 PORTO_TIMEOUT_HARGA = int(os.getenv("PORTO_TIMEOUT_HARGA", "10"))
