@@ -31,6 +31,7 @@ let lastQrPng = null; // Buffer PNG QR terbaru, null kalau sudah login/belum ada
 // supaya tidak ada baris data yang terbelah di tengah -- lebih baik beberapa
 // pesan berurutan daripada daftar yang diam-diam terpenggal.
 const BATAS_PESAN = 3500;
+const JEDA_POTONGAN_MS = Number(process.env.WA_JEDA_POTONGAN_MS || 400);
 
 function pecahPesan(teks, batas = BATAS_PESAN) {
   if (teks.length <= batas) return [teks];
@@ -61,7 +62,14 @@ async function kirimTeks(jid, teks, quoted) {
     const isi = bagian.length > 1 ? `${bagian[i]}\n\n_(${i + 1}/${bagian.length})_` : bagian[i];
     // Hanya pesan pertama yang mengutip, sisanya lanjutan.
     await sock.sendMessage(jid, { text: isi }, i === 0 && quoted ? { quoted } : undefined);
-    if (i < bagian.length - 1) await new Promise((r) => setTimeout(r, 900));
+    // Jeda antar-potongan. Ada supaya tidak terlihat seperti mesin yang
+    // memuntahkan pesan sekaligus -- otomasi WhatsApp Web di luar ToS
+    // resmi, dan nomor yang berperilaku begitu lebih mudah dibatasi.
+    //
+    // Diturunkan dari 900 ke 400 ms (21 Sep 2026): jawaban `sinyal` pecah
+    // jadi dua-tiga pesan, dan 900 ms per sambungan cukup terasa seperti
+    // bot yang lambat padahal sisi servernya cuma beberapa milidetik.
+    if (i < bagian.length - 1) await new Promise((r) => setTimeout(r, JEDA_POTONGAN_MS));
   }
 }
 
@@ -146,6 +154,11 @@ async function startSock() {
         const pengirim = kandidat[0] || msg.key.remoteJid;
         console.log(`[wa-bot] pesan grup dari ${kandidat.join(" | ") || "?"}: ${JSON.stringify(isi.slice(0, 60))}`);
 
+        // Waktu diukur di DUA titik: berapa lama app Python menjawab, dan
+        // berapa lama WhatsApp menerima kiriman. Tanpa pemisahan itu,
+        // "kok lama" tidak bisa dijawab -- keduanya terlihat sama dari
+        // sisi pemakai, padahal perbaikannya sama sekali berbeda.
+        const tMulai = Date.now();
         const res = await fetch(`${APP_BASE_URL}/api/wa/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${SECRET}` },
@@ -161,6 +174,7 @@ async function startSock() {
           continue;
         }
         const { reply, media } = await res.json();
+        const msApp = Date.now() - tMulai;
         // reply null = memang bukan perintah; obrolan biasa tidak disahut.
         if (!reply && !media) continue;
 
@@ -194,6 +208,14 @@ async function startSock() {
         // TERKIRIM KE GRUP -- posisi dan nominal uang seseorang dibacakan
         // ke semua orang. Persis kebocoran yang mau dicegah.
         if (reply) await kirimTeks(asal, reply, media ? undefined : msg);
+        const msTotal = Date.now() - tMulai;
+        if (msTotal > 2000) {
+          const bagian = reply ? pecahPesan(reply).length : 0;
+          console.warn(
+            `[wa-bot] LAMBAT ${JSON.stringify(isi.slice(0, 24))}: `
+            + `app ${msApp}ms, kirim ${msTotal - msApp}ms `
+            + `(${bagian} pesan, ${reply ? reply.length : 0} karakter)`);
+        }
       } catch (e) {
         console.error("[wa-bot] Gagal memproses pesan:", e);
       }

@@ -7475,6 +7475,11 @@ async def _wa_broadcast_loop():
 # 2. Jeda per-nomor. Otomasi WhatsApp Web itu di luar ToS resmi (lihat
 #    wa-bot/README.md); bot yang menyahut tiap pesan sepanjang hari jauh
 #    lebih mudah dianggap mesin dan berujung nomor dibatasi.
+# Di atas ini, satu perintah bot dicatat sebagai lambat. Dipasang rendah
+# karena sisi server terukur di bawah 100 ms -- apa pun yang melewati ini
+# berarti ada yang menunggu sesuatu, dan itu yang ingin ketahuan.
+WA_LAMBAT_S = float(os.getenv("WA_LAMBAT_S", "1.5"))
+
 _WA_CMD_COOLDOWN_SECONDS = 8
 _WA_INVITE_COOLDOWN_SECONDS = 6 * 3600
 _wa_last_reply: dict[str, float] = {}
@@ -9534,9 +9539,23 @@ async def api_wa_command(request: Request):
     chat = str(body.get("chat") or "")
     if chat:
         dari_grup = chat.endswith("@g.us")
+    # BERAPA LAMA sisi server mengerjakannya, dicatat per perintah.
+    #
+    # "Kok lama" tidak bisa dijawab tanpa angka. Yang mungkin lambat ada
+    # empat tempat berbeda -- basis data, cache, perakitan pesan, dan
+    # WhatsApp itu sendiri -- dan tanpa pencatatan ini keempatnya terlihat
+    # sama dari luar. Diukur 21 Sep 2026: perakitan pesan `sinyal` cuma 0,3
+    # ms dan laporannya 7 ms, jadi kalau terasa lambat penyebabnya HAMPIR
+    # PASTI bukan di sini -- dan baris log inilah yang membuktikannya.
+    _t0 = time.perf_counter()
+    perintah = str(body.get("text") or "")[:40]
     balasan, media = await _wa_handle_command(
-        str(body.get("from") or ""), str(body.get("text") or ""), kandidat,
-        dari_grup=dari_grup)
+        str(body.get("from") or ""), perintah, kandidat, dari_grup=dari_grup)
+    _lama = time.perf_counter() - _t0
+    if _lama >= WA_LAMBAT_S:
+        print(f"⚠️ wa-command LAMBAT: '{perintah}' {_lama:.1f}s "
+              f"(sisi server saja, belum termasuk pengiriman WhatsApp)",
+              flush=True)
     # SATU titik keluar untuk SELURUH balasan perintah. Gaya penulisannya
     # diberlakukan di sini, bukan dititipkan ke dua belas penyusun pesan --
     # aturan gaya yang harus diingat orang di banyak tempat adalah aturan
