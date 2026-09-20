@@ -515,3 +515,84 @@ def test_balasan_menyebut_jalur_yang_melayaninya(idx, monkeypatch):
     status, _, jalur = asyncio.run(idx.idx_get_json("https://x", timeout=5))
     assert (status, jalur) == (403, "browser"), (
         "403 dari browser tidak bisa dibedakan dari 403 dari curl_cffi")
+
+
+# ===========================================================================
+# DUA CARA MENGAMBIL DI DALAM BROWSER, dan keduanya diperlukan
+# ===========================================================================
+# 20 Sep 2026: "HTTP 403 (lewat browser)". Halaman idx.co.id terbuka normal,
+# tapi fetch() di dalamnya ditolak. Sebabnya fetch() default dikirim
+# TELANJANG -- tanpa Accept, tanpa X-Requested-With, dengan
+# `Sec-Fetch-Dest: empty`. Yang tadi lolos challenge adalah permintaan
+# DOKUMEN (`Sec-Fetch-Dest: document`). Dua bentuk permintaan yang sangat
+# berbeda dari sudut pandang Cloudflare, dari halaman yang sama, dengan
+# cookie yang sama.
+
+def _sumber_agent():
+    import io
+    import os
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return io.open(os.path.join(akar, "scripts", "idx_agent.py"),
+                   encoding="utf-8").read()
+
+
+def test_fetch_di_halaman_membawa_header_seperti_xhr_situsnya():
+    """fetch() polos terlihat seperti skrip asing yang kebetulan berjalan di
+    halaman mereka. Yang dikirim situs IDX sendiri punya Accept JSON dan
+    X-Requested-With."""
+    s = _sumber_agent()
+    assert "X-Requested-With" in s and "XMLHttpRequest" in s
+    assert "application/json" in s
+    assert "headers" in s.split("def _ambil_fetch")[1][:1200], (
+        "opsi fetch tidak membawa headers")
+
+
+def test_ada_jalur_cadangan_navigasi_saat_fetch_ditolak():
+    """Navigasi itu bentuk permintaan yang SAMA dengan yang lolos challenge.
+    Lebih lambat, tapi kegagalan jalur murah tidak boleh menjadi kegagalan
+    fitur -- pelajaran yang sama persis dengan curl_cffi vs browser."""
+    s = _sumber_agent()
+    assert "async def _ambil_navigasi" in s
+    potongan = s.split("async def _ambil(")[1][:900]
+    assert "_ambil_fetch" in potongan and "_ambil_navigasi" in potongan, (
+        "_ambil tidak memakai kedua jalur")
+    assert potongan.index("_ambil_fetch") < potongan.index("_ambil_navigasi"), (
+        "yang mahal dicoba lebih dulu -- seharusnya fetch dulu")
+
+
+def test_balasan_browser_menyebut_CARA_nya_bukan_cuma_browser():
+    """"lewat browser" masih menyisakan pertanyaan berikutnya: fetch atau
+    navigasi? Bedanya itu yang bikin fiturnya mati 20 Sep 2026, jadi ia harus
+    terbaca dari pesan galat tanpa perlu menebak."""
+    import core.idx_cf as idx
+
+    assert idx._BalasanBrowser(200, "{}", "fetch").jalur == "browser/fetch"
+    assert idx._BalasanBrowser(200, "{}", "navigasi").jalur == "browser/navigasi"
+    # Jawaban lama tanpa penanda tetap terbaca, tidak meledak.
+    assert idx._BalasanBrowser(200, "{}").jalur == "browser"
+
+
+def test_protokol_pelayan_browser_tidak_mencemari_stdout():
+    """stdout itu saluran protokol: satu baris JSON per permintaan. Kabar
+    "fetch ditolak, navigasi berhasil" harus ke stderr -- kalau ikut ke
+    stdout, pemanggil membacanya sebagai jawaban dan seluruh urutan
+    permintaan-jawaban bergeser satu."""
+    import ast
+
+    # Dibaca dengan parser, bukan baris demi baris: sebuah print() bisa
+    # memanjang beberapa baris, dan `file=sys.stderr` kerap berada di baris
+    # lanjutannya. Pemeriksa berbasis teks akan menuduhnya salah.
+    pohon = ast.parse(_sumber_agent())
+    for simpul in ast.walk(pohon):
+        if not (isinstance(simpul, ast.Call)
+                and isinstance(simpul.func, ast.Name)
+                and simpul.func.id == "print"):
+            continue
+        ke_stderr = any(
+            k.arg == "file" and ast.unparse(k.value).endswith("stderr")
+            for k in simpul.keywords)
+        if ke_stderr:
+            continue
+        arg = ast.unparse(simpul.args[0]) if simpul.args else ""
+        assert "json.dumps" in arg or "READY" in arg, (
+            f"print ke stdout yang bukan protokol: {arg[:90]}")

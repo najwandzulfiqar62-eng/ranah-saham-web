@@ -9,25 +9,37 @@ yang bisa ditiru klien HTTP.
 
 Jalan yang PASTI bekerja: ambil datanya di dalam browser itu sendiri.
 
-DUA HAL YANG MEMBUATNYA LAYAK DIPAKAI, bukan cuma bisa:
+DUA CARA MENGAMBIL, dan keduanya diperlukan
+===========================================
 
-1. SATU browser melayani BANYAK URL. Menyalakan Chrome per permintaan memakan
-   ~10 detik setiap kali; riwayat 90 hari berarti 90 kali.
+1. fetch() di dalam halaman -- MURAH (~0,2 detik).
+2. NAVIGASI sungguhan ke URL-nya -- MAHAL (~2 detik), tapi lebih tahan.
 
-2. Tiap URL diambil dengan fetch() DI DALAM halaman, bukan dengan berpindah
-   halaman. Versi pertama memakai navigasi dan itu ~2 detik per URL -- untuk
-   90 hari jadi bermenit-menit, cukup lambat untuk membuat fiturnya tidak
-   terpakai. fetch() memakai koneksi, cookie, dan sesi TLS yang sama persis
-   dengan halaman yang sudah lolos challenge, jadi Cloudflare menerimanya,
-   tapi biayanya tinggal ~0,2 detik.
+Awalnya cuma navigasi. Lalu diganti fetch() demi kecepatan, dan 20 Sep 2026
+fitur Pemegang Saham mati lagi dengan "HTTP 403 (lewat browser)": halamannya
+terbuka normal, tapi fetch()-nya ditolak.
+
+Sebabnya fetch() default dikirim TELANJANG -- tanpa Accept, tanpa
+X-Requested-With, dengan `Sec-Fetch-Dest: empty`. Permintaan yang tadi lolos
+challenge adalah permintaan DOKUMEN (`Sec-Fetch-Dest: document`). Dua bentuk
+permintaan yang sangat berbeda dari sudut pandang Cloudflare, dari halaman
+yang sama, dengan cookie yang sama.
+
+Jadi sekarang: fetch() dengan header yang menyerupai XHR situsnya sendiri,
+dan kalau ia TIDAK mengembalikan 200, permintaannya diulang lewat NAVIGASI.
+Yang murah dicoba dulu karena hampir selalu cukup; yang mahal ada supaya
+kegagalannya tidak pernah menjadi kegagalan fitur. Jalur mana yang dipakai
+ikut dilaporkan, supaya lain kali tidak perlu ditebak lagi.
 
 Protokol (baris demi baris, JSON):
-    <- READY                       (siap menerima)
-    -> https://...                 (satu URL per baris)
-    <- {"status": 200, "text": …}  (satu jawaban per baris)
-    -> (EOF)                       (browser ditutup)
+    <- READY                                  (siap menerima)
+    -> https://...                            (satu URL per baris)
+    <- {"status": 200, "text": …, "metode": …} (satu jawaban per baris)
+    -> (EOF)                                  (browser ditutup)
 
-Prasyarat: Google Chrome stable + DISPLAY (Xvfb) aktif.
+Prasyarat: Google Chrome stable + DISPLAY (Xvfb) aktif. DISPLAY tidak perlu
+diatur manual -- core/idx_cf.py membungkus proses ini dengan xvfb-run saat
+DISPLAY kosong.
 """
 import asyncio
 import json
@@ -38,7 +50,15 @@ CHALLENGE = ("just a moment", "tunggu sebentar", "attention required",
              "checking your browser")
 CHALLENGE_TIMEOUT_S = 45
 FETCH_TIMEOUT_S = 30
+NAV_TIMEOUT_S = 40
 POLL_S = 0.1
+
+# Header yang dikirim situs IDX sendiri saat memanggil API-nya. fetch() tanpa
+# ini terlihat seperti skrip asing yang kebetulan berjalan di halaman mereka.
+HEADER_XHR = {
+    "Accept": "application/json, text/plain, */*",
+    "X-Requested-With": "XMLHttpRequest",
+}
 
 
 async def _lolos_challenge(page) -> str:
@@ -57,7 +77,7 @@ async def _lolos_challenge(page) -> str:
     return judul
 
 
-async def _ambil(page, url: str) -> dict:
+async def _ambil_fetch(page, url: str) -> dict:
     """fetch() di dalam halaman, hasilnya dijemput dengan polling.
 
     Sengaja TIDAK memakai await_promise: bentuk dukungannya berbeda-beda antar
@@ -66,9 +86,10 @@ async def _ambil(page, url: str) -> dict:
     memakai evaluate sinkron biasa, yang perilakunya sama di semua versi.
     """
     kunci = "__idx_hasil"
+    opsi = json.dumps({"credentials": "include", "headers": HEADER_XHR})
     pasang = (
         f"(() => {{ window.{kunci} = null;"
-        f" fetch({json.dumps(url)}, {{credentials: 'include'}})"
+        f" fetch({json.dumps(url)}, {opsi})"
         f"  .then(r => r.text().then(t => {{ window.{kunci} ="
         f"      JSON.stringify({{status: r.status, text: t}}); }}))"
         f"  .catch(e => {{ window.{kunci} ="
@@ -89,6 +110,72 @@ async def _ambil(page, url: str) -> dict:
             except Exception:
                 return {"status": 0, "error": "jawaban fetch tidak terbaca"}
     return {"status": 0, "error": f"fetch tidak selesai dalam {FETCH_TIMEOUT_S}s"}
+
+
+async def _ambil_navigasi(browser, url: str) -> dict:
+    """Buka URL-nya sebagai HALAMAN, lalu baca isinya.
+
+    Lebih lambat, tapi inilah bentuk permintaan yang sama dengan yang lolos
+    challenge: permintaan dokumen, bukan XHR. Chrome menampilkan JSON sebagai
+    teks biasa, jadi innerText sudah berisi badan jawabannya.
+
+    Statusnya tidak bisa dibaca langsung dari DOM, jadi disimpulkan dari
+    isinya: badan yang terurai sebagai JSON berarti berhasil. Menyimpulkan
+    dari isi memang kasar, tapi jauh lebih berguna daripada melaporkan 0
+    untuk jawaban yang sebenarnya baik-baik saja.
+    """
+    try:
+        page = await browser.get(url)
+    except Exception as e:
+        return {"status": 0, "error": f"navigasi gagal: {type(e).__name__}: {e}",
+                "metode": "navigasi"}
+
+    teks = ""
+    for _ in range(int(NAV_TIMEOUT_S / 0.5)):
+        await asyncio.sleep(0.5)
+        try:
+            teks = (await page.evaluate("document.body ? document.body.innerText : ''")) or ""
+        except Exception:
+            teks = ""
+        t = teks.strip()
+        if not t:
+            continue
+        if any(c in t.lower()[:400] for c in CHALLENGE):
+            continue      # masih di layar challenge, tunggu
+        break
+
+    t = (teks or "").strip()
+    if not t:
+        return {"status": 0, "error": f"halaman kosong setelah {NAV_TIMEOUT_S}s",
+                "metode": "navigasi"}
+    try:
+        json.loads(t)
+        status = 200
+    except Exception:
+        status = 403 if any(c in t.lower()[:400] for c in CHALLENGE) else 0
+    return {"status": status, "text": t, "metode": "navigasi"}
+
+
+async def _ambil(browser, page, url: str) -> dict:
+    """Yang murah dulu; yang mahal kalau yang murah ditolak."""
+    hasil = await _ambil_fetch(page, url)
+    if hasil.get("status") == 200:
+        hasil["metode"] = "fetch"
+        return hasil
+
+    kabar = hasil.get("status") or hasil.get("error")
+    lewat = await _ambil_navigasi(browser, url)
+    if lewat.get("status") == 200:
+        # Dicetak ke stderr, bukan stdout: stdout itu saluran protokol.
+        print(f"idx_agent: fetch ditolak ({kabar}), navigasi berhasil",
+              file=sys.stderr, flush=True)
+        return lewat
+
+    # Dua-duanya gagal. Laporkan yang fetch, karena itu yang dicoba lebih
+    # dulu dan pesannya biasanya lebih menunjuk.
+    hasil["metode"] = "fetch+navigasi"
+    hasil.setdefault("error", f"fetch {kabar}, navigasi {lewat.get('status')}")
+    return hasil
 
 
 async def main() -> int:
@@ -118,7 +205,7 @@ async def main() -> int:
             if not url:
                 continue
             try:
-                jawaban = await _ambil(page, url)
+                jawaban = await _ambil(browser, page, url)
             except Exception as e:
                 jawaban = {"status": 0, "error": f"{type(e).__name__}: {e}"}
             print(json.dumps(jawaban), flush=True)

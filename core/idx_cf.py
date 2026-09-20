@@ -439,12 +439,16 @@ class _BalasanBrowser:
     # sudah lolos challenge. Dua keadaan yang sangat berbeda -- yang pertama
     # wajar dan sudah ditangani, yang kedua berarti jalan terakhir pun
     # tertutup -- dan tanpa penanda keduanya terbaca sama persis.
-    jalur = "browser"
-
-    def __init__(self, status: int, teks: str):
+    def __init__(self, status: int, teks: str, metode: str = ""):
         self.status_code = status
         self.text = teks
         self.headers = {}
+        # Jalur mana yang melayani, sampai ke CARA-nya. "browser" saja masih
+        # menyisakan pertanyaan berikutnya: fetch di dalam halaman, atau
+        # navigasi sungguhan? Dua bentuk permintaan yang diperlakukan
+        # berbeda oleh Cloudflare, dan 20 Sep 2026 bedanya itu yang bikin
+        # fiturnya mati -- halaman terbuka normal, fetch-nya ditolak.
+        self.jalur = f"browser/{metode}" if metode else "browser"
 
     @property
     def content(self) -> bytes:
@@ -524,7 +528,8 @@ async def _agent_get(url: str) -> _BalasanBrowser:
         raise IdxCfError("jawaban pelayan browser idx tidak terbaca")
     if data.get("error"):
         raise IdxCfError(f"pelayan browser idx: {data['error'][:200]}")
-    return _BalasanBrowser(int(data.get("status") or 0), data.get("text") or "")
+    return _BalasanBrowser(int(data.get("status") or 0), data.get("text") or "",
+                           str(data.get("metode") or ""))
 
 
 def jalur_balasan(resp) -> str:
