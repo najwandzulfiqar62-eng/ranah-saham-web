@@ -49,8 +49,21 @@ MAIN = "https://www.idx.co.id/id"
 CHALLENGE = ("just a moment", "tunggu sebentar", "attention required",
              "checking your browser")
 CHALLENGE_TIMEOUT_S = 45
-FETCH_TIMEOUT_S = 30
-NAV_TIMEOUT_S = 40
+# Anggaran waktu SATU permintaan, dan jumlahnya penting.
+#
+# BUG NYATA 20 Sep 2026: fetch 30 detik + navigasi 40 detik = 70 detik untuk
+# satu permintaan yang gagal, sementara pemanggil di core/idx_cf.py cuma
+# sabar 40 detik (_AGENT_REQ_TIMEOUT). Jadi tiap kali cadangan navigasi
+# dipakai, pemanggil membunuh pelayannya di tengah kerja lalu menyalakan
+# Chrome baru -- sekitar 15 detik, berkali-kali. Di log terlihat sebagai
+# "pelayan browser siap" yang muncul enam kali untuk satu permintaan
+# riwayat, dan satu emiten butuh 249 detik.
+#
+# Anggaran di sini (20 + 25 = 45) sekarang JAUH di bawah kesabaran pemanggil
+# (90). Angka dua tempat yang harus sepakat memang rapuh; ada uji yang
+# membandingkan keduanya supaya tidak bisa lagi berselisih diam-diam.
+FETCH_TIMEOUT_S = 20
+NAV_TIMEOUT_S = 25
 POLL_S = 0.1
 
 # Header yang dikirim situs IDX sendiri saat memanggil API-nya. fetch() tanpa
@@ -87,11 +100,28 @@ async def _ambil_fetch(page, url: str) -> dict:
     """
     kunci = "__idx_hasil"
     opsi = json.dumps({"credentials": "include", "headers": HEADER_XHR})
+    # DIBACA SEBAGAI BINER, bukan teks.
+    #
+    # BUG NYATA 20 Sep 2026 -- ini sebab "berhasil tapi 0 pemegang". Jalur
+    # ini juga dipakai mengunduh PDF laporan X-15 (idx_get_bytes). Dengan
+    # r.text(), isi PDF dipaksa jadi string UTF-8, lalu di sisi Python
+    # di-encode balik jadi bytes: byte yang bukan UTF-8 sah sudah diganti
+    # U+FFFD dan TIDAK BISA dipulihkan. PDF-nya rusak, penguraiannya tidak
+    # menemukan apa-apa, dan hasilnya nol pemegang saham -- tanpa satu pun
+    # pesan error, karena setiap langkahnya "berhasil".
+    #
+    # arrayBuffer + base64 mengantar byte apa adanya, dan JSON tetap terbaca
+    # karena ia cuma kasus khusus dari byte.
     pasang = (
         f"(() => {{ window.{kunci} = null;"
+        f" const b64 = (buf) => {{ let s = '';"
+        f"   const a = new Uint8Array(buf), N = 0x8000;"
+        f"   for (let i = 0; i < a.length; i += N)"
+        f"     s += String.fromCharCode.apply(null, a.subarray(i, i + N));"
+        f"   return btoa(s); }};"
         f" fetch({json.dumps(url)}, {opsi})"
-        f"  .then(r => r.text().then(t => {{ window.{kunci} ="
-        f"      JSON.stringify({{status: r.status, text: t}}); }}))"
+        f"  .then(r => r.arrayBuffer().then(b => {{ window.{kunci} ="
+        f"      JSON.stringify({{status: r.status, b64: b64(b)}}); }}))"
         f"  .catch(e => {{ window.{kunci} ="
         f"      JSON.stringify({{status: 0, error: String(e)}}); }});"
         f" return 1; }})()"

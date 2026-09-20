@@ -596,3 +596,70 @@ def test_protokol_pelayan_browser_tidak_mencemari_stdout():
         arg = ast.unparse(simpul.args[0]) if simpul.args else ""
         assert "json.dumps" in arg or "READY" in arg, (
             f"print ke stdout yang bukan protokol: {arg[:90]}")
+
+
+# ===========================================================================
+# PDF ITU BINER. Melewatkannya sebagai teks menghancurkannya diam-diam.
+# ===========================================================================
+# 20 Sep 2026: seluruh rantai melaporkan "BERHASIL" -- status 200, jalur
+# browser/fetch, 2 pengumuman ditemukan -- tapi hasilnya NOL pemegang saham.
+# Sebabnya jalur yang sama dipakai mengunduh PDF laporan X-15, dan pelayan
+# browser mengembalikannya lewat r.text(): byte yang bukan UTF-8 sah diganti
+# U+FFFD dan tidak bisa dipulihkan. Tidak ada satu pun pesan error, karena
+# setiap langkahnya memang "berhasil".
+
+def test_pdf_lewat_pelayan_browser_tetap_utuh(idx):
+    """Byte bisa diturunkan jadi teks; teks tidak bisa dikembalikan jadi byte."""
+    import base64
+
+    # Header PDF asli + byte yang JELAS bukan UTF-8 sah.
+    asli = b"%PDF-1.4\n\xff\xfe\x00\x80\x81stream\x00\x01\x02%%EOF"
+    resp = idx._BalasanBrowser(200, "", "fetch", base64.b64decode(
+        base64.b64encode(asli)))
+    assert resp.content == asli, "PDF rusak di perjalanan"
+    assert resp.content.startswith(b"%PDF"), "header PDF hilang"
+
+
+def test_teks_tetap_terbaca_dari_byte(idx):
+    """JSON cuma kasus khusus dari byte -- ia harus tetap terbaca."""
+    import json as _j
+
+    resp = idx._BalasanBrowser(200, "", "fetch", b'{"Replies": [1, 2]}')
+    assert resp.json() == {"Replies": [1, 2]}
+    assert "Replies" in resp.text
+
+
+def test_jawaban_lama_tanpa_biner_masih_terbaca(idx):
+    """Jawaban berbentuk teks (mis. jalur navigasi) tidak boleh meledak."""
+    resp = idx._BalasanBrowser(200, '{"ok": 1}', "navigasi")
+    assert resp.json() == {"ok": 1}
+    assert resp.content == b'{"ok": 1}'
+
+
+def test_anggaran_waktu_pelayan_dan_pemanggilnya_sepakat(idx):
+    """Dua angka di dua berkas yang HARUS sepakat -- dan pernah tidak.
+
+    Pelayannya beranggaran fetch 30 + navigasi 40 = 70 detik, sementara
+    pemanggilnya cuma sabar 40. Jadi tiap kali cadangan navigasi dipakai,
+    pelayannya dibunuh di tengah kerja lalu Chrome baru dinyalakan (~15
+    detik) -- berkali-kali, dan satu emiten menghabiskan 249 detik.
+
+    Membunuhnya saat timeout itu benar: jawaban yang telat akan terbaca
+    sebagai jawaban permintaan BERIKUTNYA. Yang salah anggarannya."""
+    import io
+    import os
+    import re
+
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sumber = io.open(os.path.join(akar, "scripts", "idx_agent.py"),
+                     encoding="utf-8").read()
+
+    def _angka(nama):
+        m = re.search(rf"^{nama} = (\d+)", sumber, re.M)
+        assert m, f"{nama} tidak ketemu di idx_agent.py"
+        return int(m.group(1))
+
+    terburuk = _angka("FETCH_TIMEOUT_S") + _angka("NAV_TIMEOUT_S")
+    assert idx._AGENT_REQ_TIMEOUT > terburuk, (
+        f"pemanggil sabar {idx._AGENT_REQ_TIMEOUT}s, tapi pelayannya bisa "
+        f"memakai {terburuk}s -- pelayannya akan dibunuh di tengah kerja")

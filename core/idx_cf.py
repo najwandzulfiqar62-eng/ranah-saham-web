@@ -425,7 +425,20 @@ async def _idx_get(url: str, *, timeout: int, accept: str):
 _AGENT_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "scripts", "idx_agent.py")
 _AGENT_START_TIMEOUT = int(os.getenv("IDX_AGENT_START_TIMEOUT", "90"))
-_AGENT_REQ_TIMEOUT = int(os.getenv("IDX_AGENT_REQ_TIMEOUT", "40"))
+# Kesabaran menunggu SATU jawaban pelayan browser. WAJIB lebih besar dari
+# anggaran terburuk di dalamnya (FETCH_TIMEOUT_S + NAV_TIMEOUT_S di
+# scripts/idx_agent.py = 45 detik).
+#
+# BUG NYATA 20 Sep 2026: nilai ini 40 sementara anggaran di dalam pelayannya
+# 70. Tiap kali cadangan navigasi dipakai, pelayannya dibunuh di tengah kerja
+# lalu Chrome baru dinyalakan -- sekitar 15 detik, berkali-kali. Terlihat di
+# log sebagai "pelayan browser siap" enam kali untuk SATU permintaan riwayat,
+# dan satu emiten menghabiskan 249 detik.
+#
+# Membunuhnya saat timeout memang benar (jawaban yang telat akan terbaca
+# sebagai jawaban permintaan BERIKUTNYA, dan seluruh urutannya bergeser).
+# Yang salah bukan pembunuhannya, melainkan anggaran yang tidak sepakat.
+_AGENT_REQ_TIMEOUT = int(os.getenv("IDX_AGENT_REQ_TIMEOUT", "90"))
 _agent = {"proc": None}
 _agent_lock = asyncio.Lock()
 
@@ -439,10 +452,25 @@ class _BalasanBrowser:
     # sudah lolos challenge. Dua keadaan yang sangat berbeda -- yang pertama
     # wajar dan sudah ditangani, yang kedua berarti jalan terakhir pun
     # tertutup -- dan tanpa penanda keduanya terbaca sama persis.
-    def __init__(self, status: int, teks: str, metode: str = ""):
+    def __init__(self, status: int, teks: str = "", metode: str = "",
+                 isi: bytes | None = None):
         self.status_code = status
-        self.text = teks
+        # Byte ASLI kalau pelayannya mengirim base64; teks cuma turunannya.
+        #
+        # Arahnya SENGAJA begini dan bukan sebaliknya. Versi sebelumnya
+        # menyimpan teks lalu meng-encode-nya jadi bytes saat diminta, dan
+        # itu merusak PDF laporan X-15: byte yang bukan UTF-8 sah sudah
+        # diganti U+FFFD di perjalanan dan tidak bisa dipulihkan. Hasilnya
+        # nol pemegang saham tanpa satu pun pesan error -- setiap langkahnya
+        # "berhasil". Byte bisa diturunkan jadi teks; teks tidak bisa
+        # dikembalikan jadi byte.
+        self._isi = isi if isi is not None else (teks or "").encode("utf-8", "replace")
         self.headers = {}
+        self.jalur = f"browser/{metode}" if metode else "browser"
+
+    @property
+    def text(self) -> str:
+        return self._isi.decode("utf-8", "replace")
         # Jalur mana yang melayani, sampai ke CARA-nya. "browser" saja masih
         # menyisakan pertanyaan berikutnya: fetch di dalam halaman, atau
         # navigasi sungguhan? Dua bentuk permintaan yang diperlakukan
@@ -452,7 +480,7 @@ class _BalasanBrowser:
 
     @property
     def content(self) -> bytes:
-        return (self.text or "").encode("utf-8", "replace")
+        return self._isi
 
     def json(self):
         return json.loads(self.text)
@@ -528,8 +556,15 @@ async def _agent_get(url: str) -> _BalasanBrowser:
         raise IdxCfError("jawaban pelayan browser idx tidak terbaca")
     if data.get("error"):
         raise IdxCfError(f"pelayan browser idx: {data['error'][:200]}")
+    isi = None
+    if data.get("b64"):
+        import base64
+        try:
+            isi = base64.b64decode(data["b64"])
+        except Exception:
+            isi = None
     return _BalasanBrowser(int(data.get("status") or 0), data.get("text") or "",
-                           str(data.get("metode") or ""))
+                           str(data.get("metode") or ""), isi)
 
 
 def jalur_balasan(resp) -> str:
