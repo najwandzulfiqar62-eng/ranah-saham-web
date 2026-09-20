@@ -66,8 +66,14 @@ def set_last_daily_sent_date(date_str: str):
     _set_config("wa_last_daily_sent_date", date_str)
 
 
-async def send_wa_text(text: str) -> bool:
-    """Kirim teks ke grup WA lewat sidecar wa-bot. Return False (BUKAN
+async def send_wa_text(text: str, to: str | None = None) -> bool:
+    """Kirim teks lewat sidecar wa-bot. `to` = nomor telepon untuk JAPRI;
+    tanpa itu, tujuannya grup.
+
+    Japri dipakai peringatan posisi: isinya menyebut saham dan harga milik
+    SATU orang, jadi ia tidak boleh masuk grup.
+
+    Return False (BUKAN
     exception) kalau WA_BOT_URL/SECRET belum diisi, wa-bot belum terhubung,
     atau request gagal apapun sebabnya -- caller (loop background/endpoint
     admin) cukup cek return value, tidak perlu try/except sendiri."""
@@ -82,7 +88,7 @@ async def send_wa_text(text: str) -> bool:
         async with httpx.AsyncClient(timeout=15) as client:
             res = await client.post(
                 f"{WA_BOT_URL}/send",
-                json={"text": text},
+                json={"text": text, **({"to": to} if to else {})},
                 headers={"Authorization": f"Bearer {WA_BOT_SECRET}"},
             )
             res.raise_for_status()

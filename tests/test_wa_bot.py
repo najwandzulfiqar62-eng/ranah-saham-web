@@ -1287,3 +1287,95 @@ def test_semua_emiten_puncak_tetap_disebut(client, wa_bersih, monkeypatch):
     hasil = _kirim(client, "sinyal").json()["reply"]
     for i in range(67):                      # SEMUA yang lolos ambang +20%
         assert f"EM{i:02d}" in hasil, f"EM{i:02d} hilang dari ringkasan puncak"
+
+
+# ===========================================================================
+# KONTEKS REZIM PASAR & REKAP MINGGUAN
+# ===========================================================================
+
+def test_rezim_memperingatkan_saat_pasar_melawan():
+    """Daftar sinyal yang bagus di pasar yang rontok tetap daftar yang
+    berbahaya. Menyebut levelnya tanpa menyebut ini membuat pesannya
+    terbaca lebih meyakinkan daripada yang pantas."""
+    import web.app as app_module
+
+    lemah = [{"sejak_sinyal_return_pct": -3.0} for _ in range(8)] + \
+            [{"sejak_sinyal_return_pct": 2.0} for _ in range(2)]
+    teks = app_module._ringkas_rezim(lemah)
+    assert "DI BAWAH" in teks and "kecilkan ukuran" in teks
+
+    kuat = [{"sejak_sinyal_return_pct": 4.0} for _ in range(9)] + \
+           [{"sejak_sinyal_return_pct": -1.0}]
+    assert "mendukung" in app_module._ringkas_rezim(kuat)
+
+
+def test_rezim_diam_kalau_sampelnya_terlalu_sedikit():
+    """Menyimpulkan "pasar melawan" dari tiga sinyal itu mengarang."""
+    import web.app as app_module
+
+    assert app_module._ringkas_rezim(
+        [{"sejak_sinyal_return_pct": -2.0} for _ in range(3)]) == ""
+
+
+def _sinyal_selesai(kode, status, ret, src="TOP_PICK", hari=2):
+    from datetime import datetime, timedelta
+    return {"kode": kode, "status": status, "return_pct": ret, "source": src,
+            "resolved_at": (datetime.now() - timedelta(days=hari)).isoformat()}
+
+
+def test_rekap_menyebut_yang_terburuk_juga():
+    """Rekap yang cuma menampilkan pemenang bukan rekap, itu iklan -- dan
+    anggota yang mengikuti sinyal ini tahu persis mana yang rugi."""
+    import web.app as app_module
+
+    rep = {"n_total": 100, "stats": {"win_rate": 60.0}, "signals": [
+        _sinyal_selesai("ALKA", "TP_HIT", 18.4),
+        _sinyal_selesai("ANTM", "TP_HIT", 9.2),
+        _sinyal_selesai("ERAA", "SL_HIT", -4.8)]}
+    teks = app_module._wa_fmt_rekap(rep)
+    assert "Terbaik: *ALKA*" in teks
+    assert "Terburuk: *ERAA*" in teks
+    assert "1 kena stop" in teks
+
+
+def test_rekap_hanya_menghitung_yang_sudah_selesai():
+    """Posisi berjalan tidak ikut: menganggapnya menang/kalah sekarang
+    membuat angkanya bergerak tiap hari tanpa ada yang terjadi."""
+    import web.app as app_module
+
+    rep = {"n_total": 10, "stats": {"win_rate": 50.0}, "signals": [
+        _sinyal_selesai("ALKA", "TP_HIT", 18.4),
+        {"kode": "JALAN", "status": "OPEN", "return_pct": 99.0}]}
+    teks = app_module._wa_fmt_rekap(rep)
+    assert "1 sinyal selesai" in teks
+    assert "JALAN" not in teks
+
+
+def test_rekap_mengabaikan_yang_selesai_sebelum_minggu_ini():
+    import web.app as app_module
+
+    rep = {"n_total": 10, "stats": {"win_rate": 50.0}, "signals": [
+        _sinyal_selesai("BARU", "TP_HIT", 5.0, hari=2),
+        _sinyal_selesai("LAMA", "TP_HIT", 50.0, hari=30)]}
+    teks = app_module._wa_fmt_rekap(rep)
+    assert "BARU" in teks and "LAMA" not in teks
+
+
+def test_rekap_membandingkan_dengan_rata_rata_keseluruhan():
+    """Angka minggu ini tanpa pembanding tidak memberi tahu apa pun."""
+    import web.app as app_module
+
+    rep = {"n_total": 100, "stats": {"win_rate": 80.0}, "signals": [
+        _sinyal_selesai("A", "TP_HIT", 5.0),
+        _sinyal_selesai("B", "SL_HIT", -5.0)]}
+    teks = app_module._wa_fmt_rekap(rep)
+    assert "di bawah rata-rata keseluruhan" in teks
+
+
+def test_rekap_minggu_sepi_tetap_menjawab():
+    import web.app as app_module
+
+    teks = app_module._wa_fmt_rekap(
+        {"n_total": 100, "stats": {"win_rate": 60.0}, "signals": []})
+    assert "Tidak ada sinyal yang selesai" in teks
+    assert "60.0%" in teks

@@ -244,13 +244,27 @@ app.get("/groups", async (_req, res) => {
   }
 });
 
+// Nomor telepon -> JID japri WhatsApp. "08..." dan "+62..." dinormalkan
+// ke bentuk 62... supaya app Python cukup mengirim nomor apa adanya.
+function jidJapri(nomor) {
+  let n = String(nomor || "").replace(/[^0-9]/g, "");
+  if (!n) return "";
+  if (n.startsWith("0")) n = "62" + n.slice(1);
+  if (!n.startsWith("62")) n = "62" + n;
+  return `${n}@s.whatsapp.net`;
+}
+
 app.post("/send", async (req, res) => {
   const text = req.body?.text;
   if (!text || typeof text !== "string") {
     return res.status(400).json({ error: "field 'text' (string) wajib diisi" });
   }
-  if (!GROUP_JID) {
-    return res.status(500).json({ error: "WA_GROUP_JID belum diset -- lihat /groups untuk menemukan JID grup" });
+  // `to` opsional: nomor telepon untuk kirim JAPRI. Tanpa itu, tujuannya
+  // grup seperti sebelumnya. Dipakai peringatan posisi -- isinya menyebut
+  // saham dan harga milik SATU orang, jadi ia tidak boleh masuk grup.
+  const tujuan = req.body?.to ? jidJapri(req.body.to) : GROUP_JID;
+  if (!tujuan) {
+    return res.status(500).json({ error: "tujuan kosong: WA_GROUP_JID belum diset dan 'to' tidak diberikan" });
   }
   if (!isConnected || !sock) {
     return res.status(503).json({ error: "belum terhubung ke WhatsApp" });
@@ -258,7 +272,7 @@ app.post("/send", async (req, res) => {
   try {
     // Lewat kirimTeks juga: digest harian ikut memuat daftar lengkap, jadi
     // ia bisa melampaui batas satu pesan persis seperti balasan perintah.
-    await kirimTeks(GROUP_JID, text);
+    await kirimTeks(tujuan, text);
     res.json({ ok: true });
   } catch (e) {
     res.status(502).json({ error: `gagal mengirim pesan: ${e.message}` });

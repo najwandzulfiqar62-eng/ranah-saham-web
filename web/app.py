@@ -308,6 +308,7 @@ async def _lifespan(_app: "FastAPI"):
         asyncio.create_task(_forum_push_loop()),
         asyncio.create_task(_cache_warmer_loop()),
         asyncio.create_task(_wa_broadcast_loop()),
+        asyncio.create_task(_wa_alert_loop()),
     ]
     yield
     for t in tasks:
@@ -7344,6 +7345,87 @@ async def _send_wa_digest_now() -> bool:
     return ok
 
 
+# Tiap berapa detik posisi anggota diperiksa. Tidak perlu rapat: yang
+# dicari perubahan keadaan (menyentuh stop, menyentuh level, untung besar),
+# bukan tick harga. Memeriksa tiap menit cuma menambah beban tanpa menambah
+# satu pun peringatan yang berbeda.
+WA_ALERT_INTERVAL = int(os.getenv("WA_ALERT_INTERVAL", "900"))     # 15 menit
+WA_ALERT_AKTIF = os.getenv("WA_ALERT_AKTIF", "1") != "0"
+
+
+async def _wa_alert_loop():
+    """Peringatan posisi ke JAPRI masing-masing anggota.
+
+    HANYA pada jam bursa. Peringatan "ERAA menyentuh stop" yang datang pukul
+    sebelas malam tidak bisa ditindaklanjuti siapa pun -- ia cuma
+    mengganggu, dan bot yang mengganggu akan di-mute. Sesudah di-mute,
+    peringatan yang benar-benar penting juga tidak sampai.
+    """
+    from core.signal_history import _is_bursa_trading_hours, _is_bursa_weekend
+
+    if not WA_ALERT_AKTIF:
+        print("\u2139\ufe0f wa-alert: dimatikan lewat WA_ALERT_AKTIF=0", flush=True)
+        return
+    while True:
+        try:
+            if not _is_bursa_weekend() and _is_bursa_trading_hours():
+                await _jalankan_alert_posisi()
+        except Exception as e:
+            print(f"\u26a0\ufe0f wa-alert-loop: {type(e).__name__}: {e}")
+        await asyncio.sleep(WA_ALERT_INTERVAL)
+
+
+async def _jalankan_alert_posisi() -> int:
+    """Periksa posisi SEMUA anggota, kirim yang layak. Return jumlah terkirim."""
+    from core.access import list_users
+    from core.portofolio import posisi_user
+    from core.wa_alert import boleh_kirim, catat_kirim, periksa_posisi
+    from core.whatsapp_notify import send_wa_text
+
+    # "approved" EKSPLISIT: bawaan list_users() adalah "pending", dan
+    # mengirim peringatan posisi ke orang yang akunnya belum disetujui
+    # adalah kebocoran sekaligus gangguan.
+    anggota = await asyncio.to_thread(list_users, "approved")
+    aktif = [u for u in (anggota or []) if u.get("phone")]
+    if not aktif:
+        return 0
+
+    terkirim = 0
+    for u in aktif:
+        try:
+            posisi = await asyncio.to_thread(posisi_user, u["id"])
+            if not posisi:
+                continue
+            for p in posisi:
+                # Harga & level dari jalur yang SAMA dipakai `porto`, jadi
+                # peringatan tidak mungkin menyebut angka yang berbeda dari
+                # yang dilihat orang saat ia mengecek sendiri.
+                b = await _porto_baris(p)
+                harga = b.get("harga")
+                if not harga:
+                    continue
+                pesan = periksa_posisi(p, harga, b.get("level"))
+                if not pesan:
+                    continue
+                if not await asyncio.to_thread(boleh_kirim, u["id"],
+                                               pesan["jenis"], pesan["kunci"]):
+                    continue
+                if await send_wa_text(pesan["teks"], to=u["phone"]):
+                    await asyncio.to_thread(catat_kirim, u["id"], pesan["kode"],
+                                            pesan["jenis"], pesan["kunci"])
+                    terkirim += 1
+                # SATU pesan per orang per putaran. Lima peringatan sekaligus
+                # terbaca seperti bot rusak, dan yang paling mendesak sudah
+                # menang lebih dulu (lihat urutan di periksa_posisi).
+                break
+        except Exception as e:
+            print(f"\u26a0\ufe0f wa-alert {u.get('name')}: {type(e).__name__}: {e}")
+        await asyncio.sleep(0)
+    if terkirim:
+        print(f"\u2139\ufe0f wa-alert: {terkirim} peringatan terkirim", flush=True)
+    return terkirim
+
+
 async def _wa_broadcast_loop():
     """Loop background: tiap WA_CHECK_INTERVAL_SECONDS, kirim digest harian
     SEKALI saja per hari kalender WIB, begitu jam sekarang sudah melewati
@@ -7353,7 +7435,9 @@ async def _wa_broadcast_loop():
     distributed lock, cukup guard sederhana ini (pola sama _cache_warmer_loop
     dkk di _lifespan)."""
     from datetime import datetime as _dt
-    from core.whatsapp_notify import get_last_daily_sent_date, set_last_daily_sent_date
+    from core.whatsapp_notify import (_get_config, _set_config,
+                                      get_last_daily_sent_date,
+                                      set_last_daily_sent_date)
 
     while True:
         try:
@@ -7362,6 +7446,14 @@ async def _wa_broadcast_loop():
             if now.strftime("%H:%M") >= WA_DAILY_SEND_TIME and get_last_daily_sent_date() != today_str:
                 if await _send_wa_digest_now():
                     set_last_daily_sent_date(today_str)
+            # Rekap mingguan menumpang loop yang SAMA -- ia cuma perlu
+            # diperiksa sesekali, dan loop kedua berarti satu lagi hal yang
+            # bisa mati diam-diam tanpa ada yang sadar.
+            if (now.weekday() == WA_REKAP_HARI
+                    and now.strftime("%H:%M") >= WA_REKAP_JAM
+                    and _get_config("wa_rekap_terakhir") != today_str):
+                if await _kirim_rekap_mingguan():
+                    _set_config("wa_rekap_terakhir", today_str)
         except Exception as e:
             print(f"⚠️ wa-broadcast-loop: {type(e).__name__}: {e}")
         await asyncio.sleep(WA_CHECK_INTERVAL_SECONDS)
@@ -7428,6 +7520,9 @@ _WA_BANTUAN = (
     "• *jual KODE [LOT]* — catat penjualan; tanpa lot = jual semua\n"
     "• *porto* — posisimu: untung/rugi, harus apa, dan level menambahnya\n"
     "• *hapus KODE* — batalkan catatan yang salah ketik\n\n"
+    "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
+    "perlu diputuskan: menyentuh stop, menyentuh level yang pernah "
+    "disebutkan, atau untung besar. Paling banyak beberapa pesan sehari._\n\n"
     "_Bukan ajakan membeli/menjual._"
 )
 
@@ -8282,6 +8377,137 @@ _WA_SINYAL_MAKS = int(os.getenv("WA_SINYAL_MAKS", "20"))
 _WA_PUNCAK_MAKS = int(os.getenv("WA_PUNCAK_MAKS", "8"))
 
 
+# Hari & jam rekap mingguan dikirim (WIB). Jumat sore, sesudah bursa tutup:
+# minggunya sudah selesai, dan tidak ada yang perlu bertindak atas angka ini
+# -- jadi ia tidak mengganggu keputusan siapa pun.
+WA_REKAP_HARI = int(os.getenv("WA_REKAP_HARI", "4"))        # 0=Senin, 4=Jumat
+WA_REKAP_JAM = os.getenv("WA_REKAP_JAM", "16:30")
+
+
+def _wa_fmt_rekap(rep: dict, hari: int = 7) -> str:
+    """Rekap: apa yang SELESAI minggu ini, dan apakah angkanya bergerak.
+
+    JUJUR TERMASUK SAAT BURUK. Rekap yang cuma menampilkan pemenang bukan
+    rekap, itu iklan -- dan anggota yang mengikuti sinyal ini tahu persis
+    mana yang rugi, jadi menyembunyikannya justru menghancurkan kepercayaan
+    pada angka yang lain.
+
+    Yang dihitung cuma sinyal yang SUDAH SELESAI. Posisi berjalan sengaja
+    tidak ikut: menganggapnya menang/kalah sekarang membuat angkanya
+    bergerak tiap hari tanpa ada yang benar-benar terjadi.
+    """
+    from datetime import datetime as _d, timedelta as _td
+
+    batas = _d.now() - _td(days=hari)
+
+    def _selesai_minggu_ini(x):
+        t = x.get("resolved_at")
+        if not t or x.get("status") not in ("TP_HIT", "SL_HIT", "EXPIRED"):
+            return False
+        try:
+            return _d.fromisoformat(str(t).replace("Z", "")) >= batas
+        except ValueError:
+            return False
+
+    semua = rep.get("signals") or []
+    minggu = [x for x in semua if _selesai_minggu_ini(x)]
+    stats = rep.get("stats") or {}
+
+    baris = [f"*Rekap {hari} hari terakhir*"]
+    if not minggu:
+        baris += ["", "_Tidak ada sinyal yang selesai minggu ini._"]
+        if stats.get("win_rate") is not None:
+            baris.append(f"_Win rate keseluruhan tetap {stats['win_rate']:.1f}% "
+                         f"dari {rep.get('n_total', 0)} sinyal._")
+        return "\n".join(baris)
+
+    menang = [x for x in minggu if x.get("status") == "TP_HIT"]
+    kalah = [x for x in minggu if x.get("status") == "SL_HIT"]
+    habis = [x for x in minggu if x.get("status") == "EXPIRED"]
+    dinilai = len(menang) + len(kalah)
+    wr = (len(menang) / dinilai * 100) if dinilai else None
+
+    baris.append(f"{len(minggu)} sinyal selesai — *{len(menang)} menang*, "
+                 f"{len(kalah)} kena stop"
+                 + (f", {len(habis)} kedaluwarsa" if habis else ""))
+    if wr is not None:
+        ekor = ""
+        if stats.get("win_rate") is not None:
+            beda = wr - stats["win_rate"]
+            arah = "di atas" if beda > 2 else "di bawah" if beda < -2 else "sejalan dengan"
+            ekor = (f" — {arah} rata-rata keseluruhan "
+                    f"({stats['win_rate']:.1f}%)")
+        baris.append(f"Win rate minggu ini *{wr:.0f}%*{ekor}")
+
+    def _hasil(x):
+        return x.get("return_pct")
+
+    berhasil = sorted([x for x in minggu if _hasil(x) is not None],
+                      key=_hasil, reverse=True)
+    if berhasil:
+        t = berhasil[0]
+        baris += ["", f"Terbaik: *{t['kode']}* {_hasil(t):+.1f}% "
+                      f"({_sumber_wa(t.get('source'))})"]
+        if len(berhasil) > 1:
+            b = berhasil[-1]
+            # Yang terburuk SELALU disebut, bahkan saat semuanya menang --
+            # kalau ia cuma muncul di minggu yang baik, ketiadaannya jadi
+            # pertanda buruk yang orang belajar membacanya.
+            baris.append(f"Terburuk: *{b['kode']}* {_hasil(b):+.1f}% "
+                         f"({_sumber_wa(b.get('source'))})")
+
+    per_sumber: dict[str, list] = {}
+    for x in minggu:
+        per_sumber.setdefault(x.get("source") or "-", []).append(x)
+    if len(per_sumber) > 1:
+        baris += ["", "*Per teori*"]
+        for src, isi in sorted(per_sumber.items(),
+                               key=lambda kv: len(kv[1]), reverse=True):
+            m = sum(1 for x in isi if x.get("status") == "TP_HIT")
+            k = sum(1 for x in isi if x.get("status") == "SL_HIT")
+            baris.append(f"• {_sumber_wa(src)}: {m} menang · {k} stop"
+                         + (f" · {len(isi) - m - k} kedaluwarsa"
+                            if len(isi) - m - k else ""))
+
+    baris += ["", "_Dihitung HANYA dari sinyal yang sudah selesai. Posisi yang "
+                  "masih berjalan tidak ikut — menganggapnya menang atau kalah "
+                  "sekarang membuat angkanya bergerak tanpa ada yang terjadi._"]
+    return "\n".join(baris)
+
+
+async def _kirim_rekap_mingguan() -> bool:
+    from core.signal_history import get_signal_report
+    from core.whatsapp_notify import send_wa_text
+
+    rep = await asyncio.to_thread(get_signal_report)
+    return await send_wa_text(_wa_fmt_rekap(rep))
+
+
+def _ringkas_rezim(sinyal: list[dict]) -> str:
+    """Satu baris: pasar sedang mendukung teori ini, atau sedang melawannya.
+
+    Yang dihitung berapa banyak sinyal aktif yang harganya SEDANG DI BAWAH
+    entry-nya. Kalau sebagian besar begitu, apa pun kata indeksnya, teori ini
+    sedang dilawan -- dan itu alasan mengecilkan ukuran, bukan alasan
+    berhenti memberi sinyal.
+    """
+    punya = [s for s in (sinyal or [])
+             if s.get("sejak_sinyal_return_pct") is not None]
+    if len(punya) < 5:
+        return ""      # terlalu sedikit untuk disimpulkan apa pun
+    bawah = sum(1 for s in punya if s["sejak_sinyal_return_pct"] < 0)
+    pct = bawah / len(punya) * 100
+    if pct >= 60:
+        return (f"_⚠ {bawah} dari {len(punya)} sinyal aktif sedang DI BAWAH "
+                f"entry ({pct:.0f}%). Pasar sedang melawan — kecilkan ukuran, "
+                f"dan jangan menambah posisi baru sekaligus banyak._")
+    if pct <= 25:
+        return (f"_{len(punya) - bawah} dari {len(punya)} sinyal aktif sedang "
+                f"di atas entry. Pasar sedang mendukung._")
+    return (f"_{bawah} dari {len(punya)} sinyal aktif di bawah entry "
+            f"({pct:.0f}%) — pasar campuran._")
+
+
 def _wa_fmt_sinyal(rep: dict) -> str:
     """Rekomendasi sinyal, DIKELOMPOKKAN PER EMITEN.
 
@@ -8303,6 +8529,20 @@ def _wa_fmt_sinyal(rep: dict) -> str:
     if stats.get("win_rate") is not None:
         baris.append(f"_Win rate tercatat {stats['win_rate']:.1f}% dari "
                      f"{rep.get('n_total', 0)} sinyal._")
+
+    # KONTEKS REZIM PASAR, sebelum daftar apa pun.
+    #
+    # Daftar sinyal yang bagus di pasar yang sedang rontok tetap daftar
+    # sinyal yang berbahaya -- hampir semua saham ikut turun, sebagus apa
+    # pun emitennya. Menyebutkan levelnya tanpa menyebutkan ini membuat
+    # pesannya terbaca lebih meyakinkan daripada yang pantas.
+    #
+    # Angkanya dihitung dari SINYAL ITU SENDIRI (berapa yang sedang di
+    # bawah entry), bukan dari indeks saja: itu ukuran paling langsung
+    # apakah teori ini sedang bekerja hari ini atau sedang dilawan pasar.
+    regime = _ringkas_rezim(aktif)
+    if regime:
+        baris.append(regime)
 
     # Ringkasan "puncak terjauh" -- diminta user: yang pucuknya paling jauh
     # itu saham apa. Dihitung dari SELURUH sinyal (termasuk yang sudah
