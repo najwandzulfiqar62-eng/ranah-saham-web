@@ -1206,3 +1206,84 @@ def test_target_tidak_pernah_dikarang_lebih_tinggi():
                 masuk_lagi={"deep": {"entry": 1180, "sl": 1120}})
     gabung = " ".join(app_module._anjuran_ringkas(s, lolos_hari_ini={"AAAA"})["baris"])
     assert "TP4" not in gabung and "TP5" not in gabung
+
+
+# ===========================================================================
+# RINGKASAN TIDAK BOLEH MENGUBUR JAWABANNYA
+# ===========================================================================
+# 21 Sep 2026, pasar sedang kuat: 71 emiten aktif dan 67 emiten berpuncak di
+# atas +20%. Daftar puncaknya menghabiskan seluruh jatah pesan, dan yang
+# terpotong justru kartu sinyalnya -- pembaca menerima ringkasan pencapaian
+# tanpa satu pun hal yang bisa ditindaklanjuti. Kebalikan persis dari guna
+# perintah `sinyal`.
+
+def _banyak_sinyal(n_aktif=71, n_puncak=67):
+    return {"n_total": 587, "stats": {"win_rate": 63.5}, "signals": [
+        {"kode": f"EM{i:02d}", "status": "OPEN", "direction": "BUY",
+         "entry_price": 100 + i, "sl_price": 90, "tp_price": 120,
+         "tp2_price": 140, "tp3_price": 160, "tp_level_hit": 0,
+         "mulai_dilacak": "2026-07-01", "sejak_sinyal_return_pct": 5.0,
+         "confidence_score": 90 - i, "source": "TOP_PICK",
+         "puncak_return_pct": 200 - i * 2.5 if i < n_puncak else 5.0,
+         "puncak_date": "2026-09-10"}
+        for i in range(n_aktif)]}
+
+
+def test_pasar_kuat_tidak_membuat_sinyalnya_hilang(client, wa_bersih, monkeypatch):
+    """INI regresinya. Pesan boleh panjang; yang tidak boleh adalah pulang
+    tanpa membawa sinyal."""
+    import core.signal_history as sh
+    import web.app as app_module
+
+    async def _lewati(*a, **k):
+        return None
+
+    monkeypatch.setattr(sh, "get_signal_report", lambda: _banyak_sinyal())
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+    assert "*Sinyal terbaru*" in hasil, "tidak ada satu pun kartu sinyal"
+    assert hasil.count("*Sinyal terbaru*") == 20, (
+        f"kartu sinyal berkurang: {hasil.count('*Sinyal terbaru*')} dari 20")
+    assert "terlalu panjang" not in hasil, "pesan wajar tidak boleh dipotong"
+
+
+def test_sinyal_muncul_lebih_dulu_daripada_ringkasan_puncak(client, wa_bersih,
+                                                            monkeypatch):
+    """Urutan itu pengamannya yang sesungguhnya. Kalau suatu saat ada yang
+    harus mengalah, yang mengalah harus ringkasan pencapaian -- bukan
+    jawabannya. Menaruh sinyal lebih dulu membuat itu benar dengan
+    sendirinya, tanpa bergantung pada batas panjang mana pun."""
+    import core.signal_history as sh
+    import web.app as app_module
+
+    async def _lewati(*a, **k):
+        return None
+
+    monkeypatch.setattr(sh, "get_signal_report", lambda: _banyak_sinyal())
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+    assert hasil.index("*Sinyal terbaru*") < hasil.index("*Puncak terjauh")
+
+
+def test_semua_emiten_puncak_tetap_disebut(client, wa_bersih, monkeypatch):
+    """Ambangnya persentase, bukan "N teratas" -- keputusan lama yang
+    sengaja (GIAA +31% dulu hilang gara-gara potongan 5 teratas). Merapatkan
+    beberapa per baris menyelesaikan panjangnya TANPA menghidupkan lagi
+    masalah yang sudah diperbaiki itu."""
+    import core.signal_history as sh
+    import web.app as app_module
+
+    async def _lewati(*a, **k):
+        return None
+
+    monkeypatch.setattr(sh, "get_signal_report", lambda: _banyak_sinyal())
+    monkeypatch.setattr(app_module, "_tempel_puncak_sejak_sinyal", _lewati)
+    _daftarkan_approved()
+
+    hasil = _kirim(client, "sinyal").json()["reply"]
+    for i in range(67):                      # SEMUA yang lolos ambang +20%
+        assert f"EM{i:02d}" in hasil, f"EM{i:02d} hilang dari ringkasan puncak"

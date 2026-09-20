@@ -8037,8 +8037,16 @@ def _wa_fmt_plan(plan: dict, analisis: dict | None, dengan_kepala: bool = True) 
 # Berapa emiten yang dapat KARTU lengkap, dan berapa yang cuma disebut
 # namanya. Dipisah karena keduanya menjawab kebutuhan yang berbeda: kartu
 # untuk memutuskan, indeks untuk memastikan tidak ada yang terlewat.
-_WA_SINYAL_KARTU = int(os.getenv("WA_SINYAL_KARTU", "8"))
+# Bawaannya SAMA dengan _WA_SINYAL_MAKS: semua emiten yang ditampilkan dapat
+# kartu lengkap. Mekanisme indeksnya tetap ada dan bisa diturunkan lewat
+# env, tapi bawaan yang memangkas rincian bukan yang diminta -- yang diminta
+# lebih rapi, bukan lebih sedikit.
+_WA_SINYAL_KARTU = int(os.getenv("WA_SINYAL_KARTU", "20"))
 _WA_SINYAL_MAKS = int(os.getenv("WA_SINYAL_MAKS", "20"))
+# Berapa emiten yang disebut LENGKAP di ringkasan puncak. Ambangnya tetap
+# persentase (lihat _WA_PUNCAK_MIN_PCT), jadi yang lewat batas ini tidak
+# dibuang -- cuma diringkas jadi satu baris.
+_WA_PUNCAK_MAKS = int(os.getenv("WA_PUNCAK_MAKS", "8"))
 
 
 def _wa_fmt_sinyal(rep: dict) -> str:
@@ -8082,17 +8090,54 @@ def _wa_fmt_sinyal(rep: dict) -> str:
     terjauh = sorted([x for x in puncak_per_kode.values()
                       if x["puncak_return_pct"] >= _WA_PUNCAK_MIN_PCT],
                      key=lambda x: x["puncak_return_pct"], reverse=True)
-    if terjauh:
-        baris += ["", f"*Puncak terjauh sejak sinyal muncul* ({len(terjauh)} emiten "
+
+    def _blok_puncak() -> list[str]:
+        """Ringkasan puncak -- DIBATASI, dan ditaruh SESUDAH sinyalnya.
+
+        BUG NYATA 21 Sep 2026: ambangnya persentase (>=20%), bukan "N
+        teratas" -- keputusan yang benar dan sengaja. Tapi saat pasar sedang
+        kuat, 67 emiten lolos ambang itu sekaligus. Daftarnya menghabiskan
+        SELURUH jatah pesan, dan yang terpotong justru kartu sinyalnya:
+        pembaca menerima ringkasan pencapaian tanpa satu pun sinyal yang
+        bisa ditindaklanjuti. Persis kebalikan dari gunanya perintah ini.
+
+        Dua perbaikan, dan keduanya perlu:
+          - isinya dibatasi; sisanya disebut NAMANYA dalam satu baris,
+            jadi ambang persentasenya tetap dihormati (tidak ada emiten
+            yang hilang) tanpa daftar yang tak berujung;
+          - bloknya dipindah ke BAWAH, sesudah kartu sinyal. Kalau ada yang
+            harus mengalah saat pesan kepanjangan, yang mengalah harus
+            ringkasan pencapaian -- bukan jawabannya.
+        """
+        if not terjauh:
+            return []
+        keluar = ["", f"*Puncak terjauh sejak sinyal muncul* ({len(terjauh)} emiten "
                       f"di atas +{_WA_PUNCAK_MIN_PCT:.0f}%)"]
-        for s in terjauh:
+        for s in terjauh[:_WA_PUNCAK_MAKS]:
             tgl = f" ({s['puncak_date']})" if s.get("puncak_date") else ""
             catatan = " · posisi sudah ditutup di SL" if s.get("status") == "SL_HIT" else ""
-            baris.append(f"• *{s['kode']}* +{s['puncak_return_pct']:.1f}%{tgl}{catatan}")
-        baris.append("_Puncak = harga tertinggi yang pernah dicapai, bukan hasil "
-                     "yang direalisasikan._")
+            keluar.append(f"• *{s['kode']}* +{s['puncak_return_pct']:.1f}%{tgl}{catatan}")
+        sisa = terjauh[_WA_PUNCAK_MAKS:]
+        if sisa:
+            # Sisanya TETAP DISEBUT SEMUA, cuma dirapatkan beberapa per
+            # baris. Enam puluh tujuh baris masing-masing berisi satu kode
+            # dan satu angka bukan daftar lagi, itu dinding -- sementara
+            # membuangnya berarti menghilangkan emiten yang justru lolos
+            # ambang. Merapatkan menyelesaikan keduanya sekaligus.
+            per_baris = 4
+            for i in range(0, len(sisa), per_baris):
+                keluar.append("• " + " · ".join(
+                    f"*{x['kode']}* +{x['puncak_return_pct']:.0f}%"
+                    + ("⚠" if x.get("status") == "SL_HIT" else "")
+                    for x in sisa[i:i + per_baris]))
+            if any(x.get("status") == "SL_HIT" for x in sisa):
+                keluar.append("_⚠ = posisi sudah ditutup di SL._")
+        keluar.append("_Puncak = harga tertinggi yang pernah dicapai, bukan hasil "
+                      "yang direalisasikan._")
+        return keluar
 
     if not aktif:
+        baris += _blok_puncak()
         baris += ["", "_Tidak ada sinyal aktif saat ini._", "",
                   "Coba *screener* untuk kandidat saringan Minervini hari ini."]
         return "\n".join(baris)
@@ -8255,6 +8300,7 @@ def _wa_fmt_sinyal(rep: dict) -> str:
         if ringkas:
             baris.append("• " + " · ".join(f"*{k}*" for k, _, _ in ringkas))
 
+    baris += _blok_puncak()
     baris += ["", "_Sinyal yang sudah kena TP1/TP2 TETAP di daftar selama posisinya "
                   "belum ditutup — TP berikutnya masih berlaku._",
               "", "Ketik kode emitennya untuk rencana entry lengkap.",

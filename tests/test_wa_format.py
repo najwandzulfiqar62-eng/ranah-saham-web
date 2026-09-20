@@ -106,24 +106,38 @@ def test_potong_membiarkan_yang_sudah_pendek():
 # batasi: jaring pengaman, bukan alat utama
 # ---------------------------------------------------------------------------
 
-def test_pesan_panjang_dipotong_di_batas_bagian():
-    """Dipotong di tengah kalimat membuat pesannya terbaca seperti rusak.
-    Di batas bagian, ia terbaca seperti memang berhenti di situ."""
+def test_kalau_sampai_memotong_potongnya_di_batas_bagian():
+    """Jaring pengaman ini hampir tidak pernah bekerja (lihat uji batas
+    bawaan di bawah). Kalau sampai bekerja, potongannya harus di batas
+    bagian -- dipotong di tengah kalimat membuat pesannya terbaca seperti
+    rusak."""
     teks = "\n\n".join(f"*Bagian {i}*\n• isi yang cukup panjang sekali" for i in range(80))
     hasil = batasi(teks, batas=300)
     assert len(hasil) < 500
-    assert "selengkapnya di web" in hasil
-    assert not hasil.split("\n\n_Dipotong")[0].rstrip().endswith("isi yang cuku")
+    assert "terlalu panjang" in hasil
+    assert not hasil.split("\n\n_Pesan")[0].rstrip().endswith("isi yang cuku")
 
 
 def test_pesan_pendek_tidak_disentuh():
     assert batasi("pendek", batas=100) == "pendek"
 
 
-def test_batas_bawaan_masuk_akal_untuk_whatsapp():
-    """Bukan batas teknis WhatsApp (jauh lebih besar), melainkan batas YANG
-    MASIH DIBACA sebelum dilipat di balik "Baca selengkapnya"."""
-    assert 1500 <= BATAS_PESAN <= 4000
+def test_batas_bawaan_tidak_boleh_memotong_pesan_yang_wajar():
+    """INI pelajarannya, dan mahal.
+
+    Versi pertama memasang 3000 karakter. Saat pasar kuat, perintah `sinyal`
+    menghasilkan 71 emiten aktif dan 67 emiten berpuncak di atas +20% --
+    pesannya terpotong sampai TIDAK ADA satu pun sinyal tersisa. Pembaca
+    menerima ringkasan pencapaian tanpa satu pun hal yang bisa
+    ditindaklanjuti: kebalikan persis dari guna perintah itu.
+
+    Rapi bukan berarti dipotong. Yang membuat pesan enak dibaca adalah
+    kalimat yang padat dan urutan yang benar. Batas ini harus cukup besar
+    untuk menampung pesan terpanjang yang WAJAR, supaya ia cuma menahan
+    keluaran yang benar-benar liar."""
+    assert BATAS_PESAN >= 20000, (
+        "batas terlalu kecil — pesan `sinyal` saat pasar kuat bisa 6.000+ "
+        "karakter dan akan terpotong di tempat yang salah")
 
 
 def test_siap_kirim_merapikan_lalu_membatasi():

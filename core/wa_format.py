@@ -27,13 +27,24 @@ Yang kedua dipasang di SATU titik keluar, jadi seluruh jawaban bot ikut rapi
 tanpa perlu tiap penyusun pesan mengingatnya. Aturan gaya yang harus diingat
 orang di dua belas tempat adalah aturan yang cepat atau lambat berbeda-beda.
 """
+import os
 import re
 
-# Batas aman satu pesan. Di atas ini WhatsApp melipat isinya dan pembaca
-# harus menekan "Baca selengkapnya" -- yang di grup hampir tidak pernah
-# dilakukan. Bukan batas teknis WhatsApp (jauh lebih besar), melainkan batas
-# YANG MASIH DIBACA.
-BATAS_PESAN = 3000
+# Jaring pengaman, BUKAN alat utama.
+#
+# Versi pertama memasang batas 3000 karakter dengan alasan "di atas ini
+# WhatsApp melipat isinya". Alasannya benar, tindakannya salah: 21 Sep 2026
+# pesan `sinyal` terpotong sampai TIDAK ADA satu pun sinyal yang tersisa --
+# pembaca cuma menerima ringkasan pencapaian, tepat kebalikan dari guna
+# perintah itu. Penulis menolaknya dengan benar: "yg lengkap dong jangan
+# selengkapnya di web".
+#
+# Rapi bukan berarti dipotong. Yang membuat pesan enak dibaca adalah kalimat
+# yang padat dan urutan yang benar -- bukan isi yang diamputasi. Angka ini
+# sekarang dipasang mendekati batas teknis WhatsApp, jadi ia cuma menahan
+# keluaran yang benar-benar liar (bug, perulangan tak berujung), bukan pesan
+# panjang yang memang panjang.
+BATAS_PESAN = int(os.getenv("WA_BATAS_PESAN", "60000"))
 
 # Berapa butir yang ditampilkan sebelum sisanya diringkas. Sepuluh butir
 # berturut-turut sudah berhenti terbaca sebagai daftar; ia jadi dinding.
@@ -105,7 +116,7 @@ def bagian(nama: str, baris, maks: int | None = MAKS_BUTIR,
     keluar += [b if b.startswith(("•", "_", "*", " ")) else f"{peluru}{b}"
                for b in isi]
     if sisa:
-        keluar.append(f"_… {sisa} lainnya, selengkapnya di web._")
+        keluar.append(f"_… dan {sisa} lainnya._")
     return keluar
 
 
@@ -156,11 +167,15 @@ def rapikan(teks: str) -> str:
 
 
 def batasi(teks: str, batas: int = BATAS_PESAN) -> str:
-    """Potong pesan yang kepanjangan di batas BAGIAN, bukan di tengah kalimat.
+    """Jaring pengaman terakhir: tahan keluaran yang benar-benar liar.
 
-    Pesan yang dilipat WhatsApp praktis tidak dibaca di grup, jadi lebih
-    baik berhenti di tempat yang masuk akal lalu menunjuk ke web daripada
-    mengirim dinding teks yang terpotong di tengah kata.
+    BUKAN alat untuk memendekkan pesan. Batas bawaannya dipasang mendekati
+    batas teknis WhatsApp justru supaya fungsi ini hampir tidak pernah
+    bekerja -- yang menahannya cuma bug atau perulangan tak berujung, bukan
+    pesan panjang yang memang panjang. Lihat catatan di BATAS_PESAN.
+
+    Kalau sampai bekerja, potongannya di batas BAGIAN (bukan tengah
+    kalimat) supaya yang tersisa tidak terbaca seperti rusak.
     """
     t = teks or ""
     if len(t) <= batas:
@@ -173,7 +188,7 @@ def batasi(teks: str, batas: int = BATAS_PESAN) -> str:
         if pos > batas * 0.5:
             potongan = potongan[:pos]
             break
-    return potongan.rstrip() + "\n\n_Dipotong agar tidak kepanjangan — selengkapnya di web._"
+    return potongan.rstrip() + "\n\n_Pesan terlalu panjang, sisanya tidak ditampilkan._"
 
 
 def siap_kirim(teks: str, batas: int = BATAS_PESAN) -> str:
