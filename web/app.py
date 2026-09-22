@@ -3753,6 +3753,13 @@ async def _build_confidence_raw() -> list[dict]:
                 continue
             substansial = [x for x in batch if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
             for x in substansial:
+                # `perubahan` bisa None sejak 22 Sep 2026: "hak suara
+                # sebelum" yang tidak terbaca TIDAK lagi dianggap 0 (itu
+                # membuat kenaikan penuh dilaporkan dari angka yang
+                # sebenarnya tidak diketahui). Yang tidak diketahui
+                # dilewati, bukan ditebak.
+                if x.get("perubahan") is None:
+                    continue
                 x15_by_kode[x["kode"]] = x15_by_kode.get(x["kode"], 0.0) + x["perubahan"]
         for it in items:
             it["kepemilikan_change_pct"] = round(x15_by_kode[it["kode"]], 3) if it["kode"] in x15_by_kode else None
@@ -6600,72 +6607,31 @@ import zlib as _zlib
 import re as _re
 
 
-def _parse_ksei_pdf(pdf_bytes: bytes) -> dict:
-    """Extract data kepemilikan dari PDF X-15 KSEI (FlateDecode streams)."""
-    strings: list[str] = []
+def _teks_pdf_ksei(pdf_bytes: bytes) -> list[str]:
+    """Potongan teks dari PDF X-15 KSEI (stream FlateDecode).
+
+    HANYA mengeluarkan potongan mentahnya. Penguraian jadi angka ada di
+    core/x15_parse.py, terpisah, supaya bisa diuji tanpa PDF sungguhan --
+    versi sebelumnya bercampur di sini dan kesalahannya baru ketahuan
+    sesudah muncul di layar orang.
+    """
+    keluar: list[str] = []
     for m in _re.finditer(rb"stream\r?\n(.*?)endstream", pdf_bytes, _re.S):
         try:
-            text = _zlib.decompress(m.group(1).strip()).decode("latin-1", errors="replace")
-            strings.extend(_re.findall(r"\(([^)]+)\)", text))
+            teks = _zlib.decompress(m.group(1).strip()).decode("latin-1", errors="replace")
+            keluar.extend(_re.findall(r"\(([^)]+)\)", teks))
         except Exception:
             pass
+    return keluar
 
-    def _find_val(*keywords: str) -> str:
-        """Cari nilai setelah label yang mengandung salah satu keyword (ID/EN)."""
-        for i in range(len(strings) - 1):
-            s_low = strings[i].lower()
-            if any(kw.lower() in s_low for kw in keywords):
-                for j in range(i + 1, min(i + 4, len(strings))):
-                    s = strings[j].strip()
-                    if s.startswith(":"):
-                        return s[1:].strip()
-        return ""
 
-    def _parse_pct(s: str) -> float:
-        s = s.replace("%", "").replace(",", ".").strip()
-        try:
-            return float(s)
-        except Exception:
-            return 0.0
-
-    def _clean_nama(s: str) -> str:
-        """Beberapa laporan buyback/repurchase agreement yang dilaporkan
-        via anggota Direksi/Komisaris (bukan investor individu ber-SID)
-        punya field 'Nama (sesuai SID)' yang oleh sistem IDX sendiri
-        di-render literal jadi teks 'null' (bukan dikosongkan/'Tidak
-        ditampilkan' seperti field privasi lain) -- BUKAN bug parsing
-        di sisi kita, tapi tetap harus disaring supaya 'null' tidak
-        bocor sebagai nama sungguhan ke UI/konsumen lain."""
-        return "" if s.strip().lower() == "null" else s
-
-    nama = _clean_nama(_find_val("sesuai SID", "Name (SID", "Name \\(SID"))
-    perusahaan = _clean_nama(_find_val("Nama Perusahaan Tbk", "Issuer"))
-    jabatan = _find_val("Jabatan", "Position")
-    pct_sebelum = _parse_pct(_find_val("Hak Suara Sebelum", "Voting rights before"))
-    pct_setelah = _parse_pct(_find_val("Hak Suara Setelah", "Voting rights after"))
-    pengendali_raw = _find_val("Keterangan Pengendali", "Controlling Shareholder").lower()
-    is_pengendali = pengendali_raw.startswith("ya") or pengendali_raw == ": ya" or pengendali_raw.startswith("yes")
-
-    all_text = " ".join(strings).lower()
-    if "penjualan" in all_text or "divestasi" in all_text:
-        jenis = "jual"
-    elif "pembelian" in all_text or "repurchase" in all_text:
-        jenis = "beli"
-    elif "hibah" in all_text or "transfer" in all_text or "waris" in all_text:
-        jenis = "transfer"
-    else:
-        jenis = "lain"
-
-    return {
-        "nama": nama,
-        "perusahaan": perusahaan,
-        "jabatan": jabatan,
-        "pct_sebelum": pct_sebelum,
-        "pct_setelah": pct_setelah,
-        "perubahan": round(pct_setelah - pct_sebelum, 4),
-        "jenis": jenis,
-        "pengendali": is_pengendali,
-    }
+def _nama_emiten(kode: str) -> str:
+    """Nama perusahaan pemilik kode emiten, dari direktori BEI."""
+    kode = (kode or "").upper().strip()
+    for t in _load_ticker_directory():
+        if t.get("kode") == kode:
+            return t.get("nama") or ""
+    return ""
 
 
 # WIB sebagai offset TETAP (UTC+7, tidak ada DST) -- BUKAN ZoneInfo("Asia/
@@ -6768,9 +6734,17 @@ async def _fetch_x15_today(days_back: int = 0) -> list:
             pstatus, content = await idx_get_bytes(pdf_url, timeout=20)
             if pstatus != 200:
                 continue
-            parsed = _parse_ksei_pdf(content)
-            # Skip jika tidak bisa parse nama (PDF format tidak dikenal)
-            if not parsed["nama"] and parsed["pct_setelah"] == 0.0 and parsed["pct_sebelum"] == 0.0:
+            from core.x15_parse import urai as _urai_x15
+            # Nama emiten pemilik kode ikut diberikan supaya PASANGANNYA
+            # bisa diperiksa, bukan dipercaya. BUG NYATA 22 Sep 2026:
+            # filing Hakimson Growth Capital atas TRUK tampil di bawah
+            # AKPI -- nama benar, persentase benar, emiten salah. Tiap
+            # bagiannya terlihat benar, jadi tidak ada yang mencurigainya.
+            parsed = _urai_x15(_teks_pdf_ksei(content), _nama_emiten(kode))
+            if not parsed:
+                # Tidak bisa diurai dengan yakin, atau emitennya tidak
+                # cocok. Baris yang salah pasangan lebih buruk daripada
+                # baris yang hilang -- orang bertindak atas dasarnya.
                 continue
             results.append({
                 "kode": kode,
@@ -6826,15 +6800,19 @@ def _split_x15_items(items: list[dict]) -> tuple[list[dict], list[dict], list[di
     ditampilkan sebagai KONTEKS aksi korporasi (bukan disembunyikan
     total) -- makanya dipisah ke kategori ketiga, bukan cuma dibuang."""
     akumulasi = sorted(
-        [x for x in items if x["jenis"] == "beli" and x["perubahan"] > 0],
-        key=lambda x: x["perubahan"], reverse=True,
+        [x for x in items if x["jenis"] == "beli" and (x.get("perubahan") or 0) > 0],
+        key=lambda x: x.get("perubahan") or 0, reverse=True,
     )
     distribusi = sorted(
-        [x for x in items if x["jenis"] in ("jual", "transfer") or x["perubahan"] < 0],
-        key=lambda x: x["perubahan"],
+        [x for x in items if x["jenis"] in ("jual", "transfer")
+         or (x.get("perubahan") or 0) < 0],
+        key=lambda x: x.get("perubahan") or 0,
     )
     aksi_korporasi = sorted(
-        [x for x in items if x["perubahan"] == 0],
+        # Perubahan None (tidak diketahui) ikut di sini, BUKAN di
+        # akumulasi/distribusi: menempatkannya di salah satu berarti
+        # mengaku tahu arahnya.
+        [x for x in items if not x.get("perubahan")],
         key=lambda x: x["kode"],
     )
     return akumulasi, distribusi, aksi_korporasi
@@ -7237,10 +7215,20 @@ async def _wa_x15_lines() -> list[str]:
             lines.append("_Tidak ada filing akumulasi/distribusi ≥5% hari ini._")
         for it in akumulasi:
             nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
-            lines.append(f"• {it['kode']} — {nama} naik {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% (+{it['perubahan']:.2f}%)")
+            ubah_txt = (f" (+{it['perubahan']:.2f}%)"
+                        if it.get("perubahan") is not None else "")
+            awal_txt = (f"{it['pct_sebelum']:.2f}%→"
+                        if it.get("pct_sebelum") is not None else "→")
+            lines.append(f"• {it['kode']} — {nama} naik {awal_txt}"
+                         f"{it['pct_setelah']:.2f}%{ubah_txt}")
         for it in distribusi:
             nama = it.get("nama") or it.get("perusahaan") or "(tidak diketahui)"
-            lines.append(f"• {it['kode']} — {nama} turun {it['pct_sebelum']:.2f}%→{it['pct_setelah']:.2f}% ({it['perubahan']:.2f}%)")
+            ubah_txt = (f" ({it['perubahan']:.2f}%)"
+                        if it.get("perubahan") is not None else "")
+            awal_txt = (f"{it['pct_sebelum']:.2f}%→"
+                        if it.get("pct_sebelum") is not None else "→")
+            lines.append(f"• {it['kode']} — {nama} turun {awal_txt}"
+                         f"{it['pct_setelah']:.2f}%{ubah_txt}")
         return lines
     except X15FetchError as e:
         return [f"_Data kepemilikan ≥5% tidak terjangkau hari ini ({e})._"]

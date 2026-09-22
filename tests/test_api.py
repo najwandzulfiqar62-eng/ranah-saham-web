@@ -5259,10 +5259,15 @@ def test_parse_ksei_pdf_sanitizes_literal_null_name():
     assert compressed[:1] not in b" \t\n\r\x0b\x0c" and compressed[-1:] not in b" \t\n\r\x0b\x0c"
     pdf_bytes = b"stream\n" + compressed + b"\nendstream"
 
-    parsed = app_module._parse_ksei_pdf(pdf_bytes)
-    assert parsed["nama"] == ""
-    assert parsed["pct_sebelum"] == 100.0
-    assert parsed["pct_setelah"] == 100.0
+    # Penguraiannya dipindah ke core/x15_parse.py (22 Sep 2026) supaya bisa
+    # diuji tanpa PDF; app.py kini cuma mengeluarkan potongan teksnya.
+    from core.x15_parse import urai
+
+    parsed = urai(app_module._teks_pdf_ksei(pdf_bytes))
+    # Tanpa nama DAN tanpa nama perusahaan, barisnya memang tidak layak
+    # ditampilkan -- 'null' tidak boleh bocor sebagai nama, dan baris tanpa
+    # identitas apa pun tidak memberi tahu siapa yang bertransaksi.
+    assert parsed is None
 
 
 # =========================
