@@ -1,4 +1,24 @@
 
+  /* el.hidden = true HARUS berarti tidak terlihat. Tanpa !important ia
+     tidak selalu berarti itu: `[hidden]{display:none}` sama kuatnya dengan
+     `.access-tabs{display:flex}` (dua-duanya spesifisitas 0,1,0), jadi yang
+     menang cuma yang tertulis BELAKANGAN. Kelas yang punya `display` sendiri
+     diam-diam mengalahkan `hidden`, dan elemennya tetap tampil.
+
+     Ini bukan kemungkinan teoretis -- sudah terjadi LIMA kali, dan empat
+     kali pertama ditambal satu per satu di tempatnya masing-masing:
+     .access-form, .access-account-btn, .access-admin-section, .audit-pane.
+     Empat tambalan untuk satu sebab adalah tanda bahwa yang ditambal
+     gejalanya, bukan sebabnya.
+
+     Yang kelima ditemukan 23 Sep 2026 dan akibatnya bukan sekadar rupa:
+     saat server mati, layar masuk menampilkan "Sesimu TIDAK hilang", tapi
+     tab Masuk/Daftar ikut tertinggal terlihat karena .access-tabs
+     display:flex. Menekannya menjalankan showMessage('') -- pesan itu
+     terhapus dan borang masuk terbuka, persis membuat orang mengira dirinya
+     dikeluarkan. Itu KEBALIKAN dari yang ingin dicegah kodenya. */
+  [hidden]{display:none!important}
+
   /* SATU sumber kebenaran palet (dulu ADA DUA blok :root -- basis biru di
      sini + override hijau-emas ~700 baris di bawah; yang aktif selalu yang
      kedua, tapi keberadaan dua blok bikin nilai "meleset" gampang lolos.
