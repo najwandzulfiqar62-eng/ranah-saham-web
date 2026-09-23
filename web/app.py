@@ -285,6 +285,30 @@ def _load_shares():
     return _SHARES
 
 
+# Ukuran kolam thread bersama. JANGAN biarkan bawaannya.
+#
+# `asyncio.to_thread` memakai SATU kolam thread bawaan untuk seluruh proses,
+# dan ukurannya min(32, cpu_count + 4) -- di VPS 2 vCPU itu cuma ENAM thread.
+# Di app.py ada 78 pemakaian to_thread, dan tiap unduhan yfinance memegang
+# satu thread sampai selesai (timeout 20 detik).
+#
+# Enam itu habis dengan sangat mudah. Satu pemindaian Smart Money scope
+# 'core' saja menembakkan 45 _scan_one_sm SEKALIGUS lewat asyncio.gather;
+# tiap satunya bisa memanggil to_thread dua kali (unduh + tambal celah).
+# Sembilan puluh pekerjaan berebut enam thread.
+#
+# Akibatnya bukan cuma pemindaiannya yang lambat -- SEMUA yang lewat
+# to_thread ikut mengantre di belakangnya, termasuk baca SQLite untuk
+# beranda, forum, dan masuk akun. Itulah kenapa yang dirasakan "webnya
+# ngelag", bukan "menu smart money-nya lambat".
+#
+# Thread-thread ini MENUNGGU (jaringan, disk), bukan menghitung, jadi
+# jumlahnya boleh jauh di atas jumlah inti: yang menganggur cuma memakai
+# memori tumpukan. Ini bukan menambah kecepatan, ini membuang antrean yang
+# seharusnya memang tidak ada.
+THREAD_POOL_SIZE = int(os.getenv("THREAD_POOL_SIZE", "48"))
+
+
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
     """Nyalakan background task auto-audit sinyal (_signal_auto_loop,
@@ -297,6 +321,15 @@ async def _lifespan(_app: "FastAPI"):
     membaca dari cache & TIDAK memicu fetch Yahoo dingin. TIDAK ADA
     proses/infra baru -- cuma 3 asyncio task dalam proses yang sama (bukan
     Celery/cron terpisah), cukup untuk skala aplikasi ini."""
+    # Dipasang SEBELUM task apa pun dinyalakan -- kolam bawaan dibuat saat
+    # to_thread dipakai pertama kali, dan sesudah itu tidak bisa diganti.
+    import concurrent.futures
+    asyncio.get_running_loop().set_default_executor(
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=THREAD_POOL_SIZE, thread_name_prefix="ranah"))
+    print(f"Kolam thread: {THREAD_POOL_SIZE} (bawaan akan "
+          f"{min(32, (os.cpu_count() or 1) + 4)} di mesin ini).")
+
     ensure_access_tables()
     if ensure_bootstrap_admin():
         print("Akses akun: admin bootstrap siap.")
@@ -4635,7 +4668,10 @@ async def _warm_shared_caches():
     tidak menembak Yahoo dgn beberapa batch besar bersamaan. Tidak
     menyertakan confidence:raw -- itu SUDAH dihangatkan _run_signal_auto_cycle.
     scope='all' (793 saham) TIDAK dihangatkan otomatis -- terlalu berat &
-    jarang dipakai; itu tetap on-demand (dgn single-flight + serve-stale)."""
+    jarang dipakai; itu tetap on-demand, dijaga single-flight + serve-stale.
+    Kalimat itu sempat berdiri di sini sebagai KLAIM belaka: penjagaannya
+    belum dipasang, dan justru komentar inilah yang membuat orang berhenti
+    memeriksa. Dipasang 23 Sep 2026 -- lihat api_foreign_flow."""
     for scope in ("core", "medium"):
         key = f"universe:{scope}"
         try:
@@ -4679,6 +4715,22 @@ async def _warm_shared_caches():
             await screener_harmonic(boleh_pindai=True)
         except Exception as e:
             print(f"⚠️ cache-warmer harmonic: {type(e).__name__}: {e}")
+
+    # Smart Money: 'core' & 'medium' dihangatkan DI SINI supaya pengunjung
+    # membaca cache, bukan memicu unduhan 250 emiten sendiri. Scope bawaan di
+    # layar adalah 'medium' -- jadi justru jalur inilah yang paling sering
+    # ditekan orang, dan justru ia yang selama ini sama sekali tidak
+    # dihangatkan. scope='all' (793) tetap TIDAK dihangatkan (terlalu berat,
+    # jarang dipakai); ia bergantung pada single-flight + serve-stale, yang
+    # sekarang benar-benar ada dan bukan cuma tertulis di komentar.
+    for scope in ("core", "medium"):
+        key = f"foreign_flow:{scope}"
+        if _cache_get(key) is not None:
+            continue
+        try:
+            await _single_flight(key, lambda s=scope, k=key: _build_foreign_flow(s, k))
+        except Exception as e:
+            print(f"⚠️ cache-warmer foreign-flow:{scope}: {type(e).__name__}: {e}")
 
     if _cache_get("sinyal_puncak:v3") is None:
         try:
@@ -6535,71 +6587,101 @@ async def _record_minervini_harmonic_cycle():
         kandidat, price_lookup=_signal_entry_price_lookup)
 
 
+def _compute_sm_items(tickers: list, data: dict) -> list:
+    """Loop pandas per emiten -- DIJALANKAN DI WORKER THREAD.
+
+    Alasannya sama persis dengan _compute_universe_items: loop sinkron tanpa
+    `await` di event loop membekukan SELURUH server, bukan cuma endpoint ini.
+
+    Diukur 23 Sep 2026: 2,5 ms per emiten -- 0,63 detik untuk 250 saham, 2,0
+    detik untuk 793. Sendirian ia BUKAN penyebab utama macetnya, dan itu
+    perlu ditulis jujur di sini supaya pembaca berikutnya tidak salah menduga
+    seperti saya semula. Tapi ia menumpuk di atas penahan yang lebih besar,
+    dan tidak ada alasan menahannya di sini ketika _build_universe sudah lama
+    tidak.
+    """
+    items = []
+    for ticker in tickers:
+        df_raw = data.get(ticker) if isinstance(data, dict) else None
+        if df_raw is None:
+            continue
+        try:
+            df = fix_yf_columns(df_raw).apply(pd.to_numeric, errors="coerce")
+            df_tr = df[df["Volume"] > 0].dropna(subset=["Close", "Volume"])
+            r = _process_sm_df(ticker.replace(".JK", ""), df_tr)
+            if r:
+                items.append(r)
+        except Exception:
+            continue
+    return items
+
+
+async def _build_foreign_flow(scope: str, cache_key: str) -> dict:
+    """Bagian BERAT /api/foreign-flow -- dipisah dari endpoint-nya.
+
+    Sama seperti _build_universe: dipisah supaya bisa dipanggil BAIK oleh
+    request user MAUPUN oleh cache warmer, dan supaya bisa dibungkus
+    _single_flight. Hasilnya disimpan sebagai cache DURABLE (TTL normal +
+    salinan stale) supaya serve-stale punya sesuatu untuk disajikan.
+    """
+    if scope == "core":
+        # Jalur ini lewat _clean, yang sudah punya cache & single-flight
+        # per-emiten sendiri. Dua jalur lain menembak Yahoo langsung dan
+        # melewati keduanya -- itulah sebabnya justru merekalah yang berat.
+        tasks = [_scan_one_sm(k) for k in _SM_UNIVERSE]
+        items = [r for r in await asyncio.gather(*tasks, return_exceptions=False) if r]
+        total = len(_SM_UNIVERSE)
+    else:
+        from core.async_yf import async_download_many
+        from core.stock_data import load_tickers
+        tickers = (load_tickers() if scope == "all"
+                   else [t + ".JK" for t in LIQUID_250])
+        data = await async_download_many(tickers, period="3mo", interval="1d")
+        items = await asyncio.to_thread(_compute_sm_items, tickers, data)
+        total = len(tickers)
+
+    payload = _build_sm_payload(items, total, scope)
+    _cache_set_durable(cache_key, payload)
+    return payload
+
+
 @app.get("/api/foreign-flow")
 async def api_foreign_flow(scope: str = "core"):
     """Scan volume anomali / smart money.
-    scope=core → ~45 cepat. scope=medium → ~200 likuid. scope=all → seluruh IDX (~1-2 mnt)."""
-    if scope == "all":
-        scope = "all"
-    elif scope == "medium":
-        scope = "medium"
-    else:
-        scope = "core"
+    scope=core -> ~45 cepat. scope=medium -> ~250 likuid. scope=all -> seluruh IDX.
+
+    DUA PENJAGA YANG SEHARUSNYA SUDAH ADA DI SINI, DAN TIDAK (23 Sep 2026,
+    laporan penulis: "kok ngelag/failed trus ngescannya"). Catatan di
+    _warm_shared_caches bahkan sudah menyebut scope='all' "tetap on-demand
+    (dgn single-flight + serve-stale)" -- padahal keduanya tidak pernah
+    dipasang. Komentar yang menjanjikan penjagaan justru membuat
+    ketiadaannya tak terlihat: siapa pun yang membacanya berhenti memeriksa.
+
+    1. SINGLE-FLIGHT. Tanpa ini, tiap muat-ulang memulai pemindaian 250
+       (atau 793) emiten BARU. Halamannya lambat -> orang memuat ulang ->
+       jadi lebih lambat. Bebannya tidak menumpuk, ia BERLIPAT oleh
+       ketidaksabaran -- dan bentuk keluhannya ("failed TRUS") persis
+       bentuk itu.
+    2. SERVE-STALE. Satu penolakan Yahoo -> panel kosong bertuliskan "Gagal
+       memuat", padahal hasil beberapa menit lalu masih tersimpan dan masih
+       benar. Data lama jauh lebih berguna daripada pesan error, ASAL
+       dikatakan bahwa ia lama -- itu gunanya tanda `basi`.
+    """
+    scope = scope if scope in ("all", "medium") else "core"
     cache_key = f"foreign_flow:{scope}"
     cached = _cache_get(cache_key)
     if cached:
         return cached
 
     try:
-        if scope == "all":
-            from core.stock_data import load_tickers
-            from core.async_yf import async_download_many
-            all_tickers = load_tickers()
-            all_data = await async_download_many(all_tickers, period="3mo", interval="1d")
-            items = []
-            for ticker in all_tickers:
-                kode = ticker.replace(".JK", "")
-                df_raw = all_data.get(ticker) if isinstance(all_data, dict) else None
-                if df_raw is None:
-                    continue
-                try:
-                    df = fix_yf_columns(df_raw).apply(pd.to_numeric, errors="coerce")
-                    df_tr = df[df["Volume"] > 0].dropna(subset=["Close", "Volume"])
-                    r = _process_sm_df(kode, df_tr)
-                    if r:
-                        items.append(r)
-                except Exception:
-                    continue
-            total = len(all_tickers)
-        elif scope == "medium":
-            from core.async_yf import async_download_many
-            med_tickers = [t + ".JK" for t in LIQUID_250]
-            all_data = await async_download_many(med_tickers, period="3mo", interval="1d")
-            items = []
-            for ticker in med_tickers:
-                kode = ticker.replace(".JK", "")
-                df_raw = all_data.get(ticker) if isinstance(all_data, dict) else None
-                if df_raw is None:
-                    continue
-                try:
-                    df = fix_yf_columns(df_raw).apply(pd.to_numeric, errors="coerce")
-                    df_tr = df[df["Volume"] > 0].dropna(subset=["Close", "Volume"])
-                    r = _process_sm_df(kode, df_tr)
-                    if r:
-                        items.append(r)
-                except Exception:
-                    continue
-            total = len(med_tickers)
-        else:
-            tasks = [_scan_one_sm(k) for k in _SM_UNIVERSE]
-            items = [r for r in await asyncio.gather(*tasks, return_exceptions=False) if r]
-            total = len(_SM_UNIVERSE)
-
-        payload = _build_sm_payload(items, total, scope)
-        _cache_set(cache_key, payload)
-        return payload
-
+        return await _single_flight(
+            cache_key, lambda s=scope, k=cache_key: _build_foreign_flow(s, k))
     except Exception as e:
+        basi = _cache_get_stale(cache_key)
+        if basi:
+            # Ditandai, bukan disamarkan. Menyajikan data lama diam-diam
+            # sebagai data hari ini adalah cara lain untuk berbohong.
+            return {**basi, "basi": True}
         raise HTTPException(502, f"Gagal scan volume anomali: {e}")
 
 

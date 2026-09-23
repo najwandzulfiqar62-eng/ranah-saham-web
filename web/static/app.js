@@ -4119,7 +4119,10 @@ async function loadForeignFlow(forceScope){
   if(scopeEl&&forceScope)scopeEl.value=forceScope;
   const isAll=scope==='all';
   const body=$('#asingBody');
-  const eta=isAll?'±2-3 menit':scope==='medium'?'±30-60 detik':'15–30 detik';
+  // 'core' & 'medium' dihangatkan cache warmer di server, jadi hampir
+  // selalu terbit seketika; yang perlu menunggu cuma 'all' (793 emiten),
+  // dan itu pun sekali saja karena hasilnya dipakai bersama semua orang.
+  const eta=isAll?'±2-3 menit':'biasanya seketika';
   const scopeLabel=isAll?'seluruh IDX':scope==='medium'?'~200 saham likuid':'±45 saham';
   body.innerHTML=`<section class="panel skel loadbar" style="height:100px"></section><section class="panel skel loadbar" style="height:280px"></section>
     <p class="muted" style="text-align:center;margin-top:10px;font-size:12px">Memindai ${scopeLabel}… estimasi ${eta}</p>`;
@@ -4193,6 +4196,7 @@ function _renderForeignFlow(d){
         <p class="eyebrow" style="margin-bottom:6px">Smart Money · Volume Anomali</p>
         <div style="font-size:26px;font-weight:800;font-family:'Space Grotesk',sans-serif;color:${sc};line-height:1.1">${sentiment}</div>
         <div style="font-size:12.5px;color:var(--muted);margin-top:5px">Dari ${d.total_scan} saham ${d.scope==='all'?'IDX':d.scope==='medium'?'likuid':'tier-1'}${grp?` · grup: ${grpLabel}`:''}, ${akumulasi.length+distribusi.length} anomali terdeteksi</div>
+        ${d.basi?`<div style="font-size:11.5px;color:#E8A13A;margin-top:6px;font-weight:600">Data pemindaian TERAKHIR yang berhasil — Yahoo sedang menolak, jadi ini belum diperbarui. Ditampilkan apa adanya daripada halaman kosong.</div>`:''}
       </div>
       <div style="display:flex;gap:8px;flex-shrink:0">
         <div style="text-align:center;background:rgba(74,222,128,.1);border-radius:10px;padding:8px 14px">
