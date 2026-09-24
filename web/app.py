@@ -3784,7 +3784,7 @@ async def _build_confidence_raw() -> list[dict]:
         for batch in x15_batches:
             if isinstance(batch, Exception):
                 continue
-            substansial = [x for x in batch if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+            substansial = [x for x in batch if _x15_substansial(x)]
             for x in substansial:
                 # `perubahan` bisa None sejak 22 Sep 2026: "hak suara
                 # sebelum" yang tidak terbaca TIDAK lagi dianggap 0 (itu
@@ -6865,6 +6865,36 @@ def _is_insider_jabatan(jabatan: str) -> bool:
     return any(kw in j for kw in ("direktur", "komisaris", "direksi"))
 
 
+def _x15_substansial(x: dict) -> bool:
+    """Apakah baris X-15 ini pemegang >=5% atau pengendali?
+
+    SATU tempat untuk pertanyaan yang ditanyakan EMPAT pemanggil. Sebelumnya
+    ungkapannya disalin apa adanya di empat tempat, dan ketika `pct_sebelum`
+    mulai boleh bernilai None (22 Sep 2026, supaya nilai yang tidak terbaca
+    berhenti dilaporkan sebagai nol), keempatnya meledak bersamaan:
+    `None >= 5.0` itu TypeError di Python 3, bukan False.
+
+    Yang terlihat penulis 24 Sep 2026 adalah DUA panel "Terjadi kesalahan di
+    server" sekaligus di satu halaman -- dan memang begitulah bentuknya
+    kalau satu ungkapan yang sama hidup di empat salinan: ia tidak rusak
+    sendiri-sendiri, ia rusak serentak.
+
+    Nilai yang tidak diketahui diperlakukan sebagai "tidak memenuhi", bukan
+    sebagai nol dan bukan sebagai alasan menjatuhkan seluruh halaman. Kalau
+    hak suara SESUDAH transaksi saja sudah di bawah 5% sementara yang
+    sebelumnya tidak terbaca, baris itu memang bukan pemegang substansial
+    yang sedang dicari -- dan menebaknya nol tidak membuatnya jadi lebih
+    benar.
+    """
+    if x.get("pengendali"):
+        return True
+    for kunci in ("pct_setelah", "pct_sebelum"):
+        nilai = x.get(kunci)
+        if nilai is not None and nilai >= 5.0:
+            return True
+    return False
+
+
 def _split_x15_items(items: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
     """Klasifikasi item X-15 jadi akumulasi (naik) / distribusi (turun) /
     aksi_korporasi (tanpa perubahan %), dipakai SAMA oleh /api/x15 dan
@@ -7080,7 +7110,7 @@ async def api_x15(hari: int = 0):
     # Hanya pemegang saham substansial (≥5%) atau pengendali -- transaksi
     # insider kecil (direksi/komisaris di bawah 5%) sengaja disaring keluar
     # di sini, lihat /api/insider untuk itu.
-    items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+    items = [x for x in raw_items if _x15_substansial(x)]
     akumulasi, distribusi, aksi_korporasi = _split_x15_items(items)
 
     from datetime import timedelta as _td, datetime as _dt
@@ -7193,7 +7223,7 @@ async def _wa_akumulasi_berulang(hari: int = _WA_AKUM_HARI) -> list[dict]:
     per_kode: dict[str, dict] = {}
     for indeks, item_hari in enumerate(sesi):
         layak = [x for x in item_hari
-                 if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+                 if _x15_substansial(x)]
         akumulasi, _, _ = _split_x15_items(layak)
         for it in akumulasi:
             data = per_kode.setdefault(it["kode"], {"hari": set(), "pemegang": {}})
@@ -7290,7 +7320,7 @@ async def _wa_x15_lines() -> list[str]:
     supaya keduanya tidak pernah bercerita beda."""
     try:
         raw_items = await _fetch_x15_today(days_back=0)
-        items = [x for x in raw_items if x["pct_setelah"] >= 5.0 or x["pct_sebelum"] >= 5.0 or x["pengendali"]]
+        items = [x for x in raw_items if _x15_substansial(x)]
         akumulasi, distribusi, _ = _split_x15_items(items)
         lines = ["*Kepemilikan ≥5% (X-15) hari ini:*"]
         if not akumulasi and not distribusi:

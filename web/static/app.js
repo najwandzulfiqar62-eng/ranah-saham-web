@@ -4330,10 +4330,18 @@ function selectX15Date(hari){
 }
 
 function _topRow(item,type){
-  const perubahan=item.perubahan||0;
-  const sign=perubahan>=0?'+':'';
+  // `perubahan` bisa null sejak 22 Sep 2026: "hak suara sebelum" yang tidak
+  // terbaca BERHENTI dianggap nol, karena itu membuat kenaikan penuh
+  // dilaporkan dari angka yang sebenarnya tidak pernah dibaca. `||0` di sini
+  // diam-diam mengembalikan kebohongan itu ke layar dalam bentuk "+0,00%" --
+  // yang jauh lebih berbahaya daripada kolom kosong, sebab ia terbaca
+  // seperti fakta. Yang tidak diketahui sekarang ditulis "?", dan badge
+  // LONJAK/SUSUT tidak menyala untuknya.
+  const tahu=item.perubahan!=null;
+  const perubahan=tahu?item.perubahan:0;
+  const sign=tahu&&perubahan>=0?'+':'';
   const cc=type==='aku'?'var(--bull)':'var(--bear)';
-  const bigMove=Math.abs(perubahan)>=1;
+  const bigMove=tahu&&Math.abs(perubahan)>=1;
   const flashBadge=bigMove?`<span style="font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:${cc}22;color:${cc};margin-left:4px">${perubahan>0?'LONJAK':'SUSUT'}</span>`:'';
   const hasNama=item.nama&&item.nama!=='null';
   // Tampilkan jabatan sebagai fallback konteks kalau nama tidak
@@ -4346,7 +4354,7 @@ function _topRow(item,type){
   return`<div class="x15-top-row">
     <span class="x15-top-ticker" onclick="loadHolders('${item.kode}')">${item.kode}${flashBadge}</span>
     <span class="x15-top-name" title="${item.nama||''}${item.jabatan?' · '+item.jabatan:''}">${(hasNama?item.nama:'—')}${jabatan}</span>
-    <span class="x15-top-chg" style="color:${cc}">${sign}${perubahan.toFixed(2)}%</span>
+    <span class="x15-top-chg" style="color:${tahu?cc:'var(--muted)'}" title="${tahu?'':'Hak suara sebelum transaksi tidak terbaca di PDF IDX'}">${tahu?sign+perubahan.toFixed(2)+'%':'?'}</span>
     <span class="x15-top-kep">${item.pct_setelah.toFixed(2)}%</span>
   </div>`;
 }
@@ -4703,7 +4711,10 @@ function _x15HoldersPanelHtml(x15d, kode){
     const badgeColor=h.pengendali?'var(--gold)':h.is_insider?'var(--accent)':'var(--muted)';
     const chg=h.perubahan;
     const chgColor=chg>0?'var(--bull)':chg<0?'var(--bear)':'var(--muted)';
-    const chgTxt=(chg>0?'+':'')+fmt(chg,2)+'%';
+    // null = tidak terbaca, BUKAN nol. fmt() memulangkan "–", sehingga
+    // barisnya jadi "–%" -- terbaca seperti angka yang rusak. "?"
+    // mengatakan yang sebenarnya: nilainya tidak diketahui.
+    const chgTxt=chg==null?'?':(chg>0?'+':'')+fmt(chg,2)+'%';
     return `<div class="holder-row">
       <div class="holder-name" title="${h.nama_tampil}">#${i+1} ${h.nama_tampil}</div>
       <span class="holder-badge" style="background:${badgeColor}1a;color:${badgeColor}">${badge}</span>
@@ -6216,7 +6227,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v57';
+const APP_VERSION='v58';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
