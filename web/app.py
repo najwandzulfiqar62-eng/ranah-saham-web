@@ -7613,6 +7613,8 @@ _WA_BANTUAN = (
     "• *sinyal* — rekomendasi sinyal terbaik yang sedang berjalan\n"
     "• *screener* — saringan Minervini (trend template 8 kriteria)\n"
     "• *breakout* — saringan breakout volume\n"
+    "• *smartmoney* (atau *bandar*) — saham yang volumenya jauh di atas "
+    "kebiasaannya sendiri, dipilah akumulasi vs distribusi\n"
     "• *harmonic* — saringan pola harmonic (*harmonic KODE* untuk rincian)\n"
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
     "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
@@ -9887,6 +9889,96 @@ def _wa_fmt_minervini(payload) -> str:
     return "\n".join(baris)
 
 
+def _wa_fmt_smartmoney(payload: dict) -> str:
+    """Anomali volume (panel Smart Money) dalam bentuk WhatsApp.
+
+    SATU sumber angka dengan panel web: keduanya membaca payload yang sama
+    dari _build_foreign_flow, jadi bot dan layar tidak pernah bercerita beda.
+
+    NAMANYA MENJANJIKAN LEBIH BANYAK DARIPADA YANG DIUKUR DATANYA, dan itu
+    dikatakan di pesannya sendiri. Yang diukur adalah VOLUME yang tidak biasa
+    dibandingkan rata-rata 20 harinya -- bukan aliran dana asing, dan bukan
+    identitas pembelinya. Siapa yang membeli tidak ada di satu pun sumber data
+    yang dipakai aplikasi ini. Menyebutnya "bandar masuk" tanpa syarat berarti
+    menjual kepastian yang tidak dimiliki, kepada orang yang bertaruh uang
+    atasnya.
+
+    `hari_lalu` ikut ditampilkan. Anomali tiga hari lalu dan anomali hari ini
+    menuntut tindakan yang sama sekali berbeda, tapi keduanya sama-sama muncul
+    di daftar ini -- tanpa penanda umur, yang basi terbaca seperti yang baru.
+    """
+    if not isinstance(payload, dict):
+        return "_Data anomali volume belum siap. Coba lagi sebentar._"
+
+    akumulasi = payload.get("akumulasi") or []
+    distribusi = payload.get("distribusi") or []
+    total = payload.get("total_scan") or 0
+
+    if not akumulasi and not distribusi:
+        return (f"*Smart Money \u2014 anomali volume*\n\n"
+                f"_Tidak ada anomali dari {total} saham yang dipindai._\n\n"
+                "Hari tanpa hasil itu wajar: syaratnya volume minimal 1,8x "
+                "rata-rata 20 hari DAN lolos saringan likuiditas.")
+
+    def _baris_sm(it: dict) -> list[str]:
+        keluar = [f"\u2022 *{it.get('kode')}* \u00b7 {it.get('pola')} \u00b7 {_rp(it.get('harga'))}"]
+        rinci = f"   vol {it.get('vol_ratio')}x rata-rata"
+        if it.get("chg1") is not None:
+            rinci += f" \u00b7 hari ini {it['chg1']:+.2f}%"
+        if it.get("chg5") is not None:
+            rinci += f" \u00b7 5 hari {it['chg5']:+.2f}%"
+        keluar.append(rinci)
+        ekor = []
+        # Kata-katanya SENGAJA sama dengan panel web ("Top X% di kelas
+        # likuiditasnya"). Peringkatnya dihitung hanya di antara saham yang
+        # SUDAH lolos ambang mutlak, bukan seluruh universe -- keterbatasan
+        # yang sudah dicatat di _add_cross_sectional_rank. Menuliskannya beda
+        # di bot akan membuat satu angka yang sama terbaca seperti dua hal.
+        pct = it.get("vol_ratio_percentile")
+        if pct is not None:
+            ekor.append(f"Top {max(0, round(100 - pct))}% di kelas likuiditasnya")
+        if it.get("rsi") is not None:
+            ekor.append(f"RSI {it['rsi']}")
+        if it.get("likuiditas"):
+            ekor.append(str(it["likuiditas"]))
+        grup = it.get("grup")
+        if grup and grup != "Independen":
+            ekor.append(str(grup))
+        # Umur anomali disebut HANYA kalau bukan hari terakhir data. Menulis
+        # "0 hari lalu" di tiap baris cuma menambah teks tanpa menambah arti.
+        hari_lalu = it.get("hari_lalu")
+        if hari_lalu:
+            ekor.append(f"\u26a0 {hari_lalu} hari lalu, bukan hari ini")
+        if ekor:
+            keluar.append("   " + " \u00b7 ".join(ekor))
+        return keluar
+
+    baris = [f"*Smart Money \u2014 anomali volume* (dari {total} saham)"]
+    net = payload.get("net_score")
+    if net is not None:
+        arah = ("condong akumulasi" if net > 0
+                else "condong distribusi" if net < 0 else "berimbang")
+        baris.append(f"_{len(akumulasi)} akumulasi \u00b7 {len(distribusi)} distribusi "
+                     f"\u2014 {arah}._")
+
+    if akumulasi:
+        baris += ["", f"*Akumulasi* ({len(akumulasi)})"]
+        for it in akumulasi:
+            baris += _baris_sm(it)
+    if distribusi:
+        baris += ["", f"*Distribusi* ({len(distribusi)})"]
+        for it in distribusi:
+            baris += _baris_sm(it)
+
+    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
+              "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 siapa "
+              "yang membeli tidak ada di data ini. Volume besar bisa berarti "
+              "terkumpul, bisa juga berarti dilepas; arahnya disimpulkan dari "
+              "gerak harga, bukan diketahui._",
+              "_Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
 async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
     """Cocokkan pengirim dengan akun ter-approve, mencoba SEMUA identitas yang
     dikirim wa-bot.
@@ -10061,7 +10153,8 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             and not kode_harmonic and not adalah_kode and not porto_aksi
             and kunci not in {"sinyal", "screener", "minervini", "breakout",
                               "kepemilikan", "x15", "ihsg", "pasar", "harmonic",
-                              "harmonik", "bantuan", "help", "menu"}):
+                              "harmonik", "bantuan", "help", "menu",
+                              "smartmoney", "sm", "bandar", "akumulasi"}):
         return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -10097,6 +10190,13 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_minervini(await screenerpro()), None
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
+        if kunci in {"smartmoney", "sm", "bandar", "akumulasi"}:
+            # scope 'medium' (250 saham), BUKAN 'core' (45): sejak 23 Sep 2026
+            # keduanya dihangatkan cache warmer, jadi yang lebih luas pun
+            # dibaca dari cache dan tidak menambah beban sedikit pun -- lihat
+            # _warm_shared_caches. Memilih yang sempit demi kecepatan yang
+            # sudah tidak perlu itu cuma membuang jangkauan.
+            return _wa_fmt_smartmoney(await api_foreign_flow(scope="medium")), None
         if kode_harmonic:
             return _wa_fmt_harmonic_kode(kode_harmonic,
                                          await harmonic_kode(kode_harmonic)), None
