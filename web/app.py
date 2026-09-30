@@ -4723,7 +4723,13 @@ async def _warm_shared_caches():
     # dihangatkan. scope='all' (793) tetap TIDAK dihangatkan (terlalu berat,
     # jarang dipakai); ia bergantung pada single-flight + serve-stale, yang
     # sekarang benar-benar ada dan bukan cuma tertulis di komentar.
-    for scope in ("core", "medium"):
+    # 'all' (793) IKUT dihangatkan sejak 30 Sep 2026. Dulu sengaja tidak,
+    # dengan alasan "terlalu berat & jarang dipakai" -- dan alasan itu sudah
+    # tidak berlaku: perintah `smartmoney` di bot memakai scope ini, jadi ia
+    # bukan lagi jalur yang jarang. Ongkosnya diukur, bukan ditaksir: 69 dtk
+    # sekali pindai terhadap TTL 900 dtk = pemanas sibuk 7,7% waktunya.
+    # Dijalankan TERAKHIR supaya yang ringan tidak menunggu di belakangnya.
+    for scope in ("core", "medium", "all"):
         key = f"foreign_flow:{scope}"
         if _cache_get(key) is not None:
             continue
@@ -6616,6 +6622,24 @@ def _compute_sm_items(tickers: list, data: dict) -> list:
     return items
 
 
+# Umur cache anomali volume. BUKAN _CACHE_TTL (300 dtk) seperti sebelumnya.
+#
+# Sumbernya bar HARIAN. Menyegarkannya tiap 5 menit berarti mengunduh ulang
+# ratusan emiten untuk angka yang pada dasarnya berubah sekali sehari -- yang
+# berubah di tengah sesi cuma bar hari ini yang belum selesai.
+#
+# Diukur 30 Sep 2026, sekali pindai 793 emiten: 66,4 dtk unduh + 2,6 dtk
+# hitung = 69,0 dtk. Terhadap umur cache, itu berarti pemanas sibuk:
+#
+#     TTL  300 dtk  ->  23,0%   (boros, dan inilah nilai lamanya)
+#     TTL  900 dtk  ->   7,7%
+#     TTL 1800 dtk  ->   3,8%
+#
+# 900 dipilih karena masih menangkap penumpukan volume di tengah sesi --
+# yang justru jadi guna fitur ini -- dengan sepertiga beban nilai lama.
+_FOREIGN_FLOW_TTL = int(os.getenv("FOREIGN_FLOW_TTL", "900"))
+
+
 async def _build_foreign_flow(scope: str, cache_key: str) -> dict:
     """Bagian BERAT /api/foreign-flow -- dipisah dari endpoint-nya.
 
@@ -6641,7 +6665,7 @@ async def _build_foreign_flow(scope: str, cache_key: str) -> dict:
         total = len(tickers)
 
     payload = _build_sm_payload(items, total, scope)
-    _cache_set_durable(cache_key, payload)
+    _cache_set_durable(cache_key, payload, ttl=_FOREIGN_FLOW_TTL)
     return payload
 
 
@@ -9961,6 +9985,12 @@ def _wa_fmt_smartmoney(payload: dict) -> str:
         return baris
 
     baris = [f"*Smart Money \u2014 anomali volume* (dari {total} saham)"]
+    # Data lama disajikan DENGAN keterangan, tidak pernah disamarkan jadi
+    # data hari ini. Di web ada lencana untuk ini; di WhatsApp tidak ada
+    # tempat lain untuk mengatakannya selain di dalam pesannya sendiri.
+    if payload.get("basi"):
+        baris.append("_\u26a0 Hasil pemindaian TERAKHIR yang berhasil \u2014 "
+                     "belum diperbarui._")
     net = payload.get("net_score")
     if net is not None:
         arah = ("condong akumulasi" if net > 0
@@ -9983,6 +10013,50 @@ def _wa_fmt_smartmoney(payload: dict) -> str:
               "gerak harga, bukan diketahui._",
               "_Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
+
+
+async def _wa_smartmoney() -> str:
+    """Anomali volume SELURUH IDX (793 emiten) untuk bot.
+
+    Permintaan penulis 30 Sep 2026: "kok cuman segini ngescannya yg semua
+    saham idx dong". Sebelumnya bot memakai scope 'medium' -- yang ternyata
+    berisi 178 emiten, bukan 250 seperti nama konstantanya -- sehingga bot
+    melaporkan 2 anomali sementara layarnya menunjukkan 22.
+
+    TIDAK PERNAH MEMBUAT ORANG MENUNGGU PEMINDAIAN DINGIN. Sekali pindai 793
+    emiten makan 69 detik (diukur, lihat _FOREIGN_FLOW_TTL). Di WhatsApp, 69
+    detik tanpa balasan tidak terbaca sebagai "sedang bekerja" melainkan
+    sebagai "botnya mati": orang mengirim ulang, lalu mengirim ulang lagi.
+    Jadi cache dingin dijawab SEKETIKA dan pemindaiannya dinyalakan di latar.
+
+    Jalur dingin ini praktis cuma kena orang pertama sesudah server baru
+    dinyalakan, karena pemanas cache sudah menghangatkan scope ini.
+    """
+    kunci_cache = "foreign_flow:all"
+    hangat = _cache_get(kunci_cache)
+    if hangat:
+        return _wa_fmt_smartmoney(hangat)
+
+    async def _pindai_latar():
+        # _single_flight menjamin SATU pemindaian saja walau perintahnya
+        # diketik berkali-kali oleh beberapa orang sekaligus.
+        try:
+            await _single_flight(
+                kunci_cache, lambda: _build_foreign_flow("all", kunci_cache))
+        except Exception as e:
+            print(f"\u26a0\ufe0f wa smartmoney: pindai latar gagal: {type(e).__name__}: {e}")
+
+    asyncio.create_task(_pindai_latar())
+
+    basi = _cache_get_stale(kunci_cache)
+    if basi:
+        return (_wa_fmt_smartmoney({**basi, "basi": True})
+                + "\n\n_Yang baru sedang disiapkan \u2014 kirim `smartmoney` "
+                  "lagi sebentar._")
+    return ("*Smart Money \u2014 anomali volume*\n\n"
+            "_Pemindaian 793 emiten sedang disiapkan, sekitar semenit._\n\n"
+            "Kirim `smartmoney` lagi sebentar lagi. Sesudah itu hasilnya "
+            "tetap hangat, jadi yang berikutnya langsung keluar.")
 
 
 async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
@@ -10197,12 +10271,7 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
         if kunci == "breakout":
             return _wa_fmt_screener(await screener()), None
         if kunci in {"smartmoney", "sm", "bandar", "akumulasi"}:
-            # scope 'medium' (250 saham), BUKAN 'core' (45): sejak 23 Sep 2026
-            # keduanya dihangatkan cache warmer, jadi yang lebih luas pun
-            # dibaca dari cache dan tidak menambah beban sedikit pun -- lihat
-            # _warm_shared_caches. Memilih yang sempit demi kecepatan yang
-            # sudah tidak perlu itu cuma membuang jangkauan.
-            return _wa_fmt_smartmoney(await api_foreign_flow(scope="medium")), None
+            return await _wa_smartmoney(), None
         if kode_harmonic:
             return _wa_fmt_harmonic_kode(kode_harmonic,
                                          await harmonic_kode(kode_harmonic)), None

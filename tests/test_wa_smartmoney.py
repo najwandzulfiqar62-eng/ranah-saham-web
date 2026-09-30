@@ -183,6 +183,21 @@ def _kirim(client, teks, nomor="6281234567890"):
                        headers={"Authorization": f"Bearer {SECRET}"})
 
 
+def _cache_palsu(monkeypatch, isi=None, stale=None):
+    """Ganti cache HANYA untuk kunci foreign_flow:all.
+
+    Mengganti _cache_get seluruhnya akan ikut mengubah jalur lain di dalam
+    satu request (batas laju, sesi), sehingga ujinya lulus/gagal karena
+    sebab yang tidak sedang diuji.
+    """
+    import web.app as app_module
+
+    monkeypatch.setattr(app_module, "_cache_get",
+                        lambda k: isi if k == "foreign_flow:all" else None)
+    monkeypatch.setattr(app_module, "_cache_get_stale",
+                        lambda k: stale if k == "foreign_flow:all" else None)
+
+
 @pytest.mark.parametrize("perintah", ["smartmoney", "sm", "bandar", "akumulasi"])
 def test_semua_sebutan_menjawab(client, wa_bersih, monkeypatch, perintah):
     """`bandar` itu kata yang benar-benar dipakai orang untuk konsep ini.
@@ -192,16 +207,145 @@ def test_semua_sebutan_menjawab(client, wa_bersih, monkeypatch, perintah):
     import web.app as app_module
     from tests.test_wa_bot import _daftarkan_approved
 
-    async def _palsu(scope="core"):
-        assert scope == "medium", "scope sempit membuang jangkauan tanpa alasan"
-        return _contoh()
-
-    monkeypatch.setattr(app_module, "api_foreign_flow", _palsu)
+    _cache_palsu(monkeypatch, isi=_contoh())
     _daftarkan_approved()
     app_module._wa_last_reply.clear()
 
     balasan = _kirim(client, perintah).json()["reply"]
     assert "UNTR" in balasan and "CARE" in balasan
+
+
+def test_memindai_SELURUH_idx_bukan_yang_likuid_saja(client, wa_bersih, monkeypatch):
+    """Keluhan nyata 30 Sep 2026: bot melaporkan 2 anomali sementara layar
+    menunjukkan 22. Sebabnya bot memakai scope 'medium' -- yang ternyata
+    berisi 178 emiten, bukan 250 seperti nama konstantanya (LIQUID_250).
+
+    Yang dikunci di sini KUNCI CACHE-nya, karena itulah yang menentukan
+    universe mana yang dibaca. Memeriksa jumlah hasil tidak akan menangkap
+    ini: 2 anomali juga jawaban yang sah untuk hari yang sepi."""
+    import web.app as app_module
+    from tests.test_wa_bot import _daftarkan_approved
+
+    diminta = []
+    monkeypatch.setattr(app_module, "_cache_get",
+                        lambda k: (diminta.append(k), _contoh())[1]
+                        if k == "foreign_flow:all" else None)
+    monkeypatch.setattr(app_module, "_cache_get_stale", lambda k: None)
+    _daftarkan_approved()
+    app_module._wa_last_reply.clear()
+
+    _kirim(client, "smartmoney")
+    assert "foreign_flow:all" in diminta, "bot masih membaca universe sempit"
+
+
+# ---------------------------------------------------------------------------
+# Cache dingin -- 69 detik diam di WhatsApp terbaca sebagai "botnya mati"
+# ---------------------------------------------------------------------------
+
+def test_cache_dingin_dijawab_seketika_bukan_ditunggu(client, wa_bersih, monkeypatch):
+    """Sekali pindai 793 emiten makan 69 detik (diukur 30 Sep 2026). Menahan
+    balasan selama itu membuat orang mengira botnya mati lalu mengirim ulang
+    berkali-kali -- persis kebiasaan yang sudah terlihat di sesi sebelumnya."""
+    import web.app as app_module
+    from tests.test_wa_bot import _daftarkan_approved
+
+    dipanggil = []
+
+    async def _bangun_palsu(scope, cache_key):
+        dipanggil.append(scope)
+        return _contoh()
+
+    _cache_palsu(monkeypatch)                      # dingin, tanpa salinan basi
+    monkeypatch.setattr(app_module, "_build_foreign_flow", _bangun_palsu)
+    _daftarkan_approved()
+    app_module._wa_last_reply.clear()
+
+    balasan = _kirim(client, "smartmoney").json()["reply"]
+    assert "sedang disiapkan" in balasan
+    assert "sebentar" in balasan
+
+
+def test_cache_dingin_menyalakan_pemindaian_di_latar(monkeypatch):
+    """Menjawab "sedang disiapkan" tanpa benar-benar menyiapkan apa pun akan
+    membuat perintahnya tidak pernah berhasil, berapa kali pun diulang.
+
+    Diuji lewat _wa_smartmoney() LANGSUNG, bukan lewat TestClient. Lewat
+    TestClient, tugas latarnya dijadwalkan pada event loop yang sudah
+    ditutup saat request selesai, sehingga ujinya tidak bisa membedakan
+    "tugasnya jalan" dari "tugasnya tidak pernah dijalankan" -- dan uji yang
+    tidak bisa gagal lebih buruk daripada tidak ada uji sama sekali.
+    """
+    import asyncio
+
+    import web.app as app_module
+
+    dipanggil = []
+
+    async def _bangun_palsu(scope, cache_key):
+        dipanggil.append(scope)
+        return _contoh()
+
+    _cache_palsu(monkeypatch)
+    monkeypatch.setattr(app_module, "_build_foreign_flow", _bangun_palsu)
+
+    async def jalan():
+        balasan = await app_module._wa_smartmoney()
+        await asyncio.sleep(0.05)      # beri tugas latarnya giliran jalan
+        return balasan
+
+    balasan = asyncio.run(jalan())
+    assert "sedang disiapkan" in balasan
+    assert dipanggil == ["all"], "pemindaian latar tidak jalan atau salah universe"
+
+
+def test_pemindaian_latar_yang_gagal_tidak_menjatuhkan_perintahnya(monkeypatch):
+    """Yahoo menolak saat pemindaian latar berjalan tidak boleh berubah jadi
+    pengecualian yang tak tertangkap -- balasannya sudah dikirim, dan
+    kegagalannya harus berhenti di log."""
+    import asyncio
+
+    import web.app as app_module
+
+    async def _bangun_gagal(scope, cache_key):
+        raise RuntimeError("YFRateLimitError")
+
+    _cache_palsu(monkeypatch)
+    monkeypatch.setattr(app_module, "_build_foreign_flow", _bangun_gagal)
+
+    async def jalan():
+        balasan = await app_module._wa_smartmoney()
+        await asyncio.sleep(0.05)
+        return balasan
+
+    assert "sedang disiapkan" in asyncio.run(jalan())
+
+
+def test_cache_dingin_menyajikan_data_lama_kalau_ada(client, wa_bersih, monkeypatch):
+    """Hasil pemindaian kemarin jauh lebih berguna daripada "sedang
+    disiapkan" -- asal dikatakan bahwa ia hasil kemarin."""
+    import web.app as app_module
+    from tests.test_wa_bot import _daftarkan_approved
+
+    async def _bangun_palsu(scope, cache_key):
+        return _contoh()
+
+    _cache_palsu(monkeypatch, stale=_contoh())
+    monkeypatch.setattr(app_module, "_build_foreign_flow", _bangun_palsu)
+    _daftarkan_approved()
+    app_module._wa_last_reply.clear()
+
+    balasan = _kirim(client, "smartmoney").json()["reply"]
+    assert "UNTR" in balasan, "data lama yang berguna malah dibuang"
+    assert "belum diperbarui" in balasan, "data lama disamarkan jadi data hari ini"
+
+
+def test_data_basi_ditandai_di_dalam_pesannya_sendiri():
+    """Di web ada lencana untuk ini. Di WhatsApp tidak ada tempat lain untuk
+    mengatakannya selain di dalam pesannya."""
+    from web.app import _wa_fmt_smartmoney
+
+    teks = _wa_fmt_smartmoney({**_contoh(), "basi": True})
+    assert "belum diperbarui" in teks
 
 
 def test_tercantum_di_menu_bantuan():
