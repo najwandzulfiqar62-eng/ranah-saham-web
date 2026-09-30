@@ -9920,38 +9920,45 @@ def _wa_fmt_smartmoney(payload: dict) -> str:
                 "Hari tanpa hasil itu wajar: syaratnya volume minimal 1,8x "
                 "rata-rata 20 hari DAN lolos saringan likuiditas.")
 
-    def _baris_sm(it: dict) -> list[str]:
-        keluar = [f"\u2022 *{it.get('kode')}* \u00b7 {it.get('pola')} \u00b7 {_rp(it.get('harga'))}"]
-        rinci = f"   vol {it.get('vol_ratio')}x rata-rata"
+    def _baris_sm(it: dict) -> str:
+        """SATU baris per saham. Bukan tiga.
+
+        Versi pertama memberi tiap saham tiga baris (harga+pola, lalu
+        vol+chg1+chg5, lalu peringkat+RSI+likuiditas+grup). Diukur pada
+        bentuk yang benar-benar ada di layar penulis -- 20 akumulasi + 2
+        distribusi -- hasilnya 76 baris dan 4.215 karakter: enam kali lipat
+        batas "Baca selengkapnya" WhatsApp.
+
+        Yang dipadatkan BUKAN daftarnya. Tidak satu pun emiten hilang, dan
+        itu syarat yang tidak bisa ditawar -- memangkas daftar pernah
+        membuat saham yang justru dicari orang lenyap dari balasan. Yang
+        dipadatkan adalah KOLOM yang tidak dipakai saat memindai: chg5,
+        RSI, likuiditas, grup, peringkat persentil. Semuanya tetap ada,
+        satu ketikan jauhnya.
+
+        Urutan kolomnya mengikuti cara orang membaca daftar begini: kode
+        dulu (yang akan diketik), lalu rasio volume (alasan ia masuk
+        daftar), lalu gerak hari ini, baru harga.
+        """
+        potong = [f"\u2022 *{it.get('kode')}*"]
+        vol = it.get("vol_ratio")
+        if vol is not None:
+            potong.append(f"{vol}x")
         if it.get("chg1") is not None:
-            rinci += f" \u00b7 hari ini {it['chg1']:+.2f}%"
-        if it.get("chg5") is not None:
-            rinci += f" \u00b7 5 hari {it['chg5']:+.2f}%"
-        keluar.append(rinci)
-        ekor = []
-        # Kata-katanya SENGAJA sama dengan panel web ("Top X% di kelas
-        # likuiditasnya"). Peringkatnya dihitung hanya di antara saham yang
-        # SUDAH lolos ambang mutlak, bukan seluruh universe -- keterbatasan
-        # yang sudah dicatat di _add_cross_sectional_rank. Menuliskannya beda
-        # di bot akan membuat satu angka yang sama terbaca seperti dua hal.
-        pct = it.get("vol_ratio_percentile")
-        if pct is not None:
-            ekor.append(f"Top {max(0, round(100 - pct))}% di kelas likuiditasnya")
-        if it.get("rsi") is not None:
-            ekor.append(f"RSI {it['rsi']}")
-        if it.get("likuiditas"):
-            ekor.append(str(it["likuiditas"]))
-        grup = it.get("grup")
-        if grup and grup != "Independen":
-            ekor.append(str(grup))
-        # Umur anomali disebut HANYA kalau bukan hari terakhir data. Menulis
-        # "0 hari lalu" di tiap baris cuma menambah teks tanpa menambah arti.
+            potong.append(f"{it['chg1']:+.2f}%")
+        potong.append(_rp(it.get("harga")))
+        baris = " \u00b7 ".join(potong)
+        if it.get("pola"):
+            baris += f" \u2014 {it['pola']}"
+        # Umur anomali TETAP ada walau barisnya diringkas, dan itu disengaja.
+        # Anomali empat hari lalu menuntut tindakan yang berbeda dari anomali
+        # hari ini; menyembunyikannya demi keringkasan berarti membuat yang
+        # basi terbaca seperti yang baru. Ongkosnya beberapa karakter, bukan
+        # satu baris penuh.
         hari_lalu = it.get("hari_lalu")
         if hari_lalu:
-            ekor.append(f"\u26a0 {hari_lalu} hari lalu, bukan hari ini")
-        if ekor:
-            keluar.append("   " + " \u00b7 ".join(ekor))
-        return keluar
+            baris += f" \u26a0{hari_lalu}h lalu"
+        return baris
 
     baris = [f"*Smart Money \u2014 anomali volume* (dari {total} saham)"]
     net = payload.get("net_score")
@@ -9963,14 +9970,13 @@ def _wa_fmt_smartmoney(payload: dict) -> str:
 
     if akumulasi:
         baris += ["", f"*Akumulasi* ({len(akumulasi)})"]
-        for it in akumulasi:
-            baris += _baris_sm(it)
+        baris += [_baris_sm(it) for it in akumulasi]
     if distribusi:
         baris += ["", f"*Distribusi* ({len(distribusi)})"]
-        for it in distribusi:
-            baris += _baris_sm(it)
+        baris += [_baris_sm(it) for it in distribusi]
 
-    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap.",
+    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap — "
+              "termasuk RSI, likuiditas, grup, dan gerak 5 harinya.",
               "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 siapa "
               "yang membeli tidak ada di data ini. Volume besar bisa berarti "
               "terkumpul, bisa juga berarti dilepas; arahnya disimpulkan dari "

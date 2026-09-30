@@ -71,11 +71,16 @@ def test_arah_disebut_sebagai_kesimpulan_bukan_pengetahuan():
 def test_anomali_lama_diberi_tanda_umur():
     """Anomali empat hari lalu dan anomali hari ini menuntut tindakan yang
     berbeda, tapi keduanya muncul di daftar yang sama. Tanpa penanda umur,
-    yang basi terbaca seperti yang baru."""
+    yang basi terbaca seperti yang baru.
+
+    Penanda ini SENGAJA selamat dari pemadatan baris. Waktu tiap saham
+    diringkas dari tiga baris jadi satu, kolom lain memang dibuang -- tapi
+    yang ini tidak, karena ia mengubah keputusan, bukan cuma menambah
+    keterangan."""
     from web.app import _wa_fmt_smartmoney
 
     teks = _wa_fmt_smartmoney(_contoh())
-    assert "4 hari lalu, bukan hari ini" in teks
+    assert "4h lalu" in teks
 
 
 def test_anomali_hari_ini_TIDAK_diberi_tanda_umur():
@@ -91,27 +96,43 @@ def test_anomali_hari_ini_TIDAK_diberi_tanda_umur():
 # Satu angka, satu kata -- bot dan layar tidak boleh bercerita beda
 # ---------------------------------------------------------------------------
 
-def test_peringkat_memakai_kata_yang_sama_dengan_panel_web():
-    """Panel web menulis "Top X% di kelas likuiditasnya". Menuliskannya beda
-    di bot akan membuat satu angka yang sama terbaca seperti dua hal."""
+def test_daftar_penuh_tetap_muat_tanpa_jadi_dinding_teks():
+    """DUA SYARAT YANG TARIK-MENARIK, dan keduanya harus dipenuhi sekaligus.
+
+    Syarat pertama: tidak satu pun saham boleh hilang. Memangkas daftar
+    pernah membuat saham yang justru dicari orang lenyap dari balasan.
+
+    Syarat kedua: balasannya harus terbaca di WhatsApp. Versi tiga-baris
+    menghasilkan 76 baris / 4.215 karakter untuk 22 saham -- enam kali lipat
+    batas "Baca selengkapnya", yang artinya orang melihat lima nama pertama
+    lalu menutupnya.
+
+    Jalan keluarnya bukan memangkas DAFTAR, melainkan memangkas KOLOM: chg5,
+    RSI, likuiditas, grup, dan peringkat persentil pindah ke balasan `KODE`.
+    Batas 2.500 di sini bukan angka keramat -- ia cuma jauh di bawah 4.215
+    dan jauh di atas bentuk sekarang (1.738), jadi ia menangkap kemunduran
+    tanpa mengunci tata letaknya."""
+    from web.app import _wa_fmt_smartmoney
+
+    banyak = [{"kode": f"AA{i:02d}", "pola": "Akumulasi Agresif", "harga": 26500,
+               "chg1": 12.34, "chg5": 20.0, "vol_ratio": 4.56, "rsi": 71.0,
+               "likuiditas": "Sangat Likuid", "grup": "Barito Pacific",
+               "hari_lalu": 0, "vol_ratio_percentile": 92.0} for i in range(20)]
+    teks = _wa_fmt_smartmoney(_contoh(akumulasi=banyak))
+
+    for i in range(20):
+        assert f"AA{i:02d}" in teks, "saham hilang dari daftar"
+    assert "CARE" in teks, "distribusi ikut hilang"
+    assert len(teks) < 2500, f"kembali jadi dinding teks ({len(teks)} karakter)"
+
+
+def test_kolom_yang_dipadatkan_disebutkan_perginya_ke_mana():
+    """Kolom yang hilang tanpa penjelasan terbaca seperti fitur yang rusak.
+    Penutupnya harus menyebut bahwa RSI dkk masih ada, satu ketikan jauhnya."""
     from web.app import _wa_fmt_smartmoney
 
     teks = _wa_fmt_smartmoney(_contoh())
-    assert "Top 0% di kelas likuiditasnya" in teks
-
-
-def test_semua_baris_ditampilkan_tidak_dipangkas():
-    """Pernah jadi keluhan nyata: versi ringkas memangkas isi sampai yang
-    dicari orang justru hilang. Yang tampil di web harus tampil juga di sini."""
-    from web.app import _wa_fmt_smartmoney
-
-    banyak = [{"kode": f"AA{i:02d}", "pola": "Akumulasi", "harga": 100 + i,
-               "chg1": 1.0, "chg5": 2.0, "vol_ratio": 2.0, "rsi": 55.0,
-               "likuiditas": "Likuid", "grup": "Independen", "hari_lalu": 0,
-               "vol_ratio_percentile": 90.0} for i in range(20)]
-    teks = _wa_fmt_smartmoney(_contoh(akumulasi=banyak, distribusi=[]))
-    for i in range(20):
-        assert f"AA{i:02d}" in teks
+    assert "RSI" in teks and "Ketik kode emitennya" in teks
 
 
 # ---------------------------------------------------------------------------
