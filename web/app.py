@@ -6640,6 +6640,66 @@ def _compute_sm_items(tickers: list, data: dict) -> list:
 _FOREIGN_FLOW_TTL = int(os.getenv("FOREIGN_FLOW_TTL", "900"))
 
 
+# Umur cache aliran asing. Sumbernya ringkasan harian IDX yang terbit SEKALI
+# sesudah penutupan, jadi menyegarkannya lebih sering dari sejam cuma
+# mengunduh ulang angka yang sama persis. Satu permintaan = seluruh pasar
+# (963 emiten), jadi ongkosnya ringan dan tidak bergantung jumlah saham.
+_ASING_TTL = int(os.getenv("ASING_CACHE_TTL", "3600"))
+_ASING_CACHE_KEY = "asing:v1"
+
+
+async def _peta_asing() -> tuple[dict, str | None]:
+    """Aliran asing per saham, dari cache kalau ada.
+
+    Return (peta, tanggal-ISO). Tanggalnya IKUT dikembalikan dan bukan
+    dibuang: angka kemarin yang disajikan sebagai angka hari ini adalah
+    jenis kesalahan yang tidak terlihat seperti kesalahan.
+
+    Gagal = peta kosong, BUKAN melempar. Aliran asing itu tambahan di atas
+    panel yang sudah berguna tanpanya; menjatuhkan seluruh Smart Money
+    karena IDX sedang tidak bisa dihubungi akan menukar satu kolom hilang
+    dengan satu halaman hilang.
+    """
+    disimpan = _cache_get(_ASING_CACHE_KEY)
+    if disimpan:
+        return disimpan.get("peta") or {}, disimpan.get("tanggal")
+    try:
+        from core.idx_asing import ambil_asing
+
+        peta, tgl = await ambil_asing()
+        iso = tgl.isoformat()
+        _cache_set_durable(_ASING_CACHE_KEY, {"peta": peta, "tanggal": iso},
+                           ttl=_ASING_TTL)
+        return peta, iso
+    except Exception as e:
+        print(f"\u26a0\ufe0f aliran asing: {type(e).__name__}: {e}")
+        basi = _cache_get_stale(_ASING_CACHE_KEY)
+        if basi:
+            return basi.get("peta") or {}, basi.get("tanggal")
+        return {}, None
+
+
+def _tempel_asing(items: list, peta: dict) -> list:
+    """Sandingkan tebakan volume dengan angka asing yang sungguhan.
+
+    INILAH GUNANYA, dan bukan sekadar menambah kolom. Diuji pada hasil 6 Okt
+    2026: dari lima saham yang ditandai "Siluman (quiet buy)" oleh tebakan
+    volume, PTBA ternyata memang dibeli asing Rp26,8 miliar (9,98% dari
+    seluruh transaksinya hari itu), sedangkan BULL justru DILEPAS asing
+    Rp6,9 miliar. Tebakan volume tidak bisa membedakan keduanya; angka ini
+    bisa.
+    """
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        a = peta.get(str(it.get("kode") or "").upper())
+        if not a:
+            continue
+        it["asing_rp"] = round(a["net_rp"])
+        it["asing_porsi"] = a.get("porsi_pct")
+    return items
+
+
 async def _build_foreign_flow(scope: str, cache_key: str) -> dict:
     """Bagian BERAT /api/foreign-flow -- dipisah dari endpoint-nya.
 
@@ -6664,7 +6724,15 @@ async def _build_foreign_flow(scope: str, cache_key: str) -> dict:
         items = await asyncio.to_thread(_compute_sm_items, tickers, data)
         total = len(tickers)
 
+    peta_asing, tgl_asing = await _peta_asing()
+    _tempel_asing(items, peta_asing)
+
     payload = _build_sm_payload(items, total, scope)
+    # Tanggal data asing SENGAJA terpisah dari tanggal pemindaian volume:
+    # keduanya bisa berbeda hari (ringkasan IDX terbit sesudah penutupan,
+    # pemindaian volume jalan sepanjang sesi), dan menyatukannya jadi satu
+    # "tanggal" akan membuat salah satunya berbohong.
+    payload["asing_tanggal"] = tgl_asing
     _cache_set_durable(cache_key, payload, ttl=_FOREIGN_FLOW_TTL)
     return payload
 
@@ -7572,7 +7640,8 @@ _DORONG_SINYAL_KEY = "wa_dorong_sinyal_id"
 _DORONG_SM_SEBELUMNYA_KEY = "wa_dorong_sm_sebelumnya"
 
 
-def _wa_fmt_dorong_anomali(akumulasi: list, distribusi: list, total: int) -> str:
+def _wa_fmt_dorong_anomali(akumulasi: list, distribusi: list, total: int,
+                           tgl_asing: str | None = None) -> str:
     """Pesan "ada anomali baru".
 
     Bentuknya SENGAJA sama persis dengan balasan perintah `smartmoney` --
@@ -7596,12 +7665,11 @@ def _wa_fmt_dorong_anomali(akumulasi: list, distribusi: list, total: int) -> str
               "`smartmoney` untuk daftar hari ini selengkapnya.",
               "_Bursa belum tutup, jadi angkanya masih bergerak \u2014 pola ini "
               "dihitung dari bar hari ini yang belum selesai, dan sudah "
-              "bertahan dua pemindaian berturut-turut sebelum dikirim._",
-              "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 "
-              "siapa yang membeli tidak ada di data ini. Volume besar bisa "
-              "berarti terkumpul, bisa juga berarti dilepas; arahnya "
-              "disimpulkan dari gerak harga, bukan diketahui._",
-              "_Bukan ajakan membeli/menjual._"]
+              "bertahan dua pemindaian berturut-turut sebelum dikirim._"]
+    # Syarat yang sama persis dengan balasan perintah -- satu sumber,
+    # supaya keduanya tidak pernah menjanjikan hal berbeda tentang data
+    # yang sama.
+    baris += _syarat_smartmoney({"asing_tanggal": tgl_asing})
     return "\n".join(baris)
 
 
@@ -7681,7 +7749,8 @@ async def _dorong_anomali() -> bool:
     akum = [x for x in akum_semua if str(x.get("kode")).upper() in kode_baru]
     dist = [x for x in dist_semua if str(x.get("kode")).upper() in kode_baru]
 
-    teks = _wa_fmt_dorong_anomali(akum, dist, payload.get("total_scan") or 0)
+    teks = _wa_fmt_dorong_anomali(akum, dist, payload.get("total_scan") or 0,
+                                  payload.get("asing_tanggal"))
     if not await send_wa_text(teks):
         return False
     # Dicatat HANYA sesudah terkirim -- lihat catatan di catat_terkirim().
@@ -10097,6 +10166,52 @@ def _wa_fmt_minervini(payload) -> str:
     return "\n".join(baris)
 
 
+def _syarat_smartmoney(payload: dict) -> list[str]:
+    """Syarat yang MENYESUAIKAN DIRI dengan data yang benar-benar ada.
+
+    Kalimat lamanya berbunyi "bukan aliran dana asing -- siapa yang membeli
+    tidak ada di data ini". Itu benar selama panel ini cuma menebak dari
+    volume. Begitu angka asing resmi IDX ikut ditempel (7 Okt 2026), kalimat
+    itu berubah dari syarat yang jujur menjadi keterangan yang KELIRU -- dan
+    keterangan keliru yang diwarisi dari versi sebelumnya adalah jenis
+    kesalahan yang paling lama bertahan, justru karena ia dulu benar.
+
+    Dua lapis bukti yang berbeda kekuatannya, dan bedanya harus terbaca:
+    rasio volume itu TEBAKAN dari gerak harga; net asing itu CATATAN bursa.
+    """
+    keluar = ["_Rasio volume & label polanya TEBAKAN dari gerak harga \u2014 "
+              "volume besar bisa berarti terkumpul, bisa juga dilepas._"]
+    tgl = payload.get("asing_tanggal") if isinstance(payload, dict) else None
+    if tgl:
+        keluar.append(f"_Baris \u0022asing net\u0022 BUKAN tebakan: itu catatan "
+                      f"resmi IDX per {tgl}. Tapi asing bukan bandar \u2014 "
+                      "saham yang digerakkan broker lokal tidak terlihat di situ._")
+    else:
+        keluar.append("_Siapa yang membeli tidak ada di data ini; arahnya "
+                      "disimpulkan dari gerak harga, bukan diketahui._")
+    keluar.append("_Bukan ajakan membeli/menjual._")
+    return keluar
+
+
+def _rp_ringkas(x) -> str:
+    """Rp26.834.840.000 -> "Rp26,8 M".
+
+    Angka penuh itu BENAR tapi tidak terbaca: di WhatsApp ia jadi deretan
+    titik yang harus dihitung mundur untuk tahu miliar atau juta. Yang dicari
+    orang di daftar begini besarannya, bukan rupiah terakhirnya.
+    """
+    try:
+        n = float(x or 0)
+    except (TypeError, ValueError):
+        return "-"
+    tanda = "-" if n < 0 else ""
+    n = abs(n)
+    for batas, satuan in ((1e12, "T"), (1e9, "M"), (1e6, "jt")):
+        if n >= batas:
+            return f"{tanda}Rp{n / batas:.1f} {satuan}".replace(".", ",")
+    return f"{tanda}Rp{n:,.0f}".replace(",", ".")
+
+
 def _baris_sm(it: dict) -> str:
     """SATU baris per saham. Bukan tiga.
 
@@ -10139,6 +10254,17 @@ def _baris_sm(it: dict) -> str:
     hari_lalu = it.get("hari_lalu")
     if hari_lalu:
         baris += f" \u26a0{hari_lalu}h lalu"
+    # Angka asing resmi, kalau ada. Ditaruh di baris kedua dan BUKAN
+    # disambung ke baris pertama: ia jenis bukti yang berbeda dari
+    # sekelilingnya -- yang lain tebakan dari volume, yang ini tercatat
+    # bursa. Menyatukannya dalam satu deretan membuat keduanya terbaca
+    # sama kuat.
+    asing = it.get("asing_rp")
+    if asing:
+        arah = "beli" if asing > 0 else "jual"
+        porsi = it.get("asing_porsi")
+        ekor = f" ({porsi}% transaksi hari itu)" if porsi else ""
+        baris += f"\n   asing net {arah} {_rp_ringkas(abs(asing))}{ekor}"
     return baris
 
 
@@ -10195,12 +10321,8 @@ def _wa_fmt_smartmoney(payload: dict) -> str:
         baris += [_baris_sm(it) for it in distribusi]
 
     baris += ["", "Ketik kode emitennya untuk rencana entry lengkap — "
-              "termasuk RSI, likuiditas, grup, dan gerak 5 harinya.",
-              "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 siapa "
-              "yang membeli tidak ada di data ini. Volume besar bisa berarti "
-              "terkumpul, bisa juga berarti dilepas; arahnya disimpulkan dari "
-              "gerak harga, bukan diketahui._",
-              "_Bukan ajakan membeli/menjual._"]
+              "termasuk RSI, likuiditas, grup, dan gerak 5 harinya."]
+    baris += _syarat_smartmoney(payload)
     return "\n".join(baris)
 
 

@@ -42,26 +42,40 @@ def _contoh(**ubah) -> dict:
 # Kejujuran isi pesannya
 # ---------------------------------------------------------------------------
 
-def test_pesan_menyangkal_klaim_yang_ada_di_namanya():
-    """"Smart Money" terdengar seperti bot tahu siapa yang membeli. Ia tidak
-    tahu, dan pesannya harus mengatakan itu -- di WhatsApp tidak ada legenda
-    atau tooltip yang bisa meluruskannya belakangan."""
+def test_tanpa_data_asing_pesan_mengaku_tidak_tahu_siapa_pembelinya():
+    """"Smart Money" terdengar seperti bot tahu siapa yang membeli. Selama
+    yang ada cuma rasio volume, ia tidak tahu -- dan pesannya harus
+    mengatakan itu, karena di WhatsApp tidak ada legenda atau tooltip yang
+    bisa meluruskannya belakangan."""
     from web.app import _wa_fmt_smartmoney
 
-    teks = _wa_fmt_smartmoney(_contoh())
-    assert "bukan aliran dana asing" in teks
-    assert "siapa yang membeli tidak ada di data ini" in teks
+    teks = _wa_fmt_smartmoney(_contoh())      # tanpa asing_tanggal
+    assert "tidak ada di data ini" in teks
+    assert "catatan resmi IDX" not in teks
+
+
+def test_dengan_data_asing_pesan_TIDAK_lagi_menyangkal_punya_datanya():
+    """Sejak angka asing resmi IDX ikut ditempel (7 Okt 2026), menyangkal
+    memilikinya adalah keterangan yang KELIRU -- dan keterangan keliru yang
+    diwarisi dari versi sebelumnya adalah jenis kesalahan yang paling lama
+    bertahan, justru karena ia dulu benar."""
+    from web.app import _wa_fmt_smartmoney
+
+    teks = _wa_fmt_smartmoney({**_contoh(), "asing_tanggal": "2026-10-06"})
+    assert "catatan resmi IDX per 2026-10-06" in teks
+    assert "tidak ada di data ini" not in teks
 
 
 def test_arah_disebut_sebagai_kesimpulan_bukan_pengetahuan():
     """Volume besar sendiri tidak berarah. Yang membedakan "terkumpul" dari
     "dilepas" cuma gerak harganya -- itu kesimpulan, dan harus terbaca
-    sebagai kesimpulan."""
+    sebagai kesimpulan, berapa pun lapis bukti lain yang menyertainya."""
     from web.app import _wa_fmt_smartmoney
 
-    teks = _wa_fmt_smartmoney(_contoh())
-    assert "bisa juga berarti dilepas" in teks
-    assert "bukan diketahui" in teks
+    for p in (_contoh(), {**_contoh(), "asing_tanggal": "2026-10-06"}):
+        teks = _wa_fmt_smartmoney(p)
+        assert "TEBAKAN dari gerak harga" in teks
+        assert "bisa juga dilepas" in teks
 
 
 # ---------------------------------------------------------------------------

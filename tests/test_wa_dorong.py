@@ -565,14 +565,24 @@ def test_kirim_sinyal_gagal_maka_cursor_tidak_maju(monkeypatch):
 # Isi pesannya
 # ---------------------------------------------------------------------------
 
-def test_pesan_menyangkal_klaim_yang_ada_di_namanya():
+def test_syarat_ikut_di_dalam_pesan_otomatisnya(dorong_bersih):
     """Pesan yang datang sendiri tidak punya legenda di sebelahnya. Syarat
-    yang di web bisa dibaca di tooltip harus ikut di dalam pesannya."""
-    from web.app import _wa_fmt_dorong_anomali
+    yang di web bisa dibaca di tooltip harus ikut di dalam pesannya, dan
+    isinya harus SAMA dengan balasan perintah -- satu sumber, supaya
+    keduanya tidak pernah menjanjikan hal berbeda tentang data yang sama."""
+    from web.app import _syarat_smartmoney, _wa_fmt_dorong_anomali
 
     teks = _wa_fmt_dorong_anomali([_sm("BBCA")], [], 793)
-    assert "bukan aliran dana asing" in teks
-    assert "bukan diketahui" in teks
+    for garis in _syarat_smartmoney({}):
+        assert garis in teks
+
+
+def test_syarat_pesan_otomatis_ikut_menyesuaikan_data_asing(dorong_bersih):
+    from web.app import _wa_fmt_dorong_anomali
+
+    teks = _wa_fmt_dorong_anomali([_sm("BBCA")], [], 793, "2026-10-06")
+    assert "catatan resmi IDX per 2026-10-06" in teks
+    assert "asing bukan bandar" in teks
 
 
 def test_pesan_sinyal_kronologis_bukan_id_menurun():

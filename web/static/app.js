@@ -4146,6 +4146,30 @@ async function loadForeignFlow(forceScope){
   setTimeout(()=>{loaded.asing=0;if(document.querySelector('.tab[data-v="asing"]')?.classList.contains('on'))loadForeignFlow()},900000);
 }
 
+// Aliran dana asing RESMI IDX, disandingkan dengan tebakan volume di
+// sebelahnya. Dua lapis bukti yang berbeda kekuatannya, dan warnanya
+// sengaja beda dari badge pola: rasio volume itu TEBAKAN dari gerak harga,
+// angka ini CATATAN bursa.
+//
+// Nilainya bukan menambah kolom, tapi MEMISAHKAN. Diuji pada hasil 6 Okt
+// 2026, dari lima saham berlabel "Siluman (quiet buy)": PTBA ternyata
+// benar-benar dibeli asing Rp26,8 M (9,98% dari seluruh transaksinya hari
+// itu), sedangkan BULL justru DILEPAS asing Rp6,9 M. Tebakan volume tidak
+// bisa membedakan keduanya.
+function _rpRingkas(n){
+  const t=n<0?'-':''; n=Math.abs(n);
+  if(n>=1e12)return t+'Rp'+(n/1e12).toFixed(1).replace('.',',')+' T';
+  if(n>=1e9) return t+'Rp'+(n/1e9).toFixed(1).replace('.',',')+' M';
+  if(n>=1e6) return t+'Rp'+(n/1e6).toFixed(0)+' jt';
+  return t+'Rp'+Math.round(n).toLocaleString('id-ID');
+}
+function _asingTag(s){
+  if(s.asing_rp==null||s.asing_rp===0)return '';
+  const beli=s.asing_rp>0, c=beli?'var(--bull)':'var(--bear)';
+  const porsi=s.asing_porsi!=null?` \u00b7 ${s.asing_porsi}% dari transaksi hari itu`:'';
+  return `<span class="sm-asing" style="color:${c};border-color:${c}55" title="Catatan resmi IDX \u2014 bukan tebakan dari volume.${porsi}">asing ${beli?'beli':'jual'} ${_rpRingkas(Math.abs(s.asing_rp))}</span>`;
+}
+
 function _renderForeignFlow(d){
   if(!d)return;
   const body=$('#asingBody');
@@ -4184,7 +4208,7 @@ function _renderForeignFlow(d){
         <div class="sm-bar-bg"><div class="sm-bar-fill" style="width:${volBarW}%;background:${side==='akum'?'var(--green)':'var(--bear)'}"></div></div>
         <div class="sm-vol-lbl">${s.vol_ratio.toFixed(2)}x avg${s.vol_ratio_percentile!=null?` · Top ${(100-s.vol_ratio_percentile).toFixed(0)}% di kelas likuiditasnya`:''}</div>
       </div>
-      <span class="sm-badge" style="background:${pc}22;color:${pc}">${s.pola}</span>${staleBadge}
+      <span class="sm-badge" style="background:${pc}22;color:${pc}">${s.pola}</span>${staleBadge}${_asingTag(s)}
     </div>`;
   }).join('');
 
@@ -4210,7 +4234,7 @@ function _renderForeignFlow(d){
       </div>
     </div>
     <div style="font-size:11.5px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
-      Volume anomali mencerminkan aktivitas institusional/asing. Klik saham untuk analisis lengkap. Sumber: ${d.sumber}.
+      Rasio volume itu <b>tebakan</b> dari gerak harga (sumber: ${d.sumber}). Tag <b>asing beli/jual</b> BUKAN tebakan — itu catatan resmi IDX${d.asing_tanggal?' per '+d.asing_tanggal:''}, tapi asing bukan bandar: saham yang digerakkan broker lokal tidak terlihat di situ. Klik saham untuk analisis lengkap.
     </div>
   </section>
 
@@ -6227,7 +6251,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v58';
+const APP_VERSION='v59';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
