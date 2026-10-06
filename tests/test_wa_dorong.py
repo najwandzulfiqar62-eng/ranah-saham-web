@@ -100,15 +100,44 @@ def test_saham_yang_sama_tidak_diberitakan_dua_kali(dorong_bersih):
     assert pilih_belum_dikirim(items) == []
 
 
-def test_hanya_pola_yang_dipantau_yang_dikirim(dorong_bersih):
-    """Breakout Volume & Akumulasi Agresif sudah menonjol dengan
-    sendirinya di layar mana pun. Mengirimkannya juga cuma menambah
-    kebisingan tanpa menambah satu pun hal yang tidak terlihat."""
+def test_semua_kategori_anomali_ikut_dikirim(dorong_bersih):
+    """Permintaan penulis 6 Okt 2026: daftar yang sama persis dengan
+    perintah `smartmoney`, cuma berisi yang BARU.
+
+    Semula hanya "Siluman (quiet buy)" yang dikirim, dengan alasan pola
+    lain sudah menonjol sendiri. Yang membuat pesan otomatis mengganggu
+    ternyata bukan banyaknya kategori melainkan PENGULANGAN -- dan itu
+    sudah ditutup penjaga lain (dedup 24 jam + dua pemindaian)."""
     from core.wa_dorong import pilih_belum_dikirim
 
     items = [_sm("AAAA", "Breakout Volume"), _sm("BBBB", "Akumulasi Agresif"),
-             _sm("CCCC", "Distribusi"), _sm("DDDD")]
-    assert [x["kode"] for x in pilih_belum_dikirim(items)] == ["DDDD"]
+             _sm("CCCC", "Distribusi Agresif"), _sm("DDDD")]
+    assert [x["kode"] for x in pilih_belum_dikirim(items)] == [
+        "AAAA", "BBBB", "CCCC", "DDDD"]
+
+
+def test_baris_tanpa_pola_tetap_dibuang(dorong_bersih):
+    """Pola kosong artinya _sm_classify tidak mengenalinya sebagai anomali
+    apa pun. Mengirimkannya berarti memberitakan sesuatu yang bahkan tidak
+    lolos saringan."""
+    from core.wa_dorong import pilih_belum_dikirim
+
+    items = [_sm("AAAA", ""), _sm("BBBB", None), _sm("CCCC")]
+    assert [x["kode"] for x in pilih_belum_dikirim(items)] == ["CCCC"]
+
+
+def test_saham_yang_BERPINDAH_kategori_tidak_diumumkan_dua_kali(dorong_bersih):
+    """SGER berpindah "Breakout Volume" -> "Siluman" dalam satu sesi
+    (kejadian nyata 6 Okt 2026). Kalau kunci dedupnya memuat pola, saham
+    yang SAMA akan diumumkan dua kali di hari yang sama.
+
+    Yang ingin dijawab penjaga itu adalah "apakah orang sudah diberi tahu
+    tentang saham ini hari ini", dan jawabannya tidak berubah karena
+    labelnya bergeser."""
+    from core.wa_dorong import catat_terkirim, pilih_belum_dikirim
+
+    catat_terkirim([_sm("SGER", "Breakout Volume")])
+    assert pilih_belum_dikirim([_sm("SGER", "Siluman (quiet buy)")]) == []
 
 
 def test_dibatasi_jumlahnya_per_pesan(dorong_bersih):
@@ -168,7 +197,7 @@ def test_kirim_gagal_maka_tidak_dicatat_sudah_terkirim(dorong_bersih, monkeypatc
     monkeypatch.setattr(wn, "send_wa_text", _gagal)
 
     import asyncio
-    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert asyncio.run(app_module._dorong_anomali()) is False
     # Masih dianggap belum terkirim -> ikut lagi di putaran berikutnya.
     assert [x["kode"] for x in wd.pilih_belum_dikirim([_sm("BBCA")])] == ["BBCA"]
 
@@ -199,8 +228,8 @@ def test_dikumpulkan_jadi_SATU_pesan_bukan_satu_per_saham(dorong_bersih, monkeyp
 
     # Putaran pertama cuma mencatat acuan (lihat saring_stabil); yang diuji
     # di sini bentuk pesannya, jadi dijalankan dua kali.
-    asyncio.run(app_module._dorong_siluman())
-    assert asyncio.run(app_module._dorong_siluman()) is True
+    asyncio.run(app_module._dorong_anomali())
+    assert asyncio.run(app_module._dorong_anomali()) is True
     assert len(terkirim) == 1, "satu pesan per saham = grup dibisukan"
     for i in range(5):
         assert f"AA{i:02d}" in terkirim[0]
@@ -241,8 +270,8 @@ def test_memindai_SELURUH_idx_bukan_yang_likuid_saja(dorong_bersih, monkeypatch)
     _config_palsu(monkeypatch)
     monkeypatch.setattr(app_module, "_cache_get", _cache)
 
-    asyncio.run(app_module._dorong_siluman())      # putaran acuan
-    assert asyncio.run(app_module._dorong_siluman()) is True
+    asyncio.run(app_module._dorong_anomali())      # putaran acuan
+    assert asyncio.run(app_module._dorong_anomali()) is True
     assert "foreign_flow:all" in diminta, "membaca universe sempit, bukan seluruh IDX"
     assert not [k for k in diminta if k in ("foreign_flow:core", "foreign_flow:medium")]
 
@@ -251,9 +280,40 @@ def test_jumlah_saham_yang_dipindai_disebut_di_pesannya(dorong_bersih):
     """Penerima harus bisa melihat sendiri bahwa pemindaiannya seluruh IDX,
     tanpa perlu percaya pada kode. Angkanya datang dari payload, jadi kalau
     suatu hari universe-nya menyempit, pesannya ikut mengaku."""
-    from web.app import _wa_fmt_dorong_siluman
+    from web.app import _wa_fmt_dorong_anomali
 
-    assert "793 saham IDX" in _wa_fmt_dorong_siluman([_sm("BBCA")], 793)
+    assert "793 saham IDX" in _wa_fmt_dorong_anomali([_sm("BBCA")], [], 793)
+
+
+def test_bentuk_barisnya_SAMA_dengan_balasan_perintah():
+    """Dua bentuk berbeda untuk angka yang sama akan membuat orang mengira
+    keduanya data yang berbeda. Perendernya satu (_baris_sm), dan uji ini
+    yang menjaganya tetap satu."""
+    from web.app import _baris_sm, _wa_fmt_dorong_anomali, _wa_fmt_smartmoney
+
+    it = _sm("PTBA", "Siluman (quiet buy)", vol_ratio=1.28, chg1=3.36, harga=3380)
+    baris = _baris_sm(it)
+    assert baris in _wa_fmt_dorong_anomali([it], [], 793)
+    assert baris in _wa_fmt_smartmoney({"total_scan": 793, "akumulasi": [it],
+                                        "distribusi": []})
+
+
+def test_akumulasi_dan_distribusi_dipisah_seperti_di_layar():
+    from web.app import _wa_fmt_dorong_anomali
+
+    teks = _wa_fmt_dorong_anomali([_sm("PTBA")], [_sm("FORU", "Distribusi Agresif")], 793)
+    assert "*Akumulasi* (1)" in teks and "*Distribusi* (1)" in teks
+    assert teks.index("PTBA") < teks.index("FORU")
+
+
+def test_judulnya_mengatakan_ini_yang_BARU_bukan_seluruh_daftar():
+    """Tanpa itu, pesan yang berisi tiga saham terbaca seperti "cuma tiga
+    anomali hari ini" -- padahal daftarnya hari itu bisa dua puluh."""
+    from web.app import _wa_fmt_dorong_anomali
+
+    teks = _wa_fmt_dorong_anomali([_sm("PTBA")], [], 793)
+    assert "BARU" in teks
+    assert "sejak pemberitahuan terakhir" in teks
 
 
 def test_cache_dingin_dilewati_bukan_memicu_pemindaian(dorong_bersih, monkeypatch):
@@ -267,7 +327,7 @@ def test_cache_dingin_dilewati_bukan_memicu_pemindaian(dorong_bersih, monkeypatc
 
     monkeypatch.setattr(wd, "dalam_jam_kirim", lambda waktu=None: True)
     monkeypatch.setattr(app_module, "_cache_get", lambda k: None)
-    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert asyncio.run(app_module._dorong_anomali()) is False
 
 
 def test_di_luar_jam_tidak_mengirim_apa_pun(dorong_bersih, monkeypatch):
@@ -280,7 +340,7 @@ def test_di_luar_jam_tidak_mengirim_apa_pun(dorong_bersih, monkeypatch):
     monkeypatch.setattr(app_module, "_cache_get",
                         lambda k: {"total_scan": 793, "akumulasi": [_sm("BBCA")],
                                    "distribusi": []})
-    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert asyncio.run(app_module._dorong_anomali()) is False
 
 
 # ---------------------------------------------------------------------------
@@ -346,12 +406,12 @@ def test_pemindaian_pertama_tidak_mengirim_apa_pun(dorong_bersih, monkeypatch):
                                    "distribusi": []}
                         if k == "foreign_flow:all" else None)
 
-    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert asyncio.run(app_module._dorong_anomali()) is False
     assert terkirim == []
     assert simpan[app_module._DORONG_SM_SEBELUMNYA_KEY] == "DEWA,PTBA"
 
     # Putaran kedua: keduanya masih di sana -> baru dikirim.
-    assert asyncio.run(app_module._dorong_siluman()) is True
+    assert asyncio.run(app_module._dorong_anomali()) is True
     assert len(terkirim) == 1
     assert "PTBA" in terkirim[0] and "DEWA" in terkirim[0]
 
@@ -380,16 +440,16 @@ def test_pembanding_dicatat_walau_kirimnya_gagal(dorong_bersih, monkeypatch):
                                    "distribusi": []}
                         if k == "foreign_flow:all" else None)
 
-    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert asyncio.run(app_module._dorong_anomali()) is False
     assert simpan[app_module._DORONG_SM_SEBELUMNYA_KEY] == "PTBA"
 
 
 def test_pesan_mengaku_bahwa_bursa_belum_tutup():
     """Penerima berhak tahu bahwa angkanya masih bergerak. Menyajikannya
     seolah final adalah janji yang tidak bisa ditepati sebelum penutupan."""
-    from web.app import _wa_fmt_dorong_siluman
+    from web.app import _wa_fmt_dorong_anomali
 
-    teks = _wa_fmt_dorong_siluman([_sm("PTBA")], 793)
+    teks = _wa_fmt_dorong_anomali([_sm("PTBA")], [], 793)
     assert "belum selesai" in teks
     assert "dua pemindaian" in teks
 
@@ -505,15 +565,14 @@ def test_kirim_sinyal_gagal_maka_cursor_tidak_maju(monkeypatch):
 # Isi pesannya
 # ---------------------------------------------------------------------------
 
-def test_pesan_siluman_menjelaskan_ARTINYA_bukan_cuma_namanya():
-    """Pesan yang datang sendiri tidak punya legenda di sebelahnya.
-    "Siluman (quiet buy)" tidak memberi tahu apa pun kepada orang yang
-    belum pernah membaca keterangannya di web."""
-    from web.app import _wa_fmt_dorong_siluman
+def test_pesan_menyangkal_klaim_yang_ada_di_namanya():
+    """Pesan yang datang sendiri tidak punya legenda di sebelahnya. Syarat
+    yang di web bisa dibaca di tooltip harus ikut di dalam pesannya."""
+    from web.app import _wa_fmt_dorong_anomali
 
-    teks = _wa_fmt_dorong_siluman([_sm("BBCA")], 793)
-    assert "volumenya justru DI BAWAH rata-rata" in teks
+    teks = _wa_fmt_dorong_anomali([_sm("BBCA")], [], 793)
     assert "bukan aliran dana asing" in teks
+    assert "bukan diketahui" in teks
 
 
 def test_pesan_sinyal_kronologis_bukan_id_menurun():

@@ -36,21 +36,27 @@ WIB = timezone(timedelta(hours=7))
 # Penanda "penerimanya grup, bukan satu orang". Lihat catatan modul.
 GRUP = 0
 
-# Pola Smart Money yang layak diberitakan sendiri. Sengaja SATU, bukan
-# semuanya: "Siluman (quiet buy)" adalah pola yang paling mudah terlewat
-# kalau tidak diberitahukan -- harga naik pelan dengan volume yang justru
-# di BAWAH rata-rata, jadi ia tidak muncul di layar mana pun yang diurut
-# berdasarkan lonjakan. Pola lain (Breakout Volume, Akumulasi Agresif)
-# sudah menonjol dengan sendirinya; mengirimkannya juga cuma menambah
-# kebisingan tanpa menambah yang tidak terlihat.
-POLA_DIDORONG = {"Siluman (quiet buy)"}
+# Pola yang diberitakan. None = SEMUA kategori anomali.
+#
+# Semula sengaja dibatasi ke "Siluman (quiet buy)" saja, dengan alasan pola
+# lain sudah menonjol sendiri. Penulis memilih sebaliknya 6 Okt 2026: yang
+# ia mau adalah daftar yang sama persis dengan perintah `smartmoney`, cuma
+# berisi yang BARU. Itu permintaan yang masuk akal -- yang membuat pesan
+# otomatis mengganggu bukan banyaknya kategori, melainkan PENGULANGAN, dan
+# pengulangan sudah ditutup penjaga 2 & 4 di atas.
+POLA_DIDORONG = None
 
 # Satu emiten tidak diberitakan lagi dalam rentang ini. 24 jam, bukan 48
 # seperti peringatan posisi: anomali volume itu kejadian HARIAN, dan saham
 # yang masuk Siluman lagi besok memang kabar baru.
 JEDA_ULANG_JAM = 24
 
-MAKS_PER_PESAN = 12
+# Pagu baris per pesan. Dinaikkan dari 12 begitu semua kategori ikut: satu
+# hari penuh bisa menghasilkan ~21 anomali (terukur 6 Okt 2026), dan pagu
+# yang lebih rendah dari itu akan memecah daftar hari pertama jadi dua
+# pesan tanpa alasan. 25 setara ~2.000 karakter -- masih di bawah ukuran
+# balasan `smartmoney` yang sudah terbukti terbaca.
+MAKS_PER_PESAN = 25
 
 # Jendela kirim (WIB). Lebih sempit dari jam bursa di kedua ujungnya --
 # sengaja: yang dikirim di sini bukan hal yang menuntut tindakan dalam
@@ -126,8 +132,19 @@ def kode_dari(items: list[dict]) -> set:
             if isinstance(it, dict) and it.get("kode")}
 
 
-def _kunci_siluman(kode: str, pola: str) -> str:
-    return f"dorong:sm:{(kode or '').upper()}:{pola}"
+def _kunci_dorong(kode: str) -> str:
+    """Kunci dedup per EMITEN, bukan per emiten+pola.
+
+    Sempat memuat polanya juga, dan itu salah begitu semua kategori ikut
+    dikirim: SGER yang berpindah dari "Breakout Volume" ke "Siluman" dalam
+    satu sesi (kejadian nyata 6 Okt 2026) akan menghasilkan dua kunci
+    berbeda, sehingga saham yang SAMA diumumkan dua kali di hari yang sama.
+
+    Yang ingin dijawab penjaga ini adalah "apakah orang sudah diberi tahu
+    tentang saham ini hari ini", dan jawabannya tidak berubah karena
+    labelnya bergeser.
+    """
+    return f"dorong:sm:{(kode or '').upper()}"
 
 
 def pilih_belum_dikirim(items: list[dict],
@@ -139,16 +156,20 @@ def pilih_belum_dikirim(items: list[dict],
     diam-diam: yang terpotong tidak dicatat sebagai terkirim, jadi ia ikut
     di putaran berikutnya.
     """
-    pola_didorong = POLA_DIDORONG if pola_didorong is None else pola_didorong
+    if pola_didorong is None:
+        pola_didorong = POLA_DIDORONG
     ensure_alert_tables()
     keluar = []
     for it in items or []:
         if not isinstance(it, dict):
             continue
         kode, pola = it.get("kode"), it.get("pola")
-        if not kode or pola not in pola_didorong:
+        if not kode or not pola:
             continue
-        if sudah_pernah(GRUP, _kunci_siluman(kode, pola), jam=JEDA_ULANG_JAM):
+        # pola_didorong None = semua kategori anomali ikut.
+        if pola_didorong is not None and pola not in pola_didorong:
+            continue
+        if sudah_pernah(GRUP, _kunci_dorong(kode), jam=JEDA_ULANG_JAM):
             continue
         keluar.append(it)
         if len(keluar) >= MAKS_PER_PESAN:
@@ -166,4 +187,4 @@ def catat_terkirim(items: list[dict]) -> None:
     for it in items or []:
         kode, pola = it.get("kode"), it.get("pola")
         if kode and pola:
-            catat_kirim(GRUP, kode, "sm_siluman", _kunci_siluman(kode, pola))
+            catat_kirim(GRUP, kode, "sm_anomali", _kunci_dorong(kode))

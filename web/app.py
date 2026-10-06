@@ -7572,35 +7572,35 @@ _DORONG_SINYAL_KEY = "wa_dorong_sinyal_id"
 _DORONG_SM_SEBELUMNYA_KEY = "wa_dorong_sm_sebelumnya"
 
 
-def _wa_fmt_dorong_siluman(items: list[dict], total: int) -> str:
-    """Pesan "ada yang masuk Siluman".
+def _wa_fmt_dorong_anomali(akumulasi: list, distribusi: list, total: int) -> str:
+    """Pesan "ada anomali baru".
 
-    Dibuka dengan ARTINYA, bukan dengan namanya. "Siluman (quiet buy)" tidak
-    memberi tahu apa pun kepada orang yang belum pernah membaca legendanya,
-    dan pesan yang datang sendiri tidak punya legenda di sebelahnya.
+    Bentuknya SENGAJA sama persis dengan balasan perintah `smartmoney` --
+    perender barisnya pun satu (lihat _baris_sm). Yang membedakan cuma
+    judulnya: ini daftar yang BARU muncul sejak pemberitahuan terakhir,
+    bukan seluruh daftar hari ini. Permintaan penulis 6 Okt 2026, dan
+    permintaannya tepat: dua bentuk berbeda untuk angka yang sama akan
+    membuat orang mengira keduanya data yang berbeda.
     """
-    baris = [f"*Akumulasi diam-diam* ({len(items)} saham)",
-             "_Harga naik pelan, tapi volumenya justru DI BAWAH rata-rata "
-             "\u2014 pola yang tidak muncul di layar mana pun yang diurut "
-             "berdasarkan lonjakan._", ""]
-    for it in items:
-        potong = [f"\u2022 *{it.get('kode')}*"]
-        vol = it.get("vol_ratio")
-        if vol is not None:
-            potong.append(f"{vol}x")
-        if it.get("chg1") is not None:
-            potong.append(f"{it['chg1']:+.2f}%")
-        potong.append(_rp(it.get("harga")))
-        garis = " \u00b7 ".join(potong)
-        if it.get("chg5") is not None:
-            garis += f" \u00b7 5 hari {it['chg5']:+.2f}%"
-        baris.append(garis)
-    baris += ["", f"Dari {total} saham IDX. Ketik kodenya untuk rencana entry.",
+    jumlah = len(akumulasi) + len(distribusi)
+    baris = [f"*Anomali volume BARU* ({jumlah} saham)",
+             f"_Baru muncul sejak pemberitahuan terakhir \u2014 dari {total} "
+             "saham IDX yang dipindai._"]
+    if akumulasi:
+        baris += ["", f"*Akumulasi* ({len(akumulasi)})"]
+        baris += [_baris_sm(it) for it in akumulasi]
+    if distribusi:
+        baris += ["", f"*Distribusi* ({len(distribusi)})"]
+        baris += [_baris_sm(it) for it in distribusi]
+    baris += ["", "Ketik kode emitennya untuk rencana entry lengkap, atau "
+              "`smartmoney` untuk daftar hari ini selengkapnya.",
               "_Bursa belum tutup, jadi angkanya masih bergerak \u2014 pola ini "
               "dihitung dari bar hari ini yang belum selesai, dan sudah "
               "bertahan dua pemindaian berturut-turut sebelum dikirim._",
               "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 "
-              "siapa yang membeli tidak ada di data ini._",
+              "siapa yang membeli tidak ada di data ini. Volume besar bisa "
+              "berarti terkumpul, bisa juga berarti dilepas; arahnya "
+              "disimpulkan dari gerak harga, bukan diketahui._",
               "_Bukan ajakan membeli/menjual._"]
     return "\n".join(baris)
 
@@ -7633,8 +7633,8 @@ def _wa_fmt_dorong_sinyal(items: list[dict]) -> str:
     return "\n".join(baris)
 
 
-async def _dorong_siluman() -> bool:
-    """Beritakan saham yang baru masuk Siluman. True kalau ada yang dikirim.
+async def _dorong_anomali() -> bool:
+    """Beritakan anomali volume yang BARU. True kalau ada yang dikirim.
 
     Membaca cache yang SUDAH dihangatkan pemanas (foreign_flow:all), tidak
     pernah memindai sendiri. Kalau cache-nya kebetulan dingin, putaran ini
@@ -7642,8 +7642,8 @@ async def _dorong_siluman() -> bool:
     dan memaksa pemindaian 69 detik dari dalam loop pengirim cuma menambah
     satu tempat baru yang bisa menahan server.
     """
-    from core.wa_dorong import (POLA_DIDORONG, catat_terkirim, dalam_jam_kirim,
-                                kode_dari, pilih_belum_dikirim, saring_stabil)
+    from core.wa_dorong import (catat_terkirim, dalam_jam_kirim, kode_dari,
+                                pilih_belum_dikirim, saring_stabil)
     from core.whatsapp_notify import _get_config, _set_config, send_wa_text
 
     if not dalam_jam_kirim():
@@ -7652,30 +7652,36 @@ async def _dorong_siluman() -> bool:
     if not payload:
         return False
 
-    # Hanya sisi akumulasi: "Siluman (quiet buy)" memang cuma lahir dari
-    # cabang harga-naik di _sm_classify, tapi membaca keduanya membuat
-    # kodenya tidak bergantung pada detail itu tetap begitu.
-    semua = (payload.get("akumulasi") or []) + (payload.get("distribusi") or [])
-    berpola = [x for x in semua
-               if isinstance(x, dict) and x.get("pola") in POLA_DIDORONG]
+    akum_semua = payload.get("akumulasi") or []
+    dist_semua = payload.get("distribusi") or []
+    semua = [x for x in (akum_semua + dist_semua)
+             if isinstance(x, dict) and x.get("kode") and x.get("pola")]
 
     # Dibandingkan dengan pemindaian SEBELUMNYA sebelum apa pun dikirim.
     # Polanya dihitung dari bar hari ini yang belum selesai, jadi saham bisa
     # masuk-keluar kategori sepanjang sesi -- lihat saring_stabil().
     mentah = _get_config(_DORONG_SM_SEBELUMNYA_KEY) or ""
     sebelumnya = {k for k in mentah.split(",") if k}
-    sekarang = kode_dari(berpola)
+    sekarang = kode_dari(semua)
     # Ditulis LEBIH DULU, dan disengaja: pembanding putaran berikutnya harus
     # mencerminkan apa yang benar-benar terlihat sekarang, berhasil atau
     # tidak pengirimannya. Yang bergantung pada keberhasilan kirim cuma
     # catatan "sudah diberitakan" di bawah.
     _set_config(_DORONG_SM_SEBELUMNYA_KEY, ",".join(sorted(sekarang)))
 
-    baru = pilih_belum_dikirim(saring_stabil(berpola, sebelumnya))
+    baru = pilih_belum_dikirim(saring_stabil(semua, sebelumnya))
     if not baru:
         return False
 
-    teks = _wa_fmt_dorong_siluman(baru, payload.get("total_scan") or 0)
+    # Dikelompokkan ulang seperti di layar. Keanggotaannya dibaca dari
+    # payload, bukan ditebak dari nama polanya -- "Breakout Volume" ada di
+    # sisi akumulasi, dan menebaknya dari kata akan menaruhnya di tempat
+    # yang salah.
+    kode_baru = kode_dari(baru)
+    akum = [x for x in akum_semua if str(x.get("kode")).upper() in kode_baru]
+    dist = [x for x in dist_semua if str(x.get("kode")).upper() in kode_baru]
+
+    teks = _wa_fmt_dorong_anomali(akum, dist, payload.get("total_scan") or 0)
     if not await send_wa_text(teks):
         return False
     # Dicatat HANYA sesudah terkirim -- lihat catatan di catat_terkirim().
@@ -7746,9 +7752,9 @@ async def _wa_broadcast_loop():
             # ikut membatalkan yang lain.
             if WA_DORONG_AKTIF:
                 try:
-                    await _dorong_siluman()
+                    await _dorong_anomali()
                 except Exception as e:
-                    print(f"\u26a0\ufe0f dorong siluman: {type(e).__name__}: {e}")
+                    print(f"\u26a0\ufe0f dorong anomali: {type(e).__name__}: {e}")
                 try:
                     await _dorong_sinyal_baru()
                 except Exception as e:
@@ -7837,7 +7843,7 @@ _WA_BANTUAN = (
     "(mis. `uji minervini tp12 sl3`)\n"
     "• *cek KODE* — satu saham menurut lima teori sekaligus\n\n"
     "_Dua hal saya kirim sendiri ke grup tanpa diminta, hanya pada jam bursa: "
-    "saham yang masuk akumulasi diam-diam, dan sinyal baru begitu tercatat. "
+    "anomali volume yang BARU terdeteksi, dan sinyal baru begitu tercatat. "
     "Dikumpulkan jadi satu pesan, dan satu emiten tidak diulang dalam 24 jam._\n\n"
     "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
     "perlu diputuskan: menyentuh stop, menyentuh level yang pernah "
@@ -10091,6 +10097,51 @@ def _wa_fmt_minervini(payload) -> str:
     return "\n".join(baris)
 
 
+def _baris_sm(it: dict) -> str:
+    """SATU baris per saham. Bukan tiga.
+
+    Versi pertama memberi tiap saham tiga baris (harga+pola, lalu
+    vol+chg1+chg5, lalu peringkat+RSI+likuiditas+grup). Diukur pada bentuk
+    yang benar-benar ada di layar penulis -- 20 akumulasi + 2 distribusi --
+    hasilnya 76 baris dan 4.215 karakter: enam kali lipat batas "Baca
+    selengkapnya" WhatsApp.
+
+    Yang dipadatkan BUKAN daftarnya. Tidak satu pun emiten hilang, dan itu
+    syarat yang tidak bisa ditawar -- memangkas daftar pernah membuat saham
+    yang justru dicari orang lenyap dari balasan. Yang dipadatkan adalah
+    KOLOM yang tidak dipakai saat memindai: chg5, RSI, likuiditas, grup,
+    peringkat persentil. Semuanya tetap ada, satu ketikan jauhnya.
+
+    Urutan kolomnya mengikuti cara orang membaca daftar begini: kode dulu
+    (yang akan diketik), lalu rasio volume (alasan ia masuk daftar), lalu
+    gerak hari ini, baru harga.
+
+    DIPAKAI BERSAMA perintah `smartmoney` dan kiriman otomatis. Sempat jadi
+    fungsi bersarang di dalam salah satunya; begitu keduanya menampilkan
+    daftar yang sama, dua perender berarti dua bentuk yang bisa bergeser
+    diam-diam sampai orang menyangka keduanya data yang berbeda.
+    """
+    potong = [f"\u2022 *{it.get('kode')}*"]
+    vol = it.get("vol_ratio")
+    if vol is not None:
+        potong.append(f"{vol}x")
+    if it.get("chg1") is not None:
+        potong.append(f"{it['chg1']:+.2f}%")
+    potong.append(_rp(it.get("harga")))
+    baris = " \u00b7 ".join(potong)
+    if it.get("pola"):
+        baris += f" \u2014 {it['pola']}"
+    # Umur anomali TETAP ada walau barisnya diringkas, dan itu disengaja.
+    # Anomali empat hari lalu menuntut tindakan yang berbeda dari anomali
+    # hari ini; menyembunyikannya demi keringkasan berarti membuat yang basi
+    # terbaca seperti yang baru. Ongkosnya beberapa karakter, bukan satu
+    # baris penuh.
+    hari_lalu = it.get("hari_lalu")
+    if hari_lalu:
+        baris += f" \u26a0{hari_lalu}h lalu"
+    return baris
+
+
 def _wa_fmt_smartmoney(payload: dict) -> str:
     """Anomali volume (panel Smart Money) dalam bentuk WhatsApp.
 
@@ -10121,46 +10172,6 @@ def _wa_fmt_smartmoney(payload: dict) -> str:
                 f"_Tidak ada anomali dari {total} saham yang dipindai._\n\n"
                 "Hari tanpa hasil itu wajar: syaratnya volume minimal 1,8x "
                 "rata-rata 20 hari DAN lolos saringan likuiditas.")
-
-    def _baris_sm(it: dict) -> str:
-        """SATU baris per saham. Bukan tiga.
-
-        Versi pertama memberi tiap saham tiga baris (harga+pola, lalu
-        vol+chg1+chg5, lalu peringkat+RSI+likuiditas+grup). Diukur pada
-        bentuk yang benar-benar ada di layar penulis -- 20 akumulasi + 2
-        distribusi -- hasilnya 76 baris dan 4.215 karakter: enam kali lipat
-        batas "Baca selengkapnya" WhatsApp.
-
-        Yang dipadatkan BUKAN daftarnya. Tidak satu pun emiten hilang, dan
-        itu syarat yang tidak bisa ditawar -- memangkas daftar pernah
-        membuat saham yang justru dicari orang lenyap dari balasan. Yang
-        dipadatkan adalah KOLOM yang tidak dipakai saat memindai: chg5,
-        RSI, likuiditas, grup, peringkat persentil. Semuanya tetap ada,
-        satu ketikan jauhnya.
-
-        Urutan kolomnya mengikuti cara orang membaca daftar begini: kode
-        dulu (yang akan diketik), lalu rasio volume (alasan ia masuk
-        daftar), lalu gerak hari ini, baru harga.
-        """
-        potong = [f"\u2022 *{it.get('kode')}*"]
-        vol = it.get("vol_ratio")
-        if vol is not None:
-            potong.append(f"{vol}x")
-        if it.get("chg1") is not None:
-            potong.append(f"{it['chg1']:+.2f}%")
-        potong.append(_rp(it.get("harga")))
-        baris = " \u00b7 ".join(potong)
-        if it.get("pola"):
-            baris += f" \u2014 {it['pola']}"
-        # Umur anomali TETAP ada walau barisnya diringkas, dan itu disengaja.
-        # Anomali empat hari lalu menuntut tindakan yang berbeda dari anomali
-        # hari ini; menyembunyikannya demi keringkasan berarti membuat yang
-        # basi terbaca seperti yang baru. Ongkosnya beberapa karakter, bukan
-        # satu baris penuh.
-        hari_lalu = it.get("hari_lalu")
-        if hari_lalu:
-            baris += f" \u26a0{hari_lalu}h lalu"
-        return baris
 
     baris = [f"*Smart Money \u2014 anomali volume* (dari {total} saham)"]
     # Data lama disajikan DENGAN keterangan, tidak pernah disamarkan jadi
