@@ -7567,6 +7567,10 @@ WA_DORONG_AKTIF = os.getenv("WA_DORONG_AKTIF", "1") != "0"
 # satu aliran butuh dua penanda tempat.
 _DORONG_SINYAL_KEY = "wa_dorong_sinyal_id"
 
+# Kode yang berpola terpantau pada pemindaian SEBELUMNYA. Dipakai menyaring
+# kedipan sesaat -- lihat catatan panjang di core.wa_dorong.saring_stabil.
+_DORONG_SM_SEBELUMNYA_KEY = "wa_dorong_sm_sebelumnya"
+
 
 def _wa_fmt_dorong_siluman(items: list[dict], total: int) -> str:
     """Pesan "ada yang masuk Siluman".
@@ -7592,6 +7596,9 @@ def _wa_fmt_dorong_siluman(items: list[dict], total: int) -> str:
             garis += f" \u00b7 5 hari {it['chg5']:+.2f}%"
         baris.append(garis)
     baris += ["", f"Dari {total} saham IDX. Ketik kodenya untuk rencana entry.",
+              "_Bursa belum tutup, jadi angkanya masih bergerak \u2014 pola ini "
+              "dihitung dari bar hari ini yang belum selesai, dan sudah "
+              "bertahan dua pemindaian berturut-turut sebelum dikirim._",
               "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 "
               "siapa yang membeli tidak ada di data ini._",
               "_Bukan ajakan membeli/menjual._"]
@@ -7635,8 +7642,9 @@ async def _dorong_siluman() -> bool:
     dan memaksa pemindaian 69 detik dari dalam loop pengirim cuma menambah
     satu tempat baru yang bisa menahan server.
     """
-    from core.wa_dorong import catat_terkirim, dalam_jam_kirim, pilih_belum_dikirim
-    from core.whatsapp_notify import send_wa_text
+    from core.wa_dorong import (POLA_DIDORONG, catat_terkirim, dalam_jam_kirim,
+                                kode_dari, pilih_belum_dikirim, saring_stabil)
+    from core.whatsapp_notify import _get_config, _set_config, send_wa_text
 
     if not dalam_jam_kirim():
         return False
@@ -7648,7 +7656,22 @@ async def _dorong_siluman() -> bool:
     # cabang harga-naik di _sm_classify, tapi membaca keduanya membuat
     # kodenya tidak bergantung pada detail itu tetap begitu.
     semua = (payload.get("akumulasi") or []) + (payload.get("distribusi") or [])
-    baru = pilih_belum_dikirim(semua)
+    berpola = [x for x in semua
+               if isinstance(x, dict) and x.get("pola") in POLA_DIDORONG]
+
+    # Dibandingkan dengan pemindaian SEBELUMNYA sebelum apa pun dikirim.
+    # Polanya dihitung dari bar hari ini yang belum selesai, jadi saham bisa
+    # masuk-keluar kategori sepanjang sesi -- lihat saring_stabil().
+    mentah = _get_config(_DORONG_SM_SEBELUMNYA_KEY) or ""
+    sebelumnya = {k for k in mentah.split(",") if k}
+    sekarang = kode_dari(berpola)
+    # Ditulis LEBIH DULU, dan disengaja: pembanding putaran berikutnya harus
+    # mencerminkan apa yang benar-benar terlihat sekarang, berhasil atau
+    # tidak pengirimannya. Yang bergantung pada keberhasilan kirim cuma
+    # catatan "sudah diberitakan" di bawah.
+    _set_config(_DORONG_SM_SEBELUMNYA_KEY, ",".join(sorted(sekarang)))
+
+    baru = pilih_belum_dikirim(saring_stabil(berpola, sebelumnya))
     if not baru:
         return False
 

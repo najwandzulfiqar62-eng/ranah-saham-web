@@ -87,6 +87,45 @@ def dalam_jam_kirim(waktu: datetime | None = None) -> bool:
     return JAM_MULAI <= w.hour < JAM_SELESAI
 
 
+def saring_stabil(items: list[dict], kode_sebelumnya: set) -> list[dict]:
+    """Hanya saham yang berpola sama di DUA pemindaian berurutan.
+
+    KENAPA ADA (6 Okt 2026). Penulis melihat perintah `smartmoney` pukul
+    14.33 menyebut empat saham Siluman, sementara kiriman otomatis pukul
+    14.58 menyebut tiga -- dan dua di antaranya bukan yang sama.
+
+    Sebabnya bukan bug, melainkan sesuatu yang lebih halus: pola dihitung
+    dari bar HARI INI yang BELUM SELESAI. Selama sesi berjalan, chg1 dan
+    chg5 masih bergerak, dan ambang di _sm_classify itu keras. SGER pukul
+    14.33 bernilai chg1 +3,31% sehingga lolos `chg1 > 3` dan dilabeli
+    "Breakout Volume"; pukul 14.58 ia +2,65%, jatuh ke bawah ambang yang
+    sama, lalu memenuhi syarat "Siluman". Saham yang sama, hari yang sama,
+    label yang berbeda -- semata karena bursa belum tutup.
+
+    Ini pengulangan pelajaran yang sudah pernah mahal di proyek ini: sinyal
+    NR7 dulu menyala dari bar sesi berjalan, dan separuhnya ternyata
+    artefak. Bedanya, di sini akibatnya lebih sulit dibatalkan -- pesannya
+    sudah terkirim ke HP orang, dan jeda 24 jam membuat saham yang terlanjur
+    diumumkan dalam keadaan sesaat TIDAK bisa diumumkan lagi ketika polanya
+    sungguhan di penutupan.
+
+    Penyaring ini tidak membuat polanya jadi final -- tidak ada yang bisa,
+    sebelum bursa tutup. Ia cuma menuntut pola itu BERTAHAN satu putaran
+    (sekitar lima menit) sebelum diberitakan, yang membuang kedipan sesaat
+    dengan ongkos satu putaran keterlambatan.
+    """
+    sebelumnya = {str(k).upper() for k in (kode_sebelumnya or set())}
+    return [it for it in items
+            if str(it.get("kode") or "").upper() in sebelumnya]
+
+
+def kode_dari(items: list[dict]) -> set:
+    """Himpunan kode dari daftar hasil pindai, untuk dibandingkan putaran
+    berikutnya."""
+    return {str(it.get("kode")).upper() for it in (items or [])
+            if isinstance(it, dict) and it.get("kode")}
+
+
 def _kunci_siluman(kode: str, pola: str) -> str:
     return f"dorong:sm:{(kode or '').upper()}:{pola}"
 

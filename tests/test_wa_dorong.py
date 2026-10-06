@@ -26,6 +26,21 @@ def dorong_bersih():
         conn.execute("DELETE FROM wa_alert_kirim")
 
 
+def _config_palsu(monkeypatch, awal=None):
+    """app_config palsu, terpisah per uji.
+
+    Tanpa ini, penanda "pemindaian sebelumnya" bocor antar-uji lewat SQLite
+    sungguhan: uji yang jalan belakangan mewarisi pembanding milik uji
+    sebelumnya, dan hasilnya berubah menurut URUTAN jalannya.
+    """
+    import core.whatsapp_notify as wn
+
+    simpan = dict(awal or {})
+    monkeypatch.setattr(wn, "_get_config", lambda k: simpan.get(k))
+    monkeypatch.setattr(wn, "_set_config", lambda k, v: simpan.__setitem__(k, v))
+    return simpan
+
+
 def _sm(kode, pola="Siluman (quiet buy)", **ubah):
     dasar = {"kode": kode, "pola": pola, "harga": 1000, "chg1": 2.5,
              "chg5": 6.0, "vol_ratio": 0.9, "rsi": 58.0,
@@ -139,6 +154,9 @@ def test_kirim_gagal_maka_tidak_dicatat_sudah_terkirim(dorong_bersih, monkeypatc
     import web.app as app_module
 
     monkeypatch.setattr(wd, "dalam_jam_kirim", lambda waktu=None: True)
+    # Acuan sudah terisi supaya ujinya sampai ke tahap KIRIM, bukan berhenti
+    # di penyaring kedipan -- yang diuji di sini perilaku saat kirim gagal.
+    _config_palsu(monkeypatch, {app_module._DORONG_SM_SEBELUMNYA_KEY: "BBCA"})
     monkeypatch.setattr(app_module, "_cache_get",
                         lambda k: {"total_scan": 793, "akumulasi": [_sm("BBCA")],
                                    "distribusi": []}
@@ -172,12 +190,16 @@ def test_dikumpulkan_jadi_SATU_pesan_bukan_satu_per_saham(dorong_bersih, monkeyp
 
     monkeypatch.setattr(wd, "dalam_jam_kirim", lambda waktu=None: True)
     monkeypatch.setattr(wn, "send_wa_text", _rekam)
+    _config_palsu(monkeypatch)
     monkeypatch.setattr(app_module, "_cache_get",
                         lambda k: {"total_scan": 793,
                                    "akumulasi": [_sm(f"AA{i:02d}") for i in range(5)],
                                    "distribusi": []}
                         if k == "foreign_flow:all" else None)
 
+    # Putaran pertama cuma mencatat acuan (lihat saring_stabil); yang diuji
+    # di sini bentuk pesannya, jadi dijalankan dua kali.
+    asyncio.run(app_module._dorong_siluman())
     assert asyncio.run(app_module._dorong_siluman()) is True
     assert len(terkirim) == 1, "satu pesan per saham = grup dibisukan"
     for i in range(5):
@@ -216,8 +238,10 @@ def test_memindai_SELURUH_idx_bukan_yang_likuid_saja(dorong_bersih, monkeypatch)
 
     monkeypatch.setattr(wd, "dalam_jam_kirim", lambda waktu=None: True)
     monkeypatch.setattr(wn, "send_wa_text", _ok)
+    _config_palsu(monkeypatch)
     monkeypatch.setattr(app_module, "_cache_get", _cache)
 
+    asyncio.run(app_module._dorong_siluman())      # putaran acuan
     assert asyncio.run(app_module._dorong_siluman()) is True
     assert "foreign_flow:all" in diminta, "membaca universe sempit, bukan seluruh IDX"
     assert not [k for k in diminta if k in ("foreign_flow:core", "foreign_flow:medium")]
@@ -257,6 +281,117 @@ def test_di_luar_jam_tidak_mengirim_apa_pun(dorong_bersih, monkeypatch):
                         lambda k: {"total_scan": 793, "akumulasi": [_sm("BBCA")],
                                    "distribusi": []})
     assert asyncio.run(app_module._dorong_siluman()) is False
+
+
+# ---------------------------------------------------------------------------
+# Kedipan sesaat -- pola dihitung dari bar yang BELUM SELESAI
+# ---------------------------------------------------------------------------
+
+def test_hanya_yang_bertahan_dua_pemindaian_yang_dikirim():
+    """Pola dihitung dari bar HARI INI yang belum selesai, jadi saham bisa
+    masuk-keluar kategori sepanjang sesi."""
+    from core.wa_dorong import saring_stabil
+
+    items = [_sm("PTBA"), _sm("DEWA"), _sm("SGER")]
+    stabil = saring_stabil(items, {"PTBA", "DEWA"})
+    assert [x["kode"] for x in stabil] == ["PTBA", "DEWA"]
+
+
+def test_kasus_nyata_SGER_berpindah_kategori_di_tengah_sesi():
+    """KEJADIAN SUNGGUHAN 6 Okt 2026, terlihat penulis di layarnya sendiri.
+
+    Pukul 14.33 perintah `smartmoney` menyebut SGER "Breakout Volume":
+    chg1 +3,31%, lolos ambang `chg1 > 3` di _sm_classify.
+    Pukul 14.58 kiriman otomatis menyebutnya "Siluman (quiet buy)":
+    chg1 +2,65%, jatuh ke bawah ambang yang sama.
+
+    Saham yang sama, hari yang sama, label yang berbeda -- semata karena
+    bursa belum tutup. Tanpa penyaring ini, ia diumumkan sebagai akumulasi
+    diam-diam berdasarkan keadaan yang bertahan beberapa menit."""
+    from core.wa_dorong import saring_stabil
+
+    # Putaran 1: SGER masih Breakout Volume, jadi tidak ikut daftar Siluman.
+    sebelumnya = {"PTBA", "DEWA"}
+    # Putaran 2: SGER baru masuk Siluman.
+    sekarang = [_sm("PTBA"), _sm("DEWA"), _sm("SGER")]
+
+    stabil = saring_stabil(sekarang, sebelumnya)
+    assert "SGER" not in [x["kode"] for x in stabil], (
+        "kedipan sesaat diumumkan sebagai akumulasi diam-diam")
+
+
+def test_pemindaian_pertama_tidak_mengirim_apa_pun(dorong_bersih, monkeypatch):
+    """Tidak ada pembanding = tidak ada yang bisa disebut bertahan. Putaran
+    pertama sesudah restart mencatat acuan, bukan mengirim."""
+    import asyncio
+
+    import core.wa_dorong as wd
+    import core.whatsapp_notify as wn
+    import web.app as app_module
+
+    simpan = {}
+    terkirim = []
+
+    async def _rekam(text, to=None):
+        terkirim.append(text)
+        return True
+
+    monkeypatch.setattr(wd, "dalam_jam_kirim", lambda waktu=None: True)
+    monkeypatch.setattr(wn, "send_wa_text", _rekam)
+    monkeypatch.setattr(wn, "_get_config", lambda k: simpan.get(k))
+    monkeypatch.setattr(wn, "_set_config", lambda k, v: simpan.__setitem__(k, v))
+    monkeypatch.setattr(app_module, "_cache_get",
+                        lambda k: {"total_scan": 793,
+                                   "akumulasi": [_sm("PTBA"), _sm("DEWA")],
+                                   "distribusi": []}
+                        if k == "foreign_flow:all" else None)
+
+    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert terkirim == []
+    assert simpan[app_module._DORONG_SM_SEBELUMNYA_KEY] == "DEWA,PTBA"
+
+    # Putaran kedua: keduanya masih di sana -> baru dikirim.
+    assert asyncio.run(app_module._dorong_siluman()) is True
+    assert len(terkirim) == 1
+    assert "PTBA" in terkirim[0] and "DEWA" in terkirim[0]
+
+
+def test_pembanding_dicatat_walau_kirimnya_gagal(dorong_bersih, monkeypatch):
+    """Pembanding putaran berikutnya harus mencerminkan apa yang BENAR-BENAR
+    terlihat, bukan apa yang berhasil dikirim. Kalau ia ikut gagal dicatat,
+    saham yang stabil akan selamanya terlihat 'baru muncul'."""
+    import asyncio
+
+    import core.wa_dorong as wd
+    import core.whatsapp_notify as wn
+    import web.app as app_module
+
+    simpan = {app_module._DORONG_SM_SEBELUMNYA_KEY: "PTBA"}
+
+    async def _gagal(text, to=None):
+        return False
+
+    monkeypatch.setattr(wd, "dalam_jam_kirim", lambda waktu=None: True)
+    monkeypatch.setattr(wn, "send_wa_text", _gagal)
+    monkeypatch.setattr(wn, "_get_config", lambda k: simpan.get(k))
+    monkeypatch.setattr(wn, "_set_config", lambda k, v: simpan.__setitem__(k, v))
+    monkeypatch.setattr(app_module, "_cache_get",
+                        lambda k: {"total_scan": 793, "akumulasi": [_sm("PTBA")],
+                                   "distribusi": []}
+                        if k == "foreign_flow:all" else None)
+
+    assert asyncio.run(app_module._dorong_siluman()) is False
+    assert simpan[app_module._DORONG_SM_SEBELUMNYA_KEY] == "PTBA"
+
+
+def test_pesan_mengaku_bahwa_bursa_belum_tutup():
+    """Penerima berhak tahu bahwa angkanya masih bergerak. Menyajikannya
+    seolah final adalah janji yang tidak bisa ditepati sebelum penutupan."""
+    from web.app import _wa_fmt_dorong_siluman
+
+    teks = _wa_fmt_dorong_siluman([_sm("PTBA")], 793)
+    assert "belum selesai" in teks
+    assert "dua pemindaian" in teks
 
 
 # ---------------------------------------------------------------------------
