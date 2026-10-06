@@ -7550,6 +7550,144 @@ async def _jalankan_alert_posisi() -> int:
     return terkirim
 
 
+# =========================
+# KIRIM OTOMATIS (tanpa diminta)
+# =========================
+# Permintaan penulis 6 Okt 2026: saham yang masuk "Siluman (quiet buy)" dan
+# sinyal baru dikirim sendiri ke bot, bukan ditunggu sampai ada yang mengetik
+# perintahnya. Takaran & penjaganya ada di core/wa_dorong.py -- baca catatan
+# modulnya sebelum melonggarkan apa pun di sini.
+WA_DORONG_AKTIF = os.getenv("WA_DORONG_AKTIF", "1") != "0"
+
+# Cursor sinyal untuk kiriman otomatis. SENGAJA TERPISAH dari cursor digest
+# harian (whatsapp_notify.get_last_signal_id). Memakai cursor yang sama akan
+# membuat kiriman otomatis "memakan" sinyal yang belum sempat masuk digest:
+# begitu ia memajukan cursor, ringkasan pagi berikutnya melaporkan "tidak ada
+# sinyal baru" untuk sinyal yang justru baru saja terjadi. Dua pembaca atas
+# satu aliran butuh dua penanda tempat.
+_DORONG_SINYAL_KEY = "wa_dorong_sinyal_id"
+
+
+def _wa_fmt_dorong_siluman(items: list[dict], total: int) -> str:
+    """Pesan "ada yang masuk Siluman".
+
+    Dibuka dengan ARTINYA, bukan dengan namanya. "Siluman (quiet buy)" tidak
+    memberi tahu apa pun kepada orang yang belum pernah membaca legendanya,
+    dan pesan yang datang sendiri tidak punya legenda di sebelahnya.
+    """
+    baris = [f"*Akumulasi diam-diam* ({len(items)} saham)",
+             "_Harga naik pelan, tapi volumenya justru DI BAWAH rata-rata "
+             "\u2014 pola yang tidak muncul di layar mana pun yang diurut "
+             "berdasarkan lonjakan._", ""]
+    for it in items:
+        potong = [f"\u2022 *{it.get('kode')}*"]
+        vol = it.get("vol_ratio")
+        if vol is not None:
+            potong.append(f"{vol}x")
+        if it.get("chg1") is not None:
+            potong.append(f"{it['chg1']:+.2f}%")
+        potong.append(_rp(it.get("harga")))
+        garis = " \u00b7 ".join(potong)
+        if it.get("chg5") is not None:
+            garis += f" \u00b7 5 hari {it['chg5']:+.2f}%"
+        baris.append(garis)
+    baris += ["", f"Dari {total} saham IDX. Ketik kodenya untuk rencana entry.",
+              "_Yang diukur VOLUME tak biasa, bukan aliran dana asing \u2014 "
+              "siapa yang membeli tidak ada di data ini._",
+              "_Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+def _wa_fmt_dorong_sinyal(items: list[dict]) -> str:
+    """Pesan "ada sinyal baru". Urutannya KRONOLOGIS, bukan id menurun --
+    orang membaca daftar begini dari yang paling lama ke yang paling baru,
+    sama seperti membaca percakapan."""
+    baris = [f"*Sinyal baru* ({len(items)})", ""]
+    for it in reversed(items):
+        kepala = f"\u2022 *{it.get('kode')}*"
+        sumber = it.get("source")
+        if sumber:
+            kepala += f" \u00b7 {sumber}"
+        if it.get("direction"):
+            kepala += f"/{it['direction']}"
+        baris.append(kepala)
+        rinci = []
+        if it.get("status"):
+            rinci.append(str(it["status"]))
+        if it.get("entry_price") is not None:
+            rinci.append(f"entry {_rp(it['entry_price'])}")
+        if it.get("tp_pct") is not None:
+            rinci.append(f"TP {it['tp_pct']:.1f}%")
+        if rinci:
+            baris.append("   " + " \u00b7 ".join(rinci))
+    baris += ["", "Ketik kodenya untuk rencana lengkap, atau `sinyal` untuk "
+              "semua yang sedang berjalan.",
+              "_Otomatis. Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
+async def _dorong_siluman() -> bool:
+    """Beritakan saham yang baru masuk Siluman. True kalau ada yang dikirim.
+
+    Membaca cache yang SUDAH dihangatkan pemanas (foreign_flow:all), tidak
+    pernah memindai sendiri. Kalau cache-nya kebetulan dingin, putaran ini
+    dilewati begitu saja -- pemanas akan mengisinya dalam hitungan menit,
+    dan memaksa pemindaian 69 detik dari dalam loop pengirim cuma menambah
+    satu tempat baru yang bisa menahan server.
+    """
+    from core.wa_dorong import catat_terkirim, dalam_jam_kirim, pilih_belum_dikirim
+    from core.whatsapp_notify import send_wa_text
+
+    if not dalam_jam_kirim():
+        return False
+    payload = _cache_get("foreign_flow:all")
+    if not payload:
+        return False
+
+    # Hanya sisi akumulasi: "Siluman (quiet buy)" memang cuma lahir dari
+    # cabang harga-naik di _sm_classify, tapi membaca keduanya membuat
+    # kodenya tidak bergantung pada detail itu tetap begitu.
+    semua = (payload.get("akumulasi") or []) + (payload.get("distribusi") or [])
+    baru = pilih_belum_dikirim(semua)
+    if not baru:
+        return False
+
+    teks = _wa_fmt_dorong_siluman(baru, payload.get("total_scan") or 0)
+    if not await send_wa_text(teks):
+        return False
+    # Dicatat HANYA sesudah terkirim -- lihat catatan di catat_terkirim().
+    catat_terkirim(baru)
+    return True
+
+
+async def _dorong_sinyal_baru() -> bool:
+    """Beritakan sinyal yang baru tercatat. True kalau ada yang dikirim."""
+    from core.signal_history import get_signal_notifications
+    from core.wa_dorong import MAKS_PER_PESAN, dalam_jam_kirim
+    from core.whatsapp_notify import _get_config, _set_config, send_wa_text
+
+    if not dalam_jam_kirim():
+        return False
+
+    mentah = _get_config(_DORONG_SINYAL_KEY)
+    cursor = int(mentah) if mentah and str(mentah).isdigit() else None
+    notif = get_signal_notifications(since_id=cursor or 0, limit=MAKS_PER_PESAN)
+
+    if cursor is None:
+        # Pertama kali menyala: catat titik acuan, JANGAN tumpahkan seluruh
+        # riwayat sinyal ke grup sebagai "baru". Semantik yang sama dipakai
+        # lonceng notifikasi in-app dan digest harian.
+        _set_config(_DORONG_SINYAL_KEY, str(notif["latest_id"]))
+        return False
+    if not notif["items"]:
+        return False
+
+    if not await send_wa_text(_wa_fmt_dorong_sinyal(notif["items"])):
+        return False
+    _set_config(_DORONG_SINYAL_KEY, str(notif["latest_id"]))
+    return True
+
+
 async def _wa_broadcast_loop():
     """Loop background: tiap WA_CHECK_INTERVAL_SECONDS, kirim digest harian
     SEKALI saja per hari kalender WIB, begitu jam sekarang sudah melewati
@@ -7578,6 +7716,20 @@ async def _wa_broadcast_loop():
                     and _get_config("wa_rekap_terakhir") != today_str):
                 if await _kirim_rekap_mingguan():
                     _set_config("wa_rekap_terakhir", today_str)
+            # Kiriman otomatis menumpang loop yang SAMA, alasannya persis
+            # sama dengan rekap mingguan di atas: loop tambahan berarti satu
+            # lagi hal yang bisa mati diam-diam tanpa ada yang sadar.
+            # Keduanya dibungkus sendiri-sendiri supaya satu yang gagal tidak
+            # ikut membatalkan yang lain.
+            if WA_DORONG_AKTIF:
+                try:
+                    await _dorong_siluman()
+                except Exception as e:
+                    print(f"\u26a0\ufe0f dorong siluman: {type(e).__name__}: {e}")
+                try:
+                    await _dorong_sinyal_baru()
+                except Exception as e:
+                    print(f"\u26a0\ufe0f dorong sinyal: {type(e).__name__}: {e}")
         except Exception as e:
             print(f"⚠️ wa-broadcast-loop: {type(e).__name__}: {e}")
         await asyncio.sleep(WA_CHECK_INTERVAL_SECONDS)
@@ -7661,6 +7813,9 @@ _WA_BANTUAN = (
     "• *uji* — putar ulang semua sinyal dengan TP/SL pilihanmu "
     "(mis. `uji minervini tp12 sl3`)\n"
     "• *cek KODE* — satu saham menurut lima teori sekaligus\n\n"
+    "_Dua hal saya kirim sendiri ke grup tanpa diminta, hanya pada jam bursa: "
+    "saham yang masuk akumulasi diam-diam, dan sinyal baru begitu tercatat. "
+    "Dikumpulkan jadi satu pesan, dan satu emiten tidak diulang dalam 24 jam._\n\n"
     "_Sesudah posisimu tercatat, saya memberi tahu lewat japri kalau ada yang "
     "perlu diputuskan: menyentuh stop, menyentuh level yang pernah "
     "disebutkan, atau untung besar. Paling banyak beberapa pesan sehari._\n\n"
