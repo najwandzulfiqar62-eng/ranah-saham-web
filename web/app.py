@@ -2179,6 +2179,51 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
     return keluar
 
 
+def _harmonic_chart_payload(df, maks: int = 2) -> list:
+    """Pola harmonic (XABCD) + rasio Fibonacci-nya, siap digambar.
+
+    ASAL-USULNYA, dan ini perlu disebut terus terang: pola harmonic
+    TIDAK berasal dari buku rujukan penulis ("Technical Analysis for
+    Mega Profit", Edianto Ong). Ia dari H.M. Gartley (1935) lalu
+    disistematiskan Scott Carney. Yang ADA di buku itu adalah Fibonacci
+    retracement & extension -- yaitu bahan dasarnya, bukan polanya.
+    Menyebutnya "sesuai buku" akan memberi pola ini wibawa sumber yang
+    tidak pernah memuatnya.
+
+    Detektornya sudah ada sejak lama (core/harmonic.py, dipakai tab
+    Harmonic di Screener dan sumber sinyal MINERVINI_HARMONIC), lengkap
+    dengan titik X-A-B-C-D bertanggal dan rasionya. Yang kurang selama
+    ini cuma satu: tidak pernah DIGAMBAR, sehingga pengguna tidak bisa
+    memeriksa sendiri apakah polanya masuk akal.
+
+    TIDAK mengunduh apa pun; df sudah di tangan pemanggil.
+    """
+    try:
+        from core.harmonic import detect_harmonic
+    except Exception:
+        return []
+    try:
+        pol = detect_harmonic(df, maks=maks) or []
+    except Exception:
+        return []
+    keluar = []
+    for p in pol:
+        titik = [{"label": t["label"], "t": str(t["tanggal"])[:10],
+                  "p": round(float(t["harga"]), 2)}
+                 for t in (p.get("titik") or [])]
+        if len(titik) < 4:
+            continue
+        keluar.append({
+            "pola": p.get("pola"), "arah": p.get("arah"),
+            "skor": p.get("skor"), "prz": p.get("prz"),
+            "potensi_pct": p.get("potensi_pct"),
+            "tanggal_d": p.get("tanggal_d"),
+            "bar_sejak_d": p.get("bar_sejak_d"),
+            "rasio": p.get("rasio") or {}, "titik": titik,
+        })
+    return keluar
+
+
 def _rencana_chart_payload(df, pola: list, sr: dict) -> dict:
     """Beli di mana, jual di mana, batal kapan -- dari level & pola yang
     SUDAH dihitung, tanpa unduhan tambahan.
@@ -2395,6 +2440,7 @@ async def ohlc(kode: str, days: int = 140):
     # pernah ketemu, dan diamnya terbaca seperti "saham ini tidak punya
     # pola" padahal cuma jendelanya kependekan.
     pola = _pola_chart_payload(label, df)
+    harmonic = _harmonic_chart_payload(df)
     # S/R dihitung dari data PENUH juga -- level yang teruji berkali-kali
     # sering lahir di luar jendela yang kebetulan ditampilkan.
     sr = _level_sr_payload(df)
@@ -2409,8 +2455,17 @@ async def ohlc(kode: str, days: int = 140):
     # terpotong separuh lebih menyesatkan daripada tidak digambar, karena
     # kemiringan yang terlihat bukan kemiringan yang sebenarnya.
     perlu = days
-    if pola:
-        tgl_awal = min((p.get("tanggal_mulai") or "9999") for p in pola)
+    # Jendela mengikuti pola chart MAUPUN harmonic -- yang mana pun yang
+    # mulai lebih awal. Tanpa ini, pola harmonic yang membentang lima
+    # bulan selalu terbuang karena titik X-nya jatuh di luar jendela,
+    # dan fiturnya terlihat seperti "jarang ketemu" padahal cuma tidak
+    # pernah muat.
+    tgl_paling_awal = [p.get("tanggal_mulai") or "9999" for p in (pola or [])]
+    for h in (harmonic or []):
+        tgl_paling_awal += [q["t"] for q in h["titik"]]
+    if tgl_paling_awal:
+        pola = pola or []
+        tgl_awal = min(tgl_paling_awal)
         try:
             idx = [str(x)[:10] for x in df.index]
             if tgl_awal in idx:
@@ -2472,6 +2527,13 @@ async def ohlc(kode: str, days: int = 140):
     # candlenya jadi serapat benang -- gejala yang terlihat seperti chart
     # rusak, bukan seperti pola yang kepanjangan.
     tgl_pertama = candles[0]["time"] if candles else None
+    if tgl_pertama and harmonic:
+        # Pola harmonic yang titik X-nya di luar jendela DIBUANG utuh,
+        # bukan dipotong: XABCD yang kehilangan X bukan lagi pola
+        # harmonic, dan menggambar empat titik sisanya akan menampilkan
+        # bentuk yang tidak pernah ada.
+        harmonic = [h for h in harmonic
+                    if all(q["t"] >= tgl_pertama for q in h["titik"])]
     if tgl_pertama and pola:
         for p in pola:
             p["titik"] = [q for q in (p.get("titik") or [])
@@ -2482,7 +2544,7 @@ async def ohlc(kode: str, days: int = 140):
     return {"kode": label, "candles": candles, "volume": vol, "ma20": m20, "ma50": m50,
             "phases": detect_phases(df), "pola": pola,
             "sr": sr.get("level") or [], "sr_ringkas": sr.get("ringkas") or {},
-            "rencana": rencana, "sinyal": sinyal,
+            "rencana": rencana, "sinyal": sinyal, "harmonic": harmonic,
             "last_price": last_price, "realtime": realtime, "as_of": now_jkt.strftime("%H:%M")}
 
 

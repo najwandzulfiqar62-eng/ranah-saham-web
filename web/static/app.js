@@ -797,6 +797,54 @@ function _gambarRencana(kunci, rencana){
   }
 }
 
+/* ---- Pola harmonic (XABCD) + rasio Fibonacci + PRZ ---- */
+// Datanya sudah lama ada (core/harmonic.py, dipakai tab Harmonic di
+// Screener dan sumber sinyal MINERVINI_HARMONIC) lengkap dengan titik
+// bertanggal dan rasionya. Yang kurang selama ini cuma satu: tidak
+// pernah DIGAMBAR, sehingga pengguna tidak bisa memeriksa sendiri
+// apakah polanya masuk akal. Pola harmonic lebih dari pola mana pun
+// menuntut pemeriksaan mata -- lima titik yang dipilih berbeda sedikit
+// menghasilkan rasio yang berbeda jauh.
+function _gambarHarmonic(kunci, idx){
+  const st=_ovlState(kunci);
+  if(!st.chart)return;
+  for(const sr of (st.harmSeri||[])){ try{st.chart.removeSeries(sr)}catch{} }
+  st.harmSeri=[];
+  for(const pl of (st.harmGaris||[])){ try{st.cs.removePriceLine(pl)}catch{} }
+  st.harmGaris=[];
+  const list=st.harm||[];
+  st.harmAktif=idx;
+  if(idx<0||!list.length){ _renderPolaChips(kunci); return }
+  const h=list[Math.min(idx,list.length-1)];
+  const w=h.arah==='bullish'?'#2FB57E':'#E0566B';
+  // Titik diurutkan & dibuat unik: lightweight-charts MENOLAK data yang
+  // tidak menaik secara waktu, dan penolakannya melempar -- satu pola
+  // cacat akan menghapus seluruh chart.
+  const seen=new Set(), data=[], lab=[];
+  for(const t of h.titik.slice().sort((a,b)=>a.t<b.t?-1:1)){
+    if(seen.has(t.t))continue; seen.add(t.t);
+    data.push({time:t.t,value:t.p}); lab.push(t.label);
+  }
+  if(data.length<4){ _renderPolaChips(kunci); return }
+  try{
+    const sr=st.chart.addLineSeries({color:w,lineWidth:2,lineStyle:2,
+      priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+    sr.setData(data);
+    sr.setMarkers(data.map((q,i)=>({time:q.time,position:'inBar',color:w,
+      shape:'circle',text:lab[i]})));
+    st.harmSeri.push(sr);
+  }catch(e){ console.warn('harmonic: garis gagal',e) }
+  if(h.prz){
+    try{
+      st.harmGaris.push(st.cs.createPriceLine({
+        price:h.prz, color:w, lineWidth:2, lineStyle:1,
+        axisLabelVisible:true, title:`PRZ ${h.pola}`,
+      }));
+    }catch(e){}
+  }
+  _renderPolaChips(kunci);
+}
+
 /* ---- Segitiga BELI / JUAL di TANGGAL kejadiannya ---- */
 // Panah tidak lagi ditempel di bar terakhir sbg "area". Penulis menolak
 // versi itu: ketika harga terjepit di antara support dan resistance yang
@@ -888,6 +936,24 @@ function _renderPolaChips(kunci){
     }).join(''));
     bagian.push(`<button class="chip" data-ovl="${kunci}" data-pola="-1">Sembunyikan pola</button>`);
   }
+  const hm=st.harm||[];
+  if(hm.length){
+    bagian.push(`<span class="muted" style="font-size:11px;align-self:center;margin-left:6px;margin-right:2px">Harmonic:</span>`);
+    bagian.push(hm.map((h,i)=>{
+      const w=h.arah==='bullish'?'var(--bull)':'var(--bear)';
+      const on=i===st.harmAktif;
+      // Rasio Fibonacci-nya ditulis di tooltip, bukan di chart: lima
+      // angka yang ditempel di garis membuat chartnya tidak terbaca,
+      // sementara yang mau memeriksanya cukup menahan kursor.
+      const ras=Object.entries(h.rasio||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
+      return `<button class="chip ${on?'active':''}" data-harm="${i}"
+        style="${on?`border-color:${w};color:${w}`:''}"
+        title="${h.pola} ${h.arah} · skor ${h.skor} · PRZ ${h.prz}
+${ras}">
+        ${h.pola} <span class="muted">${h.arah==='bullish'?'naik':'turun'}</span></button>`;
+    }).join(''));
+    if(st.harmAktif>=0) bagian.push(`<button class="chip" data-harm="-1">Sembunyikan XABCD</button>`);
+  }
   // Ringkasan S/R dalam ANGKA, supaya terbaca walau garisnya tertutup
   // candle. Level terdekat saja -- yang jauh ada di chart.
   const res=st.sr.filter(x=>x.tipe==='resistance')[0];
@@ -908,6 +974,9 @@ function _renderPolaChips(kunci){
       + bagianSR.join(' <span class="muted">·</span> ') + `</span>`);
   }
   box.innerHTML=bagian.join('');
+  box.querySelectorAll('[data-harm]').forEach(b=>b.addEventListener('click',()=>{
+    _gambarHarmonic(kunci, Number(b.dataset.harm));
+  }));
   box.querySelectorAll('[data-pola]').forEach(b=>b.addEventListener('click',()=>{
     const i=Number(b.dataset.pola), k=b.dataset.ovl, s2=_ovlState(k);
     if(i<0){ _ovlBersih(s2); s2.aktif=-1; _renderPolaChips(k); }
@@ -931,6 +1000,8 @@ function _pasangOverlay(kunci, chart, cs, o, chipsSel){
   _gambarSR(kunci, o.sr||[]);
   _gambarRencana(kunci, st.rencana);
   _gambarSinyal(kunci, o.sinyal||[]);
+  st.harm=o.harmonic||[]; st.harmSeri=[]; st.harmGaris=[];
+  _gambarHarmonic(kunci, st.harm.length?0:-1);
   if(st.data.length) _gambarPola(kunci,0); else _renderPolaChips(kunci);
 }
 
@@ -7193,7 +7264,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v72';
+const APP_VERSION='v73';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
