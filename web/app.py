@@ -4893,6 +4893,15 @@ async def _warm_shared_caches():
     # Divergence: 178 emiten, dan pengunjung TIDAK PERNAH memindainya
     # sendiri (lihat api_divergence). Kalau ini tidak dihangatkan, panel
     # itu selamanya menjawab "sedang disiapkan".
+    # Screener vonis: 793 emiten x dua panggilan skor AI. Pengunjung tidak
+    # pernah memindainya sendiri (lihat api_screener_vonis), jadi tanpa
+    # dihangatkan di sini halamannya selamanya menjawab "sedang disiapkan".
+    if _cache_get(_SCREENER_VONIS_KEY) is None:
+        try:
+            await _single_flight(_SCREENER_VONIS_KEY, _build_screener_vonis)
+        except Exception as e:
+            print(f"\u26a0\ufe0f cache-warmer screener-vonis: {type(e).__name__}: {e}")
+
     if _cache_get(_DIVERGENCE_CACHE_KEY) is None:
         try:
             await _single_flight(_DIVERGENCE_CACHE_KEY, _build_divergence)
@@ -6963,6 +6972,140 @@ _FOREIGN_FLOW_TTL = int(os.getenv("FOREIGN_FLOW_TTL", "900"))
 
 
 # =========================
+# SCREENER VONIS (BELI KUAT / BELI / JUAL / JUAL KUAT)
+# =========================
+# Dibangun SESUDAH vonisnya diukur, bukan sebelum -- dan urutan itu yang
+# membedakannya dari screener "strong buy" pada umumnya. Diukur pada
+# 23.755 episode vonis selama dua tahun (lihat UNGGUL_VONIS):
+#
+#     BELI KUAT                +1,11%
+#     BELI KUAT bertahan 2 hr  +4,59%   <- keunggulan terbesar di app ini
+#     JUAL KUAT                -0,95%
+#     empat vonis tengah       dalam rentang +-0,25%, tidak berarti
+#
+# KARENA ITU SCREENER INI CUMA MENAMPILKAN TIGA KERANJANG, bukan tujuh.
+# Menampilkan "CENDERUNG BELI" sebagai hasil saringan berarti menyajikan
+# daftar yang terukur tidak membedakan apa pun dari memilih acak, dan
+# daftar semacam itu lebih berbahaya daripada daftar kosong: ia terlihat
+# seperti pekerjaan yang sudah dilakukan.
+_SCREENER_VONIS_KEY = "screener_vonis:v1"
+# Bar harian: vonisnya baru berubah saat bar baru terbentuk. Setengah jam
+# sudah jauh lebih sering daripada yang diperlukan.
+_SCREENER_VONIS_TTL = int(os.getenv("SCREENER_VONIS_TTL", "1800"))
+
+
+def _pindai_vonis(tickers: list, data: dict) -> list:
+    """Loop per emiten -- DIJALANKAN DI WORKER THREAD.
+
+    Alasannya sama dengan _compute_sm_items dan _pindai_divergence: loop
+    sinkron tanpa `await` di event loop membekukan SELURUH server.
+
+    Dua kali calculate_ai_score_from_df per emiten (hari ini + kemarin,
+    untuk aturan dua hari) -- sekitar 15 ms per emiten. Itu yang membuat
+    pemindaian ini wajib dihangatkan pemanas, bukan dijalankan atas
+    permintaan pengunjung.
+    """
+    from core.ai_score import calculate_ai_score_from_df
+
+    keluar = []
+    for t in tickers:
+        df = (data or {}).get(t)
+        if df is None:
+            continue
+        try:
+            df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+            if len(df) < 60:
+                continue
+            ai = calculate_ai_score_from_df(df)
+            if not ai:
+                continue
+            r = _ringkasan_sinyal_teknikal(ai)
+            if r["overall"] not in ("BELI KUAT", "BELI", "JUAL KUAT"):
+                continue
+            kemarin = _ringkasan_kemarin(df)
+            dh = nilai_dua_hari(r["overall"], kemarin)
+            nilai = float((df["Close"] * df["Volume"]).tail(20).mean())
+            keluar.append({
+                "kode": t.replace(".JK", ""),
+                "vonis": r["overall"], "beli": r["beli"], "jual": r["jual"],
+                "netral": r["netral"],
+                "harga": round(float(ai.get("price") or 0)),
+                "rsi": ai.get("rsi"), "chg1": ai.get("change_1d"),
+                "chg5": ai.get("change_5d"), "skor": ai.get("score"),
+                "bertahan": dh["bertahan"],
+                "unggul_pct": dh["unggul_pct"],
+                "setara_kuat": dh["setara_kuat"],
+                "nilai_harian": round(nilai),
+                "likuid": nilai >= 1e9,
+            })
+        except Exception:
+            continue
+
+    # Yang BERTAHAN lebih dulu -- itu keranjang yang terukur paling kuat
+    # (+4,59%), dan menaruhnya di tengah daftar akan menyembunyikan hal
+    # terbaik yang punya halaman ini.
+    urut = {"BELI KUAT": 0, "BELI": 1, "JUAL KUAT": 2}
+    return sorted(keluar, key=lambda x: (not x["setara_kuat"],
+                                         urut.get(x["vonis"], 9),
+                                         not x["likuid"],
+                                         -(x["skor"] or 0)))
+
+
+async def _build_screener_vonis() -> dict:
+    """Bagian BERAT -- dipisah supaya bisa dipanggil pemanas cache DAN
+    dibungkus single-flight."""
+    from core.async_yf import async_download_many
+    from core.stock_data import load_tickers
+
+    tickers = load_tickers()
+    data = await async_download_many(tickers, period="1y", interval="1d")
+    items = await asyncio.to_thread(_pindai_vonis, tickers, data)
+    payload = _py({
+        "items": items,
+        "universe": len(tickers),
+        "beli_kuat": sum(1 for x in items if x["vonis"] == "BELI KUAT"),
+        "beli": sum(1 for x in items if x["vonis"] == "BELI"),
+        "jual_kuat": sum(1 for x in items if x["vonis"] == "JUAL KUAT"),
+        "bertahan": sum(1 for x in items if x["setara_kuat"]),
+        # Angka terukur ikut dikirim supaya layar dan bot memakai yang SAMA
+        # -- menuliskannya dua kali adalah cara mereka jadi berbeda.
+        "ukuran": {
+            "beli_kuat_pct": UNGGUL_VONIS["BELI KUAT"],
+            "beli_pct": UNGGUL_VONIS["BELI"],
+            "jual_kuat_pct": UNGGUL_VONIS["JUAL KUAT"],
+            "bertahan_pct": UNGGUL_BERTAHAN["BELI KUAT"],
+            "horizon_hari": 20, "n_episode": 23755,
+            "diukur": "2026-10-11",
+            # Diukur pada emiten LIKUID. Saham sepi ikut dipindai tapi
+            # ditandai -- angkanya tidak diukur di sana, dan memakainya
+            # seolah berlaku akan menjanjikan yang tidak diuji.
+            "diukur_pada": "emiten likuid",
+        },
+    })
+    _cache_set_durable(_SCREENER_VONIS_KEY, payload, ttl=_SCREENER_VONIS_TTL)
+    return payload
+
+
+@app.get("/api/screener-vonis")
+async def api_screener_vonis():
+    """Saham yang vonis Ringkasan Sinyalnya BELI KUAT / BELI / JUAL KUAT.
+
+    TIDAK PERNAH memindai atas permintaan pengunjung -- dua panggilan skor
+    AI per emiten di 793 emiten itu belasan detik, dan memindainya atas
+    permintaan satu orang membuat seluruh aplikasi tersendat. Pemanas
+    cache yang menanggungnya; cache dingin dijawab seketika dengan
+    penanda `menyiapkan`.
+    """
+    hangat = _cache_get(_SCREENER_VONIS_KEY)
+    if hangat:
+        return hangat
+    basi = _cache_get_stale(_SCREENER_VONIS_KEY)
+    if basi:
+        return {**basi, "basi": True}
+    return _py({"items": [], "universe": 0, "menyiapkan": True})
+
+
+# =========================
 # PEMULIHAN SETELAH JATUH (divergence RSI)
 # =========================
 # Aturannya + seluruh alasan angkanya ada di core/divergence.py. Yang di
@@ -8104,6 +8247,22 @@ _DORONG_SINYAL_KEY = "wa_dorong_sinyal_id"
 # Kode yang berpola terpantau pada pemindaian SEBELUMNYA. Dipakai menyaring
 # kedipan sesaat -- lihat catatan panjang di core.wa_dorong.saring_stabil.
 _DORONG_SM_SEBELUMNYA_KEY = "wa_dorong_sm_sebelumnya"
+_DORONG_VONIS_SEBELUMNYA_KEY = "wa_dorong_vonis_sebelumnya"
+
+# Vonis yang DIBERITAKAN otomatis. Sengaja cuma dua tingkat teratas:
+# empat vonis di bawahnya terukur berada dalam rentang +-0,25% dari
+# pasar, dan mengirim pemberitahuan ke HP orang untuk sesuatu yang
+# terukur tidak membedakan apa pun adalah cara tercepat membuat seluruh
+# pemberitahuan diabaikan.
+_DORONG_VONIS_TINGKAT = ("BELI KUAT", "BELI")
+
+# Hanya saham LIKUID yang diberitakan. Dua alasan, keduanya penting:
+# angka keunggulan yang dikutip di pesannya DIUKUR pada saham likuid dan
+# belum diuji di saham sepi, dan kabar tentang saham bernilai transaksi
+# puluhan juta sehari tidak bisa ditindaklanjuti -- pembacanya akan
+# menggerakkan harganya sendiri. Bisa dimatikan lewat env kalau penulis
+# memang mau semuanya.
+WA_DORONG_VONIS_LIKUID = os.getenv("WA_DORONG_VONIS_LIKUID", "1") != "0"
 
 
 def _wa_fmt_dorong_anomali(akumulasi: list, distribusi: list, total: int,
@@ -8252,6 +8411,108 @@ async def _dorong_sinyal_baru() -> bool:
     return True
 
 
+def _wa_fmt_dorong_vonis(items: list[dict], ukuran: dict) -> str:
+    """Pesan kiriman otomatis vonis. Satu baris per saham.
+
+    Dibuat ringkas dengan sengaja: penulis pernah menolak versi panjang
+    pendorong Smart Money ("semua nya kan ga dikit?"), dan pesan vonis
+    berpotensi lebih panjang lagi karena universe-nya 793 saham.
+    """
+    bertahan = [x for x in items if x.get("setara_kuat")]
+    biasa = [x for x in items if not x.get("setara_kuat")]
+    b = ["*\U0001f4ca VONIS BARU \u2014 RINGKASAN SINYAL*"]
+
+    if bertahan:
+        pct = (ukuran or {}).get("bertahan_pct")
+        b.append("")
+        # Desimal pakai KOMA. Seluruh aplikasi menulis "+4,59%", dan
+        # satu tempat yang menulis "+4.59%" terbaca seperti angka yang
+        # datang dari sistem lain.
+        pct_t = f"{pct:.2f}".replace(".", ",") if pct is not None else None
+        b.append("*Bertahan 2 hari* \u2014 keunggulan terukur terbesar"
+                 + (f" (+{pct_t}%)" if pct_t else "") + ":")
+        for it in bertahan:
+            b.append(f"\u2022 *{it['kode']}* {it['vonis']} \u00b7 "
+                     f"{_rp_ringkas(it.get('harga'))} \u00b7 "
+                     f"{it.get('beli')}/7 suara beli")
+    if biasa:
+        b.append("")
+        b.append("*Vonis hari ini:*")
+        for it in biasa:
+            b.append(f"\u2022 *{it['kode']}* {it['vonis']} \u00b7 "
+                     f"{_rp_ringkas(it.get('harga'))} \u00b7 "
+                     f"{it.get('beli')}/7 suara beli")
+
+    b.append("")
+    b.append("_Vonis dihitung dari 7 indikator (RSI, MACD, volume, skor AI, "
+             "%1 hari, %5 hari, tren MA50/200); muncul kalau 6 dari 7 "
+             "searah._")
+    if WA_DORONG_VONIS_LIKUID:
+        b.append("_Hanya saham likuid (nilai transaksi \u2265Rp1 M/hari)._")
+    b.append("_Bukan nasihat keuangan. Rata-rata terukur bukan janji \u2014 "
+             "tiap saham bisa jauh di atas atau di bawahnya._")
+    return "\n".join(b)
+
+
+async def _dorong_vonis() -> bool:
+    """Beritakan saham yang vonisnya BARU jadi BELI / BELI KUAT.
+
+    Membaca cache yang SUDAH dihangatkan pemanas (screener_vonis:v1),
+    tidak pernah memindai sendiri -- alasannya persis sama dengan
+    _dorong_anomali: memaksa pemindaian 793 saham dari dalam loop
+    pengirim cuma menambah satu tempat baru yang bisa menahan server.
+    """
+    from core.wa_dorong import (catat_terkirim, dalam_jam_kirim, kode_dari,
+                                pilih_belum_dikirim, saring_stabil)
+    from core.whatsapp_notify import _get_config, _set_config, send_wa_text
+
+    if not dalam_jam_kirim():
+        return False
+    payload = _cache_get(_SCREENER_VONIS_KEY) or _cache_get_stale(_SCREENER_VONIS_KEY)
+    if not payload:
+        return False
+
+    kandidat = [x for x in (payload.get("items") or [])
+                if isinstance(x, dict) and x.get("kode")
+                and x.get("vonis") in _DORONG_VONIS_TINGKAT
+                and (x.get("likuid") or not WA_DORONG_VONIS_LIKUID)]
+    # pilih_belum_dikirim/saring_stabil menuntut kunci `pola`. Vonisnya
+    # yang berperan sebagai pola di sini.
+    for x in kandidat:
+        x["pola"] = x["vonis"]
+
+    # PENYARING KESTABILAN, dan di sini ia lebih penting daripada di Smart
+    # Money. Vonis dihitung dari bar HARI INI yang belum selesai: selama
+    # sesi berjalan RSI, %1 hari, dan rasio volume masih bergerak, jadi
+    # saham bisa menyeberangi ambang 6-dari-7 lalu kembali lagi dalam
+    # hitungan menit. Pelajaran yang sama sudah mahal dua kali di proyek
+    # ini (sinyal NR7 dari bar berjalan, label Smart Money yang berkedip),
+    # dan di sini akibatnya paling sulit dibatalkan -- pesannya sudah ada
+    # di HP orang, dan jeda 24 jam membuat saham yang terlanjur diumumkan
+    # saat berkedip TIDAK bisa diumumkan lagi ketika vonisnya sungguhan
+    # di penutupan.
+    mentah = _get_config(_DORONG_VONIS_SEBELUMNYA_KEY) or ""
+    sebelumnya = {k for k in mentah.split(",") if k}
+    sekarang = kode_dari(kandidat)
+    # Ditulis LEBIH DULU, disengaja -- sama seperti _dorong_anomali:
+    # pembanding putaran berikutnya harus mencerminkan apa yang benar-
+    # benar terlihat sekarang, berhasil atau tidak pengirimannya.
+    _set_config(_DORONG_VONIS_SEBELUMNYA_KEY, ",".join(sorted(sekarang)))
+
+    # ruang="vonis" WAJIB -- default "sm" akan berbagi kunci dedup dengan
+    # pendorong Smart Money dan keduanya saling membungkam.
+    baru = pilih_belum_dikirim(saring_stabil(kandidat, sebelumnya),
+                               ruang="vonis")
+    if not baru:
+        return False
+
+    if not await send_wa_text(_wa_fmt_dorong_vonis(baru, payload.get("ukuran") or {})):
+        return False
+    # Dicatat HANYA sesudah terkirim -- lihat catatan di catat_terkirim().
+    catat_terkirim(baru, ruang="vonis", jenis="vonis_sinyal")
+    return True
+
+
 async def _wa_broadcast_loop():
     """Loop background: tiap WA_CHECK_INTERVAL_SECONDS, kirim digest harian
     SEKALI saja per hari kalender WIB, begitu jam sekarang sudah melewati
@@ -8294,6 +8555,10 @@ async def _wa_broadcast_loop():
                     await _dorong_sinyal_baru()
                 except Exception as e:
                     print(f"\u26a0\ufe0f dorong sinyal: {type(e).__name__}: {e}")
+                try:
+                    await _dorong_vonis()
+                except Exception as e:
+                    print(f"\u26a0\ufe0f dorong vonis: {type(e).__name__}: {e}")
         except Exception as e:
             print(f"⚠️ wa-broadcast-loop: {type(e).__name__}: {e}")
         await asyncio.sleep(WA_CHECK_INTERVAL_SECONDS)

@@ -132,8 +132,21 @@ def kode_dari(items: list[dict]) -> set:
             if isinstance(it, dict) and it.get("kode")}
 
 
-def _kunci_dorong(kode: str) -> str:
+def _kunci_dorong(kode: str, ruang: str = "sm") -> str:
     """Kunci dedup per EMITEN, bukan per emiten+pola.
+
+    `ruang` memisahkan ANTAR-PENDORONG, dan itu bukan hiasan. Sebelum
+    parameter ini ada, kuncinya "dorong:sm:BBCA" untuk semua pemakai --
+    sehingga begitu pendorong kedua (vonis Ringkasan Sinyal) memakai
+    fungsi yang sama, BBCA yang baru diumumkan Smart Money akan DIAM-DIAM
+    dibungkam di pendorong vonis selama 24 jam, dan sebaliknya. Dua kabar
+    yang berbeda tentang saham yang sama saling menelan tanpa jejak di
+    log mana pun.
+
+    Yang ingin dijawab penjaga ini adalah "apakah orang sudah diberi
+    tahu tentang HAL INI untuk saham ini hari ini" -- dan "hal ini"
+    berbeda per pendorong. Default "sm" dipertahankan supaya perilaku
+    dan catatan lama tidak bergeser.
 
     Sempat memuat polanya juga, dan itu salah begitu semua kategori ikut
     dikirim: SGER yang berpindah dari "Breakout Volume" ke "Siluman" dalam
@@ -144,11 +157,12 @@ def _kunci_dorong(kode: str) -> str:
     tentang saham ini hari ini", dan jawabannya tidak berubah karena
     labelnya bergeser.
     """
-    return f"dorong:sm:{(kode or '').upper()}"
+    return f"dorong:{ruang}:{(kode or '').upper()}"
 
 
 def pilih_belum_dikirim(items: list[dict],
-                        pola_didorong: set | None = None) -> list[dict]:
+                        pola_didorong: set | None = None,
+                        ruang: str = "sm") -> list[dict]:
     """Saham berpola terpantau yang BELUM diberitakan belakangan.
 
     Urutannya dipertahankan apa adanya dari pemanggil (sudah terurut
@@ -169,7 +183,7 @@ def pilih_belum_dikirim(items: list[dict],
         # pola_didorong None = semua kategori anomali ikut.
         if pola_didorong is not None and pola not in pola_didorong:
             continue
-        if sudah_pernah(GRUP, _kunci_dorong(kode), jam=JEDA_ULANG_JAM):
+        if sudah_pernah(GRUP, _kunci_dorong(kode, ruang), jam=JEDA_ULANG_JAM):
             continue
         keluar.append(it)
         if len(keluar) >= MAKS_PER_PESAN:
@@ -177,7 +191,8 @@ def pilih_belum_dikirim(items: list[dict],
     return keluar
 
 
-def catat_terkirim(items: list[dict]) -> None:
+def catat_terkirim(items: list[dict], ruang: str = "sm",
+                   jenis: str = "sm_anomali") -> None:
     """Dipanggil HANYA sesudah pengirimannya benar-benar berhasil.
 
     Mencatat lebih dulu akan membuat kabar hilang selamanya kalau WhatsApp
@@ -187,4 +202,4 @@ def catat_terkirim(items: list[dict]) -> None:
     for it in items or []:
         kode, pola = it.get("kode"), it.get("pola")
         if kode and pola:
-            catat_kirim(GRUP, kode, "sm_anomali", _kunci_dorong(kode))
+            catat_kirim(GRUP, kode, jenis, _kunci_dorong(kode, ruang))

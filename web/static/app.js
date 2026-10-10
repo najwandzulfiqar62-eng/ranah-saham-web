@@ -1224,6 +1224,7 @@ function setMode(m){
   else if(m==='bsjp')loadBsjp();
   else if(m==='harmonic')loadHarmonic();
   else if(m==='nr7')loadNr7();
+  else if(m==='vonis')loadVonis();
   else if(m==='filter')loadFilter(filterMode);
   else if(m==='fundamental')loadFundamentalScreen();
   else if(m==='custom'){
@@ -1623,6 +1624,79 @@ let mvMinPotensi = 0;
 // Tampilkan hanya yang 8/8 kriteria. Ini pilihan TAMPILAN di atas daftar yang
 // sudah disaring server (minimal 7/8), bukan saringan kedua yang bersaing.
 let mvPenuhSaja = false;
+
+/* ---------- SCREENER VONIS (Beli Kuat / Beli / Jual Kuat) ---------- */
+// Panel Ringkasan Sinyal di halaman Analisis sudah memberi vonis per saham,
+// tapi sampai sekarang vonis itu cuma bisa dilihat SATU saham sekali --
+// pengguna harus menebak dulu kode apa yang mau diperiksa. Screener ini
+// membalik arahnya: saham mana saja yang hari ini vonisnya ekstrem.
+//
+// SENGAJA HANYA TIGA KERANJANG, bukan tujuh. Empat vonis tengah (CENDERUNG
+// BELI, NETRAL, CENDERUNG JUAL, JUAL) terukur berada dalam rentang +-0,25%
+// dari pasar, artinya memajangnya sebagai "hasil saringan" berarti
+// menyajikan daftar yang tidak membedakan apa pun dari memilih acak.
+// Daftar semacam itu lebih berbahaya daripada daftar kosong karena
+// terlihat seperti pekerjaan yang sudah dilakukan.
+let vonisSaring = 'semua';
+async function loadVonis(){
+  const body=$('#uniBody');
+  body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Membaca vonis Ringkasan Sinyal\u2026</p>';
+  let d; try{d=await api('/api/screener-vonis')}catch(e){body.innerHTML=errBox(e.message);return}
+  if(d.menyiapkan){
+    body.innerHTML=`<section class="panel">${emptyState('Data sedang disiapkan di latar belakang. Halaman ini sengaja TIDAK memindai sendiri \u2014 menghitung vonis dua hari untuk 793 saham atas permintaan satu pengunjung akan membuat seluruh aplikasi tersendat. Coba lagi sebentar lagi.','clock')}</section>`;
+    return;
+  }
+  const u=d.ukuran||{}, semua=d.items||[];
+  const items=semua.filter(x=>
+    vonisSaring==='semua' ? true :
+    vonisSaring==='bertahan' ? x.setara_kuat :
+    x.vonis===vonisSaring);
+
+  const warna=v=>v==='JUAL KUAT'?'var(--bear)':'var(--bull)';
+  const tr=items.map(r=>{
+    const unggul=r.unggul_pct;
+    const tagBertahan=r.setara_kuat?' <span title="Vonisnya sama dua hari berturut-turut \u2014 terukur jauh lebih kuat daripada vonis sehari" style="font-size:9px;font-weight:700;color:var(--bull);border:1px solid var(--bull);border-radius:4px;padding:1px 5px;letter-spacing:.3px;white-space:nowrap">BERTAHAN 2H</span>':'';
+    const tagSepi=r.likuid?'':' <span title="Nilai transaksi harian di bawah Rp1 miliar. Angka keunggulan di panel ini DIUKUR pada saham likuid \u2014 belum diuji di sini." style="font-size:9px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:1px 5px;white-space:nowrap">SEPI</span>';
+    return `<tr data-k="${r.kode}" style="cursor:pointer">
+    <td><b>${r.kode}</b>${tagBertahan}${tagSepi}</td>
+    <td style="color:${warna(r.vonis)};font-weight:700;font-size:11.5px;white-space:nowrap">${r.vonis}</td>
+    <td style="font-size:11px" class="hide-xs"><span style="color:var(--bull)">${r.beli}</span> / <span style="color:var(--bear)">${r.jual}</span> <span class="muted">dari 7</span></td>
+    <td>${fmt(r.harga)}</td>
+    <td class="hide-xs">${r.rsi==null?'\u2013':fmt(r.rsi,1)}</td>
+    <td style="color:${(r.chg1||0)>=0?'var(--bull)':'var(--bear)'}">${r.chg1==null?'\u2013':(r.chg1>=0?'+':'')+fmt(r.chg1,2)+'%'}</td>
+    <td class="hide-xs" style="color:${(r.chg5||0)>=0?'var(--bull)':'var(--bear)'}">${r.chg5==null?'\u2013':(r.chg5>=0?'+':'')+fmt(r.chg5,2)+'%'}</td>
+    <td class="hide-xs">${r.skor==null?'\u2013':fmt(r.skor)}</td>
+    <td class="hide-xs muted" style="font-size:10.5px">${unggul==null?'\u2013':(unggul>=0?'+':'')+fmt(unggul,2)+'%'}</td></tr>`;
+  }).join('');
+
+  const chip=(k,t,n)=>`<button class="chip ${vonisSaring===k?'active':''}" data-vsar="${k}">${t} <span class="muted">${n}</span></button>`;
+  body.innerHTML=`<section class="panel">
+    <p class="insight muted" style="margin-bottom:12px">Vonis <b>Ringkasan Sinyal Teknikal</b> \u2014 panel yang sama persis dengan di halaman Analisis, dihitung untuk seluruh ${d.universe||0} saham IDX. Tujuh indikator memberi suara; vonis muncul kalau <b>6 dari 7</b> searah (kuat) atau <b>5 dari 7</b> (biasa).</p>
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px">
+      ${chip('semua','Semua',semua.length)}
+      ${chip('bertahan','Bertahan 2 hari',d.bertahan||0)}
+      ${chip('BELI KUAT','Beli Kuat',d.beli_kuat||0)}
+      ${chip('BELI','Beli',d.beli||0)}
+      ${chip('JUAL KUAT','Jual Kuat',d.jual_kuat||0)}
+    </div>
+    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:14px;font-size:11.5px;line-height:1.65">
+      <b>Yang sudah diukur</b> \u2014 ${(u.n_episode||0).toLocaleString('id-ID')} episode vonis, keunggulan rata-rata terhadap pasar setelah ${u.horizon_hari||20} hari bursa, pada ${u.diukur_pada||'emiten likuid'}:<br>
+      <span style="color:var(--bull)">Beli Kuat yang <b>bertahan dua hari</b>: ${(u.bertahan_pct>=0?'+':'')+fmt(u.bertahan_pct,2)}%</span> \u2014 keunggulan terbesar yang pernah diukur di aplikasi ini.<br>
+      Beli Kuat (sehari): ${(u.beli_kuat_pct>=0?'+':'')+fmt(u.beli_kuat_pct,2)}% &middot;
+      Beli: ${(u.beli_pct>=0?'+':'')+fmt(u.beli_pct,2)}% &middot;
+      <span style="color:var(--bear)">Jual Kuat: ${fmt(u.jual_kuat_pct,2)}%</span><br>
+      <span class="muted">Empat vonis tengah (Cenderung Beli, Netral, Cenderung Jual, Jual) sengaja <b>tidak ditampilkan</b>: terukur semuanya berada dalam rentang \u00b10,25% dari pasar, jadi menyaringnya tidak memberi informasi apa pun. Rata-rata ini bukan janji \u2014 masing-masing saham bisa jauh di atas atau di bawahnya.</span>
+    </div>
+    ${items.length?'':emptyState('Tidak ada saham dengan vonis ini hari ini. Vonis ekstrem menuntut 6 dari 7 indikator searah, jadi hari tanpa hasil itu wajar \u2014 bukan tanda ada yang rusak.')}
+    <div style="overflow-x:auto"><table class="ctable" id="vonisTabel"><thead><tr><th>Saham</th><th>Vonis</th><th class="hide-xs">Suara</th><th>Harga</th><th class="hide-xs">RSI</th><th>% Hari</th><th class="hide-xs">% 5 Hari</th><th class="hide-xs">Skor</th><th class="hide-xs">Rata2 unggul</th></tr></thead><tbody>${tr}</tbody></table></div>
+    <p class="muted" style="font-size:10.5px;margin-top:10px">${d.basi?'Data tersaji dari salinan terakhir (pembaruan terbaru belum selesai). ':''}Tap baris untuk analisis lengkap. Edukasi, bukan nasihat keuangan.</p>
+  </section>`;
+  body.querySelectorAll('[data-vsar]').forEach(b=>b.addEventListener('click',()=>{
+    vonisSaring=b.dataset.vsar; loadVonis();
+  }));
+  body.querySelectorAll('tr[data-k]').forEach(t=>t.addEventListener('click',()=>{route('analisis');analyze(t.dataset.k)}));
+  staggerRows(body.querySelector('#vonisTabel'), 12);
+}
 
 // NR7 + 52W High: kontraksi volatilitas tepat di area tertinggi 52 minggu.
 // Sampai sekarang teori ini cuma berjalan diam-diam sebagai pencatat sinyal --
@@ -5993,6 +6067,32 @@ const EDU_PANDUAN=[
  ],
  catatan:'Angka stop yang lebih besar akan terlihat lebih menakutkan di layar. Itu wajar — yang bertambah cuma angkanya, bukan risikonya, selama jumlah lotnya ikut menyesuaikan.'},
 
+{id:'audit',judul:'Membaca Audit Sinyal',menit:6,
+ ringkas:'Halaman paling jujur di aplikasi ini \u2014 dan yang paling mudah disalahbaca.',
+ langkah:[
+  {j:'Apa yang sebenarnya direkam',
+   d:'Setiap saham yang lolos ambang Top Pick dicatat <b>sebelum</b> hasilnya diketahui: tanggal, harga entry, stop loss, dan tiga target. Sesudah itu tidak ada yang bisa diubah. Inilah bedanya dengan \u201crekam jejak\u201d yang dipilih sesudah tahu hasilnya \u2014 yang kalah tetap ada di daftar ini, dan kamu bisa menyaringnya sendiri lewat chip <b>Kena SL</b>.'},
+  {j:'Delapan status, dan dua di antaranya bukan menang atau kalah',
+   d:'<b>Menunggu Entry</b> = sinyal tercatat tapi harganya belum pernah turun ke harga beli yang direncanakan; belum ada posisi. <b>Berjalan</b> = sudah terbeli, belum selesai. <b>TP1/TP2/TP Tercapai</b> = target tercapai. <b>Kena SL</b> = stop tersentuh.<br><br>Dua yang terakhir sering disalahbaca: <b>Kadaluarsa</b> = lewat 20 hari bursa tanpa pernah menyentuh TP, dan <b>Entry Tidak Tercapai</b> = harga belinya tidak pernah kesampaian. Keduanya <b>tidak dihitung menang maupun kalah</b> \u2014 yang kedua bahkan tidak pernah jadi posisi. Memasukkannya sebagai kekalahan akan menghukum sinyal yang tidak pernah kamu beli.'},
+  {j:'\u201cKena SL\u201d yang hasilnya untung bukan kesalahan data',
+   d:'Kalau kamu melihat <b>Untung Terkunci</b> atau <b>Tutup Impas</b> dengan warna hijau atau abu-abu, itu baris yang secara teknis ditutup oleh stop \u2014 tapi stopnya sudah <b>dinaikkan</b> lebih dulu. Sesudah TP1 tercapai, stop dipindah ke titik impas; sesudah TP2, naik lagi ke level TP1. Jadi \u201ckena stop\u201d di baris itu berarti keluar dengan untung yang sudah dikunci, bukan rugi. Labelnya dibaca dari hasil rupiahnya, bukan dari nama statusnya \u2014 justru supaya tidak terbaca seperti cacat data.'},
+  {j:'Win rate di sini punya definisi yang spesifik \u2014 ini definisinya',
+   d:'Menang dihitung <b>begitu TP1 tercapai</b>. TP2 dan TP3 bonus, bukan syarat. Dan sekali tercatat menang, tetap menang walau posisinya belakangan berbalik \u2014 karena pada titik itu kamu memang sudah bisa keluar untung. Pemenang TP1+ yang <b>masih berjalan</b> juga ikut dihitung.<br><br>Definisi ini penting karena definisi lain menghasilkan angka lain dari data yang <b>sama persis</b>. Kalau menang hanya dihitung saat posisi sudah ditutup tuntas, angkanya jatuh jauh. Bukan salah satu yang bohong \u2014 keduanya menjawab pertanyaan yang berbeda. Yang dijawab halaman ini: \u201cberapa sering sinyal ini sempat memberi kesempatan keluar untung?\u201d'},
+  {j:'Total Return BUKAN return portofolio',
+   d:'Angka itu penjumlahan persen per sinyal, <b>tanpa</b> bobot posisi dan <b>tanpa</b> bunga berbunga. Sepuluh sinyal +5% jadi \u201c+50%\u201d walaupun modalmu tidak mungkin berada di sepuluh saham sekaligus dengan porsi sama. Perlakukan ia sebagai ukuran <b>kualitas aturan</b>, bukan ramalan isi rekeningmu. Untuk yang kedua, pakai <b>Racik</b> yang memang menghitung lot dan risiko.'},
+  {j:'Equity Curve hanya memuat sinyal yang sudah selesai',
+   d:'Kurvanya sengaja tidak memasukkan pemenang TP1+ yang masih berjalan, walau mereka ikut di win rate. Alasannya: posisi yang belum ditutup belum punya hasil, dan menggambarnya di kurva akan mengubah rekaman jadi proyeksi. Tiap sinyal yang selesai dinilai di level TP tertinggi yang <b>terbukti</b> tercapai \u2014 bukan diasumsikan semuanya sampai TP3.'},
+  {j:'Perbandingan Antar Teori Entry: baca jumlah sampelnya dulu',
+   d:'Tiap teori (Top Pick, Smart Money, NR7 + 52W, Minervini \u00d7 Harmonic) diaudit terpisah supaya tidak tercampur jadi satu angka. Tapi teori yang baru berjalan beberapa minggu bisa menampilkan win rate 100% dari tiga sinyal \u2014 dan itu belum berarti apa-apa. Selalu baca \u201c(n selesai)\u201d di bawah angkanya. Teori <b>NR7 + 52W</b> diberi tanda <span style="font-size:9px;font-weight:700;color:#E8A13A;border:1px solid #E8A13A66;border-radius:4px;padding:1px 5px">HIGH RISK</span> karena stopnya ketat dan breakout-nya bisa gagal.'},
+  {j:'Satu asimetri yang perlu kamu tahu',
+   d:'Harga <b>entry</b> dianggap kesampaian kalau harga <b>terendah</b> hari itu menyentuhnya \u2014 realistis, karena order limitmu memang akan terisi. Tapi <b>TP dan SL</b> masih dinilai dari harga <b>penutupan</b>, bukan dari tertinggi/terendah intraday. Akibatnya: target yang tersentuh di tengah hari lalu ditutup di bawahnya <b>tidak</b> tercatat sebagai TP, dan stop yang tersentuh sesaat lalu pulih <b>tidak</b> tercatat sebagai SL. Jadi angka di halaman ini menggambarkan strategi \u201ccek sekali di penutupan\u201d, bukan strategi yang memantau layar sepanjang hari.'},
+  {j:'Riwayat Harian: untuk melihat kemarin, bukan untuk menilai hari ini',
+   d:'Panel bertanggal di atas menunjukkan yang selesai pada tanggal itu, plus posisi berjalan yang naik, turun, atau stabil dibanding hari sebelumnya. Riwayat hariannya baru mulai tercatat 7 Juli 2026, jadi tanggal sebelum itu memang kosong \u2014 bukan rusak. Kartu angka di atasnya <b>kumulatif sampai</b> tanggal tersebut, bukan hasil hari itu saja.'},
+  {j:'Yang halaman ini TIDAK bisa katakan',
+   d:'Tidak ada biaya broker, tidak ada selisih harga saat eksekusi, dan tidak ada ukuran posisi. Ia merekam seberapa baik <b>aturannya</b>, bukan seberapa baik hasil <b>transaksimu</b>. Hasil nyatamu akan lebih rendah \u2014 bukan karena rekamannya curang, tapi karena biaya itu nyata dan tidak diikutkan. Satu lagi: return yang terbaca aneh karena aksi korporasi (stock split, dividen besar) <b>dilewati</b>, bukan dianggap nol, supaya satu baris salah tidak menggeser seluruh rata-rata.'},
+ ],
+ catatan:'Kalau kamu cuma mau membaca satu hal dari halaman ini, baca <b>Perbandingan Antar Teori Entry</b> \u2014 beserta jumlah sampelnya. Di situlah terlihat teori mana yang benar-benar bekerja di data nyata, dan itu pertanyaan yang jauh lebih berguna daripada \u201cberapa win rate-nya\u201d.'},
+
 {id:'percaya',judul:'Angka mana yang boleh dipercaya',menit:5,
  ringkas:'Tidak semua yang ditampilkan aplikasi ini punya bukti yang sama kuat. Ini daftarnya.',
  langkah:[
@@ -6688,7 +6788,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v65';
+const APP_VERSION='v66';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
