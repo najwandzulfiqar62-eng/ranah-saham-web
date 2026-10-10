@@ -183,6 +183,71 @@ def test_ambang_sesuai_yang_dipakai_saat_mengukur():
     assert (TOLERANSI_BAHU, MIN_KEPALA_LEBIH_DALAM, MAKS_UMUR_BAR) == (0.35, 0.02, 30)
 
 
+def _pastikan_bukan_sumber_sinyal():
+    """Pola chart boleh DITAMPILKAN, tidak boleh MENYURUH.
+
+    Bedanya bukan soal kata: sinyal masuk signal_history, ikut dihitung
+    win rate, dan dikirim otomatis ke WhatsApp. Label cuma memberi tahu
+    bentuknya, lengkap dengan angka terukurnya, dan pengguna yang
+    menilai sendiri.
+
+    Pengukuran 11 Okt 2026 (790 emiten, jalan maju, per pola) memang
+    menemukan beberapa pola yang berarti -- Head & Shoulders tembus
+    -3,36% dan Segitiga Menaik tembus +3,24%. Tapi "berarti" belum tentu
+    "cukup untuk dijadikan sinyal": Inverse Head & Shoulders justru
+    -1,12%, yaitu pola bullish yang terukur BERLAWANAN dengan artinya.
+    Menyambungkan keseluruhan katalog ke jalur sinyal berarti ikut
+    mengirimkan yang itu.
+
+    Penjaga ini gagal kalau ada yang menyambungkannya ke pencatat sinyal
+    tanpa pengukuran baru per pola lebih dulu.
+    """
+    import ast
+    import pathlib
+    import re
+
+    akar = pathlib.Path(__file__).resolve().parent.parent
+
+    # 1. Modul pencatat sinyal & screener sama sekali tidak boleh
+    #    menyentuhnya.
+    for nama in ("core/signal_history.py", "core/screening_pro.py"):
+        f = akar / nama
+        if not f.exists():
+            continue
+        isi = f.read_text(encoding="utf-8")
+        assert "pola_chart" not in isi and "pola_katalog" not in isi, (
+            f"{nama} menyentuh modul pola -- itu jalur SINYAL, "
+            "dan pola belum diukur cukup untuk jadi sinyal.")
+
+    # 2. Di web/app.py pola hanya boleh dipakai untuk MENAMPILKAN.
+    #    Pemakaian yang sah: _pola_chart_payload (payload Analisis) dan
+    #    /api/ohlc (gambar di chart). Apa pun di luar itu dicurigai.
+    app = (akar / "web" / "app.py").read_text(encoding="utf-8")
+    # Dibaca sbg POHON SINTAKS, bukan sbg teks. Pencarian teks ikut
+    # menangkap kata di dalam komentar dan docstring -- penjaga ini
+    # sempat menyala gara-gara satu KALIMAT PENJELASAN yang kebetulan
+    # menyebut nama modulnya. Penjaga yang menyala karena kalimat akan
+    # dimatikan orang, lalu berhenti menjaga hal yang sungguhan.
+    pohon = ast.parse(app)
+    fungsi_pemakai, n_impor = set(), 0
+    for n in ast.walk(pohon):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in ast.walk(n):
+                if isinstance(d, ast.ImportFrom) and "pola_" in (d.module or ""):
+                    fungsi_pemakai.add(n.name)
+                    n_impor += 1
+    assert fungsi_pemakai <= {"_pola_chart_payload"}, (
+        f"modul pola diimpor di {sorted(fungsi_pemakai)} -- satu-satunya "
+        "jalur yang sah adalah _pola_chart_payload (tampilan).")
+    assert n_impor, "penjaga tidak menemukan impor apa pun; ia tidak menguji apa pun"
+
+    # 3. Dan yang paling penting: tidak boleh ada yang merekamnya sbg
+    #    sinyal. `source=` di signal_history menandai sumber sinyal.
+    for m in re.finditer(r"source\s*=\s*[\"']([A-Z_0-9]+)[\"']", app):
+        assert "POLA" not in m.group(1), (
+            f"pola direkam sbg sumber sinyal: {m.group(1)}")
+
+
 def test_modul_ini_TIDAK_dipakai_sebagai_sinyal():
     """Diukur: setiap varian IHS berkinerja DI BAWAH pasar (terbaik -0,43%,
     terburuk -7,42%). Memasangnya sebagai sinyal berarti mengirimi orang
@@ -190,17 +255,7 @@ def test_modul_ini_TIDAK_dipakai_sebagai_sinyal():
 
     Uji ini gagal kalau suatu hari ada yang menyambungkannya ke jalur
     sinyal tanpa mengukur ulang lebih dulu."""
-    import pathlib
-
-    akar = pathlib.Path(__file__).resolve().parent.parent
-    pemakai = []
-    for f in (akar / "web" / "app.py", akar / "core" / "signal_history.py",
-              akar / "core" / "screening_pro.py"):
-        if f.exists() and "pola_chart" in f.read_text(encoding="utf-8"):
-            pemakai.append(f.name)
-    assert not pemakai, (
-        f"core/pola_chart.py tersambung ke {pemakai} padahal pengukurannya "
-        "menunjukkan keunggulan NEGATIF. Ukur ulang dulu sebelum memasangnya.")
+    _pastikan_bukan_sumber_sinyal()
 
 
 # ===========================================================================
@@ -329,11 +384,4 @@ def test_bull_flag_juga_TIDAK_dipasang_sebagai_sinyal():
 
     Uji ini gagal kalau ia disambungkan ke jalur sinyal tanpa pengukuran
     baru yang menunjukkan kestabilannya."""
-    import pathlib
-
-    akar = pathlib.Path(__file__).resolve().parent.parent
-    pemakai = [f.name for f in (akar / "web" / "app.py",
-                                akar / "core" / "signal_history.py",
-                                akar / "core" / "screening_pro.py")
-               if f.exists() and "pola_chart" in f.read_text(encoding="utf-8")]
-    assert not pemakai, f"core/pola_chart.py tersambung ke {pemakai}"
+    _pastikan_bukan_sumber_sinyal()

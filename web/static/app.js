@@ -545,7 +545,9 @@ async function analyze(kode){
   </section>
   <div class="analysis-layout">
     <div class="analysis-main">
-      <section class="panel chart-panel"><p class="eyebrow">Grafik Interaktif</p><div id="chart"></div>
+      <section class="panel chart-panel"><p class="eyebrow">Grafik Interaktif</p>
+        <div id="polaChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+        <div id="chart"></div>
         <div id="phaseRibbon"></div>
         <div class="chart-meta"><span><span class="ma-dot" style="background:#C79A2A"></span>MA20 · <span class="ma-dot" style="background:#2FB57E"></span>MA50</span><span>Seret untuk zoom/geser</span></div></section>
       <section class="panel panel-primary"><p class="eyebrow">Tesis Cepat</p>
@@ -575,6 +577,7 @@ async function analyze(kode){
         </div>
       </section>
       ${_buildTechSummary(d)}
+      ${_buildPolaChart(d)}
       ${_buildBeliAman(d)}
       ${_buildKonsensus(d)}
       <section class="panel news" id="newsBox"><p class="eyebrow">Berita Terkait</p><div class="skel loadbar"></div></section>
@@ -691,6 +694,83 @@ function loadSmcCharts(kode,containerId,btnId){
 
 /* ---------- INTERACTIVE CHART ---------- */
 let _chartTimer=null;
+
+/* ---------- MENGGAMBAR POLA DI ATAS CANDLE ---------- */
+// Seri garis yang dipasang harus DILEPAS sebelum menggambar ulang.
+// Kalau tidak, tiap ganti pola menumpuk seri baru di atas yang lama dan
+// chartnya makin penuh garis hantu -- kelas bug yang sudah pernah
+// membuat Audit Sinyal berat (instance chart bocor karena tak pernah
+// dibersihkan sebelum render ulang).
+let _polaSeri=[], _polaAktif=0, _polaData=[];
+const _POLA_GARIS_WARNA={naik:'#2FB57E',turun:'#E0566B',penerusan:'#C79A2A'};
+function _hapusPolaSeri(){
+  for(const sr of _polaSeri){ try{chartObj.removeSeries(sr)}catch{} }
+  _polaSeri=[];
+}
+function _gambarPola(idx){
+  if(!chartObj||!_polaData.length)return;
+  _hapusPolaSeri();
+  _polaAktif=Math.max(0,Math.min(idx,_polaData.length-1));
+  const p=_polaData[_polaAktif];
+  const w=_POLA_GARIS_WARNA[p.arah]||'#8593AC';
+  for(const g of (p.garis||[])){
+    if(!g.titik||g.titik.length<2)continue;
+    // Titik diurutkan & dibuat unik per tanggal: lightweight-charts
+    // MENOLAK data yang tidak menaik secara waktu, dan penolakannya
+    // melempar -- satu garis cacat akan menghapus seluruh chart.
+    const seen=new Set(); const data=[];
+    for(const q of g.titik.slice().sort((a,b)=>a.t<b.t?-1:1)){
+      if(seen.has(q.t))continue; seen.add(q.t);
+      data.push({time:q.t,value:q.p});
+    }
+    if(data.length<2)continue;
+    try{
+      const sr=chartObj.addLineSeries({color:w,lineWidth:2,lineStyle:2,
+        priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      sr.setData(data); _polaSeri.push(sr);
+    }catch(e){ console.warn('pola: garis gagal digambar',g.nama,e) }
+  }
+  // Titik berlabel ditempel sbg penanda di seri garis tak terlihat --
+  // supaya labelnya ikut bergerak saat chart digeser/zoom.
+  const berlabel=(p.titik||[]).filter(q=>q.label);
+  if(berlabel.length){
+    try{
+      const sr=chartObj.addLineSeries({color:'rgba(0,0,0,0)',lineWidth:1,
+        priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+      const seen=new Set(); const data=[];
+      for(const q of berlabel.slice().sort((a,b)=>a.t<b.t?-1:1)){
+        if(seen.has(q.t))continue; seen.add(q.t);
+        data.push({time:q.t,value:q.p});
+      }
+      sr.setData(data);
+      sr.setMarkers(data.map((q,i)=>({
+        time:q.time, position:p.arah==='turun'?'aboveBar':'belowBar',
+        color:w, shape:'circle', text:berlabel[i]?berlabel[i].label:''})));
+      _polaSeri.push(sr);
+    }catch(e){ console.warn('pola: penanda gagal',e) }
+  }
+  _renderPolaChips();
+}
+function _renderPolaChips(){
+  const box=$('#polaChips'); if(!box)return;
+  if(!_polaData.length){ box.innerHTML=''; return }
+  box.innerHTML=`<span class="muted" style="font-size:11px;align-self:center;margin-right:2px">Pola:</span>`
+    + _polaData.map((p,i)=>{
+        const w=_POLA_GARIS_WARNA[p.arah]||'#8593AC';
+        const on=i===_polaAktif;
+        return `<button class="chip ${on?'active':''}" data-pola="${i}"
+          style="${on?`border-color:${w};color:${w}`:''}"
+          title="${p.fase==='TEMBUS'?'Sudah menembus level kuncinya':'Bentuknya lengkap, belum menembus'}">
+          ${p.nama} <span class="muted">${p.fase==='TEMBUS'?'tembus':'terbentuk'}</span></button>`;
+      }).join('')
+    + `<button class="chip ${_polaAktif<0?'active':''}" data-pola="-1">Sembunyikan</button>`;
+  box.querySelectorAll('[data-pola]').forEach(b=>b.addEventListener('click',()=>{
+    const i=Number(b.dataset.pola);
+    if(i<0){ _hapusPolaSeri(); _polaAktif=-1; _renderPolaChips(); }
+    else _gambarPola(i);
+  }));
+}
+
 async function drawChart(kode){
   let o; try{o=await api('/api/ohlc/'+encodeURIComponent(kode))}catch{ $('#chart').innerHTML='<p class="muted" style="padding:20px">Grafik tidak tersedia.</p>';return }
   const cont=$('#chart'); if(!cont||!window.LightweightCharts)return;
@@ -709,6 +789,10 @@ async function drawChart(kode){
   vol.setData(o.volume);
   chartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma20);
   chartObj.addLineSeries({color:'#2FB57E',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma50);
+  // Pola digambar SEBELUM fitContent supaya sumbu waktunya sudah memuat
+  // seluruh rentang polanya saat chart dirapikan.
+  _polaSeri=[]; _polaData=(o.pola||[]).filter(p=>(p.garis||[]).length);
+  if(_polaData.length) _gambarPola(0); else _renderPolaChips();
   chartObj.timeScale().fitContent();
   new ResizeObserver(()=>{if(chartObj)chartObj.applyOptions({width:cont.clientWidth})}).observe(cont);
   renderPhaseRibbon(o.phases);
@@ -5564,6 +5648,73 @@ function _buildBeliAman(d){
    berbeda akan berbeda -- Stockbit menyebut MTEL avg 644 dari 31
    rekomendasi, Yahoo 631 dari 15 -- dan tanpa jumlahnya, perbedaan itu
    jadi misteri yang membuat orang mengira salah satunya salah. */
+/* ---------- POLA CHART + FASENYA ---------- */
+// Menjawab "emiten ini sedang dalam pola apa", bukan "beli atau jual".
+// Bedanya penting: pola chart di aplikasi ini DIUKUR satu per satu, dan
+// sebagian terukur tidak memberi keunggulan apa pun. Menyajikannya
+// sebagai saran beli akan menjual sesuatu yang kita sendiri sudah tahu
+// tidak berisi.
+const _POLA_WARNA={naik:'var(--bull)',turun:'var(--bear)',penerusan:'var(--gold)'};
+const _POLA_ARAH={naik:'BULLISH',turun:'BEARISH',penerusan:'IKUT TEMBUS'};
+function _buildPolaChart(d){
+  const pol=d.pola_chart;
+  if(!Array.isArray(pol)) return '';
+  if(!pol.length){
+    return `<section class="panel" style="margin-top:10px">
+      <p class="eyebrow">Pola Chart</p>
+      <p class="muted" style="font-size:12.5px;line-height:1.65;margin-top:6px">
+        Tidak ada pola chart klasik yang sedang berlaku di saham ini.
+        <b>Itu keadaan yang normal</b>, bukan tanda ada yang rusak \u2014 pola
+        baku hanya muncul sesekali, dan memaksa setiap saham punya pola
+        berarti menamai sesuatu yang sebenarnya cuma gerak biasa.</p>
+    </section>`;
+  }
+  const baris=pol.map(p=>{
+    const w=_POLA_WARNA[p.arah]||'var(--muted)';
+    const tembus=p.fase==='TEMBUS';
+    // Angka terukur ditulis apa adanya, termasuk yang negatif dan yang
+    // belum ada. "Belum diukur" bukan nol -- nol itu klaim.
+    let ukur;
+    if(p.unggul_pct==null){
+      ukur=`<span class="muted">belum diukur</span>`;
+    }else{
+      const baik=p.unggul_pct>0;
+      ukur=`<b style="color:${baik?'var(--bull)':'var(--bear)'}">${baik?'+':''}${fmt(p.unggul_pct,2)}%</b>
+        <span class="muted">vs pasar, 20 hari \u00b7 ${p.n_ukur} kejadian${p.pct_positif!=null?` \u00b7 ${fmt(p.pct_positif,0)}% berakhir naik`:''}</span>`;
+    }
+    return `<div style="border:1px solid var(--line);border-left:3px solid ${w};border-radius:9px;padding:11px 13px;margin-bottom:9px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <b style="font-size:13.5px">${p.nama}</b>
+        <span style="font-size:9px;font-weight:700;color:${w};border:1px solid ${w};border-radius:4px;padding:1px 5px;letter-spacing:.3px">${_POLA_ARAH[p.arah]||''}</span>
+        <span style="font-size:9px;font-weight:700;color:${tembus?'var(--bull)':'var(--muted)'};border:1px solid ${tembus?'var(--bull)':'var(--line)'};border-radius:4px;padding:1px 5px;letter-spacing:.3px"
+          title="${tembus?'Harga sudah menutup melewati level kuncinya \u2014 pola dianggap terkonfirmasi.':'Bentuknya sudah lengkap tapi harga BELUM menembus level kuncinya. Sebagian besar pola tidak pernah menembus.'}">${p.fase}</span>
+        <span class="muted" style="font-size:10.5px;margin-left:auto">${p.keluarga}</span>
+      </div>
+      <div style="font-size:11.5px;margin-top:7px;line-height:1.6">
+        Level kunci <b style="font-family:'JetBrains Mono',monospace">${_rpRingkas?_rpRingkas(p.level_kunci):'Rp'+fmt(p.level_kunci)}</b>
+        ${p.potensi_pct!=null?` \u00b7 tinggi pola ${fmt(p.potensi_pct,1)}%`:''}
+        ${p.tanggal_kunci?` \u00b7 terbentuk ${p.tanggal_kunci}`:''}
+      </div>
+      <div style="font-size:11.5px;margin-top:5px">${ukur}</div>
+      ${p.arti?`<p class="muted" style="font-size:11px;margin-top:7px;line-height:1.6">${p.arti}</p>`:''}
+    </div>`;
+  }).join('');
+  return `<section class="panel" style="margin-top:10px">
+    <p class="eyebrow">Pola Chart</p>
+    <p class="muted" style="font-size:11.5px;line-height:1.6;margin:4px 0 11px">
+      Pola klasik yang sedang berlaku pada bar terakhir, beserta <b>fasenya</b>.
+      <b>TERBENTUK</b> = bentuknya lengkap tapi belum menembus level kuncinya;
+      <b>TEMBUS</b> = sudah menembus. Pembedaan ini penting: sebagian besar
+      bentuk yang terlihat seperti pola tidak pernah dikonfirmasi.</p>
+    ${baris}
+    <p class="muted" style="font-size:10.5px;margin-top:4px;line-height:1.6">
+      Angka keunggulan diukur jalan-maju di seluruh IDX selama dua tahun,
+      dihitung <b>per pola</b> (bukan per hari) supaya satu pola yang bertahan
+      lama tidak terhitung berkali-kali. Rata-rata bukan janji. Edukasi, bukan
+      nasihat keuangan.</p>
+  </section>`;
+}
+
 function _buildKonsensus(d){
   const k = d.konsensus;
   if(!k || !k.target_rata2) return '';
@@ -6818,7 +6969,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v67';
+const APP_VERSION='v69';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

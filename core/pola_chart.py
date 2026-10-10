@@ -73,6 +73,14 @@ class IHS:
     harga_kepala: float
     harga_bahu_kanan: float
     neckline: float           # pada bar terakhir (garisnya boleh miring)
+    # Dua jangkar neckline, untuk MENGGAMBAR garisnya. `neckline` di atas
+    # cuma nilainya pada bar terakhir: cukup untuk menilai tembus, tidak
+    # cukup untuk menggambar. Garis mendatar di nilai itu akan keliru
+    # setiap kali neckline-nya miring -- dan miring itu lumrah.
+    tanggal_neck1: str
+    harga_neck1: float
+    tanggal_neck2: str
+    harga_neck2: float
     harga_kini: float
     umur_bar: int             # sejak bahu kanan
     tembus: bool              # sudah menutup di atas neckline?
@@ -155,7 +163,10 @@ def cari_ihs(kode: str, tanggal: list, tinggi: list, rendah: list,
         tanggal_bahu_kiri=str(tanggal[kiri]), tanggal_kepala=str(tanggal[kepala]),
         tanggal_bahu_kanan=str(tanggal[kanan]),
         harga_bahu_kiri=hk, harga_kepala=hh, harga_bahu_kanan=hn,
-        neckline=round(garis, 2), harga_kini=kini, umur_bar=umur,
+        neckline=round(garis, 2),
+        tanggal_neck1=str(tanggal[i1]), harga_neck1=float(tinggi[i1]),
+        tanggal_neck2=str(tanggal[i2]), harga_neck2=float(tinggi[i2]),
+        harga_kini=kini, umur_bar=umur,
         tembus=kini > garis,
         potensi_pct=round(tinggi_pola / garis * 100, 2),
     )
@@ -216,6 +227,12 @@ class Wedge:
     tanggal_pivot_akhir: str    # pivot terakhir yang membentuknya
     garis_atas: float          # nilai pada bar terakhir
     garis_bawah: float
+    # Nilai kedua garis di bar MULAI. Dengan ini garisnya bisa digambar
+    # sebagai dua ruas lurus tanpa pembacanya perlu menghitung ulang
+    # kemiringan -- dan tanpa risiko ia menghitungnya dengan satuan yang
+    # berbeda (kemiringan di bawah disimpan sbg PERSEN per bar).
+    garis_atas_awal: float
+    garis_bawah_awal: float
     kemiringan_atas: float     # % harga per bar
     kemiringan_bawah: float
     penyempitan_pct: float     # berapa persen lebarnya menyusut
@@ -238,7 +255,24 @@ class Wedge:
         (10 setup sempat terhitung 80 kejadian). Ia terulang karena
         penandanya ditulis ulang dari nol, bukan dipakai bersama.
         """
-        return f"{self.kode}:wedge:{self.tanggal_mulai}:{self.tanggal_pivot_akhir}"
+        # `tanggal_mulai` SENGAJA TIDAK ikut, walau dulu ikut.
+        #
+        # Ia diambil dari pivot tertua DI DALAM JENDELA BERGULIR
+        # (akhir - JENDELA_WEDGE). Begitu jendelanya maju satu hari,
+        # pivot tertua bisa keluar dan tanggal_mulai berganti -- padahal
+        # wedge-nya sama persis. Penandanya ikut berganti, dan satu
+        # wedge terhitung sebagai beberapa kejadian.
+        #
+        # Ini jebakan penggelembungan n yang SAMA yang sudah ditutup di
+        # core/divergence.py dan di BullFlag, muncul lagi dengan samaran
+        # baru: dulu yang menyusup adalah tanggal PEMINDAIAN, sekarang
+        # tepi jendela. Keduanya berubah tanpa polanya berubah.
+        #
+        # Pivot TERAKHIR aman: ia tidak pernah keluar jendela selama
+        # polanya masih berlaku (MAKS_UMUR_WEDGE jauh lebih pendek dari
+        # JENDELA_WEDGE), dan dua wedge berbeda di emiten yang sama
+        # mustahil berbagi pivot terakhir.
+        return f"{self.kode}:wedge:{self.tanggal_pivot_akhir}"
 
 
 def cari_falling_wedge(kode: str, tanggal: list, tinggi: list, rendah: list,
@@ -297,6 +331,8 @@ def cari_falling_wedge(kode: str, tanggal: list, tinggi: list, rendah: list,
         tanggal_mulai=str(tanggal[mulai]), tanggal_akhir=str(tanggal[akhir]),
         tanggal_pivot_akhir=str(tanggal[pivot_akhir]),
         garis_atas=round(atas_kini, 2), garis_bawah=round(bawah_kini, 2),
+        garis_atas_awal=round(ma * mulai + ca, 2),
+        garis_bawah_awal=round(mb * mulai + cb, 2),
         kemiringan_atas=round(ma / atas_kini * 100, 4),
         kemiringan_bawah=round(mb / atas_kini * 100, 4),
         penyempitan_pct=round(penyempitan * 100, 1),

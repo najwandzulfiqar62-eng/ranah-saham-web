@@ -2062,11 +2062,62 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     }
 
 
+def _pola_chart_payload(kode: str, df) -> list:
+    """Pola chart yang sedang berlaku + angka terukurnya.
+
+    DIPANGGIL DARI DALAM WORKER THREAD (lihat _hitung di
+    _analyze_payload). Ongkosnya diukur: sekitar 2 ms per emiten, jadi
+    ia TIDAK menambah unduhan apa pun -- datanya sudah di tangan.
+
+    Angka keunggulan ditempelkan di sini, bukan di core/pola_katalog.py,
+    supaya modul pendeteksi tetap cuma soal BENTUK. Pola yang belum
+    pernah diukur sengaja mengirim unggul_pct None, dan layar
+    menuliskannya "belum diukur" -- bukan nol, karena nol adalah klaim
+    dan "tidak tahu" bukan.
+    """
+    try:
+        from core.pola_katalog import deteksi
+        from core.pola_ukur import UNGGUL_POLA, keterangan
+    except Exception:
+        return []
+    try:
+        d = df.tail(220)
+        tgl = [str(x)[:10] for x in d.index]
+        pol = deteksi(kode, tgl, d["High"].tolist(), d["Low"].tolist(),
+                      d["Close"].tolist())
+    except Exception:
+        return []
+
+    keluar = []
+    for p in pol:
+        u = UNGGUL_POLA.get((p.nama, p.fase))
+        keluar.append({
+            "nama": p.nama, "keluarga": p.keluarga, "arah": p.arah,
+            "fase": p.fase, "level_kunci": p.level_kunci,
+            "harga_kini": p.harga_kini, "umur_bar": p.umur_bar,
+            "potensi_pct": p.potensi_pct,
+            "tanggal_mulai": p.tanggal_mulai, "tanggal_kunci": p.tanggal_kunci,
+            "unggul_pct": None if u is None else u.get("unggul_pct"),
+            "n_ukur": None if u is None else u.get("n"),
+            "pct_positif": None if u is None else u.get("pct_positif"),
+            "arti": keterangan(p.nama),
+            # Bahan gambar untuk chart (lihat /api/ohlc).
+            "titik": list(p.titik or []), "garis": list(p.garis or []),
+        })
+    return keluar
+
+
 async def _analyze_payload(kode: str):
     """Bangun payload analisis untuk satu kode (dipakai /api/analyze &
     /api/compare). Mengembalikan dict atau melempar HTTPException."""
     kode = _norm_kode(kode)
-    cache_key = f"analyze:{kode}"
+    # v2 sejak pola chart ikut di payload. Kuncinya SENGAJA dinaikkan,
+    # bukan dibiarkan: menambah medan tanpa menaikkan versi berarti
+    # server yang sudah punya cache lama akan menyajikan payload TANPA
+    # medan itu sampai TTL-nya habis -- dan gejalanya bukan error,
+    # melainkan panel yang diam-diam kosong untuk sebagian pengunjung.
+    # Kelas bug ini sudah tercatat di memori proyek.
+    cache_key = f"analyze:v2:{kode}"
     cached = _cache_get(cache_key)
 
     if cached is None:
@@ -2087,12 +2138,13 @@ async def _analyze_payload(kode: str):
                 return None
             # RINGKASAN CEPAT (badge di halaman Analisis, dipakai ulang
             # /api/insight -- lihat _compute_ringkasan_cepat)
-            return ai_l, build_smc_summary(df), _compute_ringkasan_cepat(df, ai_l)
+            return (ai_l, build_smc_summary(df), _compute_ringkasan_cepat(df, ai_l),
+                    _pola_chart_payload(kode, df))
 
         hasil_hitung = await asyncio.to_thread(_hitung)
         if hasil_hitung is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
-        ai, smc, ringkasan = hasil_hitung
+        ai, smc, ringkasan, pola_chart = hasil_hitung
         # Vonis KEMARIN dihitung di worker thread -- ia memanggil
         # calculate_ai_score_from_df sekali lagi (7,7 ms), dan loop
         # sinkron di event loop membekukan seluruh server.
@@ -2129,6 +2181,12 @@ async def _analyze_payload(kode: str):
             "ringkasan_kemarin": _rk_analyze,
             "dua_hari": nilai_dua_hari(
                 _ringkasan_sinyal_teknikal(ai)["overall"], _rk_analyze),
+            # Pola chart klasik + FASE-nya (lihat core/pola_katalog.py).
+            # Dihitung di dalam _hitung() -- yaitu di worker thread, bukan
+            # di event loop -- karena ia loop Python murni, dan loop Python
+            # murni di event loop menahan SELURUH server, bukan cuma
+            # halaman ini.
+            "pola_chart": pola_chart,
             # Konsensus analis diambil di luar _hitung() karena ia memanggil
             # jaringan (Yahoo .info, 1-2 detik) sedangkan _hitung() jalan di
             # worker thread untuk kerja CPU. Mencampurnya berarti thread itu
@@ -2177,7 +2235,34 @@ async def ohlc(kode: str, days: int = 140):
         raise HTTPException(502, "Gagal mengambil data harga.")
     if df is None or len(df) < 50:
         raise HTTPException(404, "Data tidak cukup.")
-    df = df.tail(max(days, 60)).copy()
+
+    # POLA CHART dideteksi pada data PENUH (butuh sampai 220 bar), bukan
+    # pada potongan yang ditampilkan -- kalau dideteksi pada potongan,
+    # pola yang membentang lebih panjang dari jendela chart tidak akan
+    # pernah ketemu, dan diamnya terbaca seperti "saham ini tidak punya
+    # pola" padahal cuma jendelanya kependekan.
+    pola = _pola_chart_payload(label, df)
+
+    # Jendela candle DIPERPANJANG kalau polanya mulai lebih awal. Tanpa
+    # ini garis polanya terpotong di tepi kiri chart -- dan garis yang
+    # terpotong separuh lebih menyesatkan daripada tidak digambar, karena
+    # kemiringan yang terlihat bukan kemiringan yang sebenarnya.
+    perlu = days
+    if pola:
+        tgl_awal = min((p.get("tanggal_mulai") or "9999") for p in pola)
+        try:
+            idx = [str(x)[:10] for x in df.index]
+            if tgl_awal in idx:
+                # +8 bar jeda nafas di kiri supaya awal polanya tidak
+                # menempel persis di tepi.
+                perlu = max(perlu, len(idx) - idx.index(tgl_awal) + 8)
+        except Exception:
+            pass
+    # Dibatasi: chart yang terlalu panjang jadi tidak terbaca di layar HP,
+    # dan pola yang butuh lebih dari ini memang terlalu tua untuk berguna.
+    perlu = min(perlu, 320)
+
+    df = df.tail(max(perlu, 60)).copy()
     ma20 = df["Close"].rolling(20).mean()
     ma50 = df["Close"].rolling(50).mean()
     candles, vol, m20, m50 = [], [], [], []
@@ -2220,8 +2305,21 @@ async def ohlc(kode: str, days: int = 140):
                         "color": "rgba(47,181,126,.5)" if lp >= op else "rgba(224,86,107,.5)"})
         last_price = lp
         realtime = True
+    # Koordinat pola DIPANGKAS ke rentang yang benar-benar tergambar.
+    # lightweight-charts akan memperlebar sumbu waktunya sendiri kalau
+    # diberi titik di luar rentang candle, sehingga chartnya mengecil dan
+    # candlenya jadi serapat benang -- gejala yang terlihat seperti chart
+    # rusak, bukan seperti pola yang kepanjangan.
+    tgl_pertama = candles[0]["time"] if candles else None
+    if tgl_pertama and pola:
+        for p in pola:
+            p["titik"] = [q for q in (p.get("titik") or [])
+                          if q["t"] >= tgl_pertama]
+            p["garis"] = [g for g in (p.get("garis") or [])
+                          if all(q["t"] >= tgl_pertama for q in g["titik"])]
+
     return {"kode": label, "candles": candles, "volume": vol, "ma20": m20, "ma50": m50,
-            "phases": detect_phases(df),
+            "phases": detect_phases(df), "pola": pola,
             "last_price": last_price, "realtime": realtime, "as_of": now_jkt.strftime("%H:%M")}
 
 
