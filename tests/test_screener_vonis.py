@@ -89,8 +89,10 @@ def test_cache_hangat_tidak_ditandai_basi(monkeypatch):
 def test_kunci_cache_berversi():
     """Kunci tanpa versi = bentuk payload berubah, kolom diam-diam kosong
     sesudah deploy, dan TIDAK ada error yang muncul di mana pun."""
-    assert app_module._SCREENER_VONIS_KEY == "screener_vonis:v1"
-    assert ":v" in app_module._SCREENER_VONIS_KEY
+    import re
+    # ADANYA versi yang dikunci, bukan angkanya -- mengunci "v1" membuat
+    # tes gagal tepat ketika versinya dinaikkan dengan BENAR.
+    assert re.fullmatch(r"screener_vonis:v\d+", app_module._SCREENER_VONIS_KEY)
 
 
 def test_pemanas_cache_menghangatkan_screener_vonis():
@@ -163,7 +165,7 @@ def test_yang_bertahan_dua_hari_diurut_paling_atas():
     items = [_it("AAAA", "BELI KUAT", setara=False),
              _it("BBBB", "BELI", setara=True),
              _it("CCCC", "JUAL KUAT", setara=False)]
-    urut = {"BELI KUAT": 0, "BELI": 1, "JUAL KUAT": 2}
+    urut = {"BELI": 0, "BELI KUAT": 1, "JUAL KUAT": 2}
     hasil = sorted(items, key=lambda x: (not x["setara_kuat"],
                                          urut.get(x["vonis"], 9),
                                          not x["likuid"],
@@ -186,7 +188,10 @@ def test_angka_terukur_dikirim_dari_satu_sumber():
     adalah cara mereka jadi berbeda tanpa ada yang sadar."""
     src = inspect.getsource(app_module._build_screener_vonis)
     assert 'UNGGUL_VONIS["BELI KUAT"]' in src
-    assert 'UNGGUL_BERTAHAN["BELI KUAT"]' in src
+    # Keranjang terkuat kini BELI yang bertahan, bukan BELI KUAT --
+    # yang dikunci adalah ia MENGAMBIL dari tabel terukur, bukan
+    # menuliskan angkanya sendiri.
+    assert 'UNGGUL_BERTAHAN[' in src
 
 
 # ---------------------------------------------------------------------------

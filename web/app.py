@@ -2107,9 +2107,19 @@ _SINYAL_CHART_TTL = int(os.getenv("SINYAL_CHART_TTL", "3600"))
 # di sini berarti menempelkan label yang mengukur aturan BERBEDA dari
 # yang digambar. Diisi dari pengukuran jalan-maju tersendiri.
 UNGGUL_SINYAL_CHART: dict[str, float | None] = {
-    "BELI KUAT": None, "JUAL KUAT": None}
+    "BELI": 2.88, "BELI KUAT": 0.81,
+    "JUAL": -0.87, "JUAL KUAT": -0.73}
 N_SINYAL_CHART: dict[str, int | None] = {
-    "BELI KUAT": None, "JUAL KUAT": None}
+    "BELI": 911, "BELI KUAT": 1310,
+    "JUAL": 2445, "JUAL KUAT": 1838}
+
+# Vonis yang MEMICU segitiga di chart. Sengaja mencakup BELI/JUAL, bukan
+# cuma tingkat teratas: terukur, BELI bertahan (+2.88%, n=911)
+# tiga setengah kali lebih baik daripada BELI KUAT bertahan
+# (+0.81%, n=1,310). Memakai cuma tingkat teratas berarti
+# membuang sinyal yang justru terbaik hanya karena namanya terdengar
+# lebih meyakinkan.
+VONIS_SINYAL_CHART = ("BELI KUAT", "BELI", "JUAL", "JUAL KUAT")
 
 
 def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
@@ -2127,13 +2137,17 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
     berubah. Itu yang ditandai di sini, dan ia memisahkan dirinya sendiri
     -- keadaan ekstrem jarang, jadi segitiganya memang berjauhan.
 
-    SYARAT BERTAHAN DUA HARI, dan di situlah akurasinya. Terukur, vonis
-    yang baru muncul sehari jauh lebih lemah daripada yang bertahan:
-    BELI KUAT +1,11% sehari menjadi +4,59% kalau masih BELI KUAT
-    keesokan harinya (n=398) -- empat kali lipat. Satu hari bisa
-    kebetulan; dua hari berturut-turut lebih sulit kebetulan. Harganya:
-    sinyalnya terlambat satu hari. Itu pertukaran yang disengaja, dan
-    angkanya yang memutuskan.
+    SYARAT BERTAHAN DUA HARI, dan di situlah akurasinya. Terukur di
+    786 emiten dengan dasar pembanding setanggal, vonis yang bertahan
+    ke hari kedua jauh lebih kuat daripada yang baru muncul sehari --
+    di KEDUA sisi:
+
+        BELI muncul  +0,80%  ->  BELI bertahan  +2,88%  (n=911)
+        JUAL muncul  -0,67%  ->  JUAL bertahan  -0,87%  (n=2.445)
+
+    Satu hari bisa kebetulan; dua hari berturut-turut lebih sulit
+    kebetulan. Harganya: sinyalnya terlambat satu hari. Itu pertukaran
+    yang disengaja, dan angkanya yang memutuskan.
 
     HANYA EMPAT VONIS TENGAH YANG DIABAIKAN -- terukur mereka berada
     dalam rentang +-0,25% dari pasar, jadi menggambar segitiga untuk
@@ -2148,7 +2162,7 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
     dirinya tiap 30 detik, dan menghitung ulang 170 bar tiap kali berarti
     3,2 detik CPU tiap setengah menit untuk tiap penonton.
     """
-    kunci = f"sinyalchart:v2:{(kode or '').upper()}"
+    kunci = f"sinyalchart:v3:{(kode or '').upper()}"
     hangat = _cache_get(kunci)
     if hangat is not None:
         return hangat
@@ -2161,13 +2175,13 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
         n = len(df)
         mulai = max(60, n - n_bar)
         lalu = lalu2 = None
-        terakhir = {"BELI KUAT": -999, "JUAL KUAT": -999}
+        terakhir = {v: -999 for v in VONIS_SINYAL_CHART}
         for i in range(mulai, n):
             potong = df.iloc[:i + 1]
             ai = calculate_ai_score_from_df(potong)
             v = _ringkasan_sinyal_teknikal(ai)["overall"] if ai else None
-            if (v in ("BELI KUAT", "JUAL KUAT") and v == lalu and v != lalu2
-                    and i - terakhir[v] >= JEDA_SINYAL_BAR):
+            if (v in VONIS_SINYAL_CHART and v == lalu and v != lalu2
+                    and i - terakhir.get(v, -999) >= JEDA_SINYAL_BAR):
                 terakhir[v] = i
                 harga_sinyal = float(potong["Close"].iloc[-1])
                 # HASIL NYATANYA ikut dihitung, dan ini bukan hiasan.
@@ -2198,7 +2212,7 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
                         hasil_pct = None
                 keluar.append({
                     "t": str(df.index[i])[:10],
-                    "jenis": "BELI" if v == "BELI KUAT" else "JUAL",
+                    "jenis": "BELI" if v.startswith("BELI") else "JUAL",
                     "vonis": v, "bertahan": True,
                     "harga": round(harga_sinyal, 2),
                     # None = belum genap HORIZON_SINYAL bar, jadi hasilnya
@@ -2251,7 +2265,7 @@ def _chart_overlay_payload(kode: str, df) -> dict:
     hari ini, dan kunci tanpa versi berarti kolom diam-diam kosong
     sesudah deploy, tanpa satu pun error.
     """
-    kunci = f"chartovl:v2:{(kode or '').upper()}"
+    kunci = f"chartovl:v3:{(kode or '').upper()}"
     hangat = _cache_get(kunci)
     if hangat is not None:
         return hangat
@@ -7029,46 +7043,52 @@ def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
                                    else -0.66 if overall == "JUAL KUAT" else None)}
 
 
-# Keunggulan terukur tiap vonis, per 20 hari bursa, terhadap dasar +0,88%.
+# Keunggulan terukur tiap vonis, per 20 hari bursa.
 #
-# DIUKUR ULANG 11 Okt 2026 pada vonis BARU (RSI dibalik + suara TREN),
-# 23.755 EPISODE vonis -- bukan per bar, karena bar berurutan dengan
-# vonis sama itu nyaris duplikat. Angka LAMA tidak dipertahankan: ia
-# mengukur mesin vonis yang sudah tidak ada, dan memajangnya berarti
-# memajang angka yang tidak menggambarkan apa pun.
+# DIUKUR ULANG 7 aturan di 786 emiten dengan DASAR PEMBANDING
+# SETANGGAL -- rata-rata return 20 hari SELURUH emiten yang mulai di
+# tanggal yang sama (rata-ratanya +3.35%). Angka sebelumnya
+# memakai dasar TETAP (+0,88%), dan dasar tetap tidak bisa membedakan
+# "vonis ini unggul" dari "vonis ini kebetulan sering muncul di bulan
+# yang bagus". Untuk vonis momentum kedua hal itu memang cenderung
+# berbarengan, jadi seluruh keunggulannya terbaca lebih besar daripada
+# yang sebenarnya:
 #
-#                      LAMA      BARU
-#     BELI KUAT       +1,30%   +1,11%
-#     BELI            +0,13%   +0,38%
-#     CENDERUNG BELI  +0,04%   -0,01%
-#     NETRAL          +0,12%   +0,13%
-#     CENDERUNG JUAL  -0,10%   -0,21%
-#     JUAL            -0,42%   -0,66%
-#     JUAL KUAT       -0,66%   -0,95%
+#                      DIPAJANG   TERUKUR ULANG
+#     BELI KUAT          +1,30%      +0.20%   (n=3,019)
+#     BELI               +0,13%      +0.80%   (n=3,241)
+#     JUAL KUAT          -0,66%      -0.33%   (n=3,230)
 #
-# Sisi JUAL membaik nyata (-0,66% -> -0,95%): vonis jual yang baru lebih
-# sering benar-benar menandai saham yang tertinggal. Sisi beli sedikit
-# turun sendirian -- tapi lihat UNGGUL_BERTAHAN di bawah.
+# ANGKANYA KECIL, dan itu bagian dari temuannya. Tiga kali pengukuran
+# di proyek ini memberi angka yang berbeda-beda untuk aturan yang sama
+# -- yang berarti keunggulannya kecil dibanding sebarannya, bukan bahwa
+# salah satu pengukuran salah. Jangan dipajang seolah pasti.
 UNGGUL_VONIS = {
-    "BELI KUAT": 1.11, "BELI": 0.38, "CENDERUNG BELI": -0.01, "NETRAL": 0.13,
-    "CENDERUNG JUAL": -0.21, "JUAL": -0.66, "JUAL KUAT": -0.95,
+    "BELI KUAT": 0.2, "BELI": 0.8, "CENDERUNG BELI": -0.27, "NETRAL": -0.35,
+    "CENDERUNG JUAL": -0.37, "JUAL": -0.67, "JUAL KUAT": -0.33,
 }
 
-# ATURAN DUA HARI, dan di sinilah perubahan vonisnya benar-benar terbayar.
+# ATURAN DUA HARI, dan di sini hasilnya MEMBALIK apa yang dipajang.
 #
-#                                  LAMA      BARU
-#     BELI KUAT bertahan hari-2   +1,41%   +4,59%   (n=398)
-#     BELI      bertahan hari-2   +1,63%   +1,08%   (n=315)
+#                              DIPAJANG   TERUKUR ULANG
+#     BELI KUAT bertahan        +4,59%      +0.81%   (n=1,310)
+#     BELI      bertahan        +1,08%      +2.88%   (n=911)
 #
-# Arahnya BERBALIK dari pengukuran lama. Dulu aturan dua hari menolong
-# vonis yang SEDANG dan tidak menolong yang ekstrem; sekarang kebalikannya,
-# dan alasannya masuk akal: BELI KUAT yang baru mensyaratkan keselarasan
-# TREN (suara ketujuh), dan tren yang bertahan dua hari adalah hal yang
-# sangat berbeda dari lonjakan momentum sehari.
+# Vonis yang LEBIH EKSTREM ternyata LEBIH LEMAH: BELI (5 dari 7 suara)
+# yang bertahan dua hari tiga setengah kali lebih baik daripada BELI
+# KUAT (6 dari 7) yang bertahan dua hari.
 #
-# +4,59% itu keunggulan terbesar dari seluruh vonis yang pernah diukur di
-# proyek ini -- di atas panel Pemulihan (+4,01%).
-UNGGUL_BERTAHAN = {"BELI KUAT": 4.59, "BELI": 1.08}
+# Ada sebab mekanisnya, bukan sekadar kebetulan angka. Suara Volume di
+# panel ini SUDAH terukur terbalik (-0,77%; lihat _KEANDALAN_SUARA di
+# app.js). Menuntut 6 dari 7 suara berarti menuntut suara yang buruk itu
+# ikut setuju -- sehingga BELI KUAT justru menyaring saham tempat
+# indikator yang menyesatkan sedang menyala. BELI yang cuma butuh 5
+# suara bisa lolos tanpa itu.
+#
+# Pola "bertahan lebih baik daripada baru muncul" tetap berlaku di
+# KEDUA sisi (+2.88 vs +0.80 di sisi beli, -0.87 vs -0.67
+# di sisi jual), dan konsistensi itu yang membuatnya layak dipercaya.
+UNGGUL_BERTAHAN = {"BELI KUAT": 0.81, "BELI": 2.88, "CENDERUNG BELI": 0.32, "NETRAL": -0.42, "CENDERUNG JUAL": -0.46, "JUAL": -0.87, "JUAL KUAT": -0.73}
 
 
 def nilai_dua_hari(vonis: str | None, vonis_kemarin: str | None) -> dict:
@@ -7090,9 +7110,10 @@ def nilai_dua_hari(vonis: str | None, vonis_kemarin: str | None) -> dict:
         "unggul_pct": unggul,
         # Vonis yang bertahan dan terukur JAUH lebih baik daripada
         # versi sehari-nya. Sesudah suara TREN masuk, yang paling banyak
-        # berubah justru BELI KUAT (+1,11% -> +4,59%), bukan BELI --
-        # kebalikan dari pengukuran sebelumnya. Jadi syaratnya ditulis
-        # dari ANGKANYA, bukan dari nama vonisnya.
+        # berubah justru BELI (+0,80% -> +2,88%), bukan BELI KUAT
+        # (+0,20% -> +0,81%). Jadi syaratnya ditulis dari ANGKANYA,
+        # bukan dari nama vonisnya -- dan justru karena itu ia tetap
+        # benar ketika pengukurannya berbalik, seperti yang terjadi.
         "setara_kuat": bool(bertahan and dasar is not None
                             and unggul >= dasar + 1.0),
     }
@@ -7402,10 +7423,18 @@ _FOREIGN_FLOW_TTL = int(os.getenv("FOREIGN_FLOW_TTL", "900"))
 # membedakannya dari screener "strong buy" pada umumnya. Diukur pada
 # 23.755 episode vonis selama dua tahun (lihat UNGGUL_VONIS):
 #
-#     BELI KUAT                +1,11%
-#     BELI KUAT bertahan 2 hr  +4,59%   <- keunggulan terbesar di app ini
-#     JUAL KUAT                -0,95%
-#     empat vonis tengah       dalam rentang +-0,25%, tidak berarti
+#     BELI bertahan 2 hari     +2,88%   <- keunggulan terukur terbesar
+#     BELI KUAT bertahan 2 hr  +0,81%
+#     BELI                     +0,80%
+#     BELI KUAT                +0,20%
+#     JUAL bertahan 2 hari     -0,87%
+#     JUAL KUAT                -0,33%
+#
+# PERHATIKAN urutannya: vonis yang LEBIH ekstrem justru LEBIH LEMAH.
+# Sebabnya mekanis -- suara Volume sudah terukur terbalik, jadi
+# menuntut 6 dari 7 suara berarti menuntut suara yang buruk itu ikut
+# setuju. Layar ini karena itu TIDAK lagi menaruh BELI KUAT di atas
+# BELI; urutannya mengikuti angka.
 #
 # KARENA ITU SCREENER INI CUMA MENAMPILKAN TIGA KERANJANG, bukan tujuh.
 # Menampilkan "CENDERUNG BELI" sebagai hasil saringan berarti menyajikan
@@ -7460,7 +7489,7 @@ async def _universe_1y() -> dict:
         return data
 
 
-_SCREENER_VONIS_KEY = "screener_vonis:v1"
+_SCREENER_VONIS_KEY = "screener_vonis:v2"
 # Bar harian: vonisnya baru berubah saat bar baru terbentuk. Setengah jam
 # sudah jauh lebih sering daripada yang diperlukan.
 _SCREENER_VONIS_TTL = int(os.getenv("SCREENER_VONIS_TTL", "1800"))
@@ -7514,9 +7543,13 @@ def _pindai_vonis(tickers: list, data: dict) -> list:
             continue
 
     # Yang BERTAHAN lebih dulu -- itu keranjang yang terukur paling kuat
-    # (+4,59%), dan menaruhnya di tengah daftar akan menyembunyikan hal
-    # terbaik yang punya halaman ini.
-    urut = {"BELI KUAT": 0, "BELI": 1, "JUAL KUAT": 2}
+    # (BELI bertahan +2,88%), dan menaruhnya di tengah daftar akan
+    # menyembunyikan hal terbaik yang punya halaman ini.
+    # Diurutkan dari keunggulan TERUKUR, bukan dari nama. BELI
+    # terukur di atas BELI KUAT, dan menaruh BELI KUAT lebih dulu
+    # hanya karena namanya terdengar lebih kuat akan menyajikan
+    # yang lebih lemah lebih dulu.
+    urut = {"BELI": 0, "BELI KUAT": 1, "JUAL KUAT": 2}
     return sorted(keluar, key=lambda x: (not x["setara_kuat"],
                                          urut.get(x["vonis"], 9),
                                          not x["likuid"],
@@ -7544,8 +7577,10 @@ async def _build_screener_vonis() -> dict:
             "beli_kuat_pct": UNGGUL_VONIS["BELI KUAT"],
             "beli_pct": UNGGUL_VONIS["BELI"],
             "jual_kuat_pct": UNGGUL_VONIS["JUAL KUAT"],
-            "bertahan_pct": UNGGUL_BERTAHAN["BELI KUAT"],
-            "horizon_hari": 20, "n_episode": 23755,
+            # Keranjang terkuat kini BELI yang bertahan, bukan BELI KUAT.
+            "bertahan_pct": UNGGUL_BERTAHAN["BELI"],
+            "bertahan_vonis": "BELI",
+            "horizon_hari": 20, "n_episode": 48000,
             "diukur": "2026-10-11",
             # Diukur pada emiten LIKUID. Saham sepi ikut dipindai tapi
             # ditandai -- angkanya tidak diukur di sana, dan memakainya
@@ -8895,9 +8930,8 @@ def _wa_fmt_dorong_vonis(items: list[dict], ukuran: dict) -> str:
     if bertahan:
         pct = (ukuran or {}).get("bertahan_pct")
         b.append("")
-        # Desimal pakai KOMA. Seluruh aplikasi menulis "+4,59%", dan
-        # satu tempat yang menulis "+4.59%" terbaca seperti angka yang
-        # datang dari sistem lain.
+        # Desimal pakai KOMA, seperti seluruh aplikasi. Satu tempat
+        # yang menulis titik terbaca seperti angka dari sistem lain.
         pct_t = f"{pct:.2f}".replace(".", ",") if pct is not None else None
         b.append("*Bertahan 2 hari* \u2014 keunggulan terukur terbesar"
                  + (f" (+{pct_t}%)" if pct_t else "") + ":")

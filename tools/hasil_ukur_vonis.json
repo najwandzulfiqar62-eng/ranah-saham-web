@@ -1,0 +1,105 @@
+{
+ "horizon_hari": 20,
+ "n_emiten": 786,
+ "dasar_pct": 3.35,
+ "aturan": [
+  {
+   "aturan": "BELI bertahan 2h",
+   "n": 911,
+   "unggul_pct": 2.88,
+   "return_pct": 3.78,
+   "pct_positif": 41.1
+  },
+  {
+   "aturan": "BELI KUAT bertahan 2h",
+   "n": 1310,
+   "unggul_pct": 0.81,
+   "return_pct": 0.98,
+   "pct_positif": 35.3
+  },
+  {
+   "aturan": "BELI muncul",
+   "n": 3241,
+   "unggul_pct": 0.8,
+   "return_pct": 1.88,
+   "pct_positif": 39.5
+  },
+  {
+   "aturan": "CENDERUNG BELI bertahan 2h",
+   "n": 4303,
+   "unggul_pct": 0.32,
+   "return_pct": 1.61,
+   "pct_positif": 41.5
+  },
+  {
+   "aturan": "BELI KUAT muncul",
+   "n": 3019,
+   "unggul_pct": 0.2,
+   "return_pct": 1.13,
+   "pct_positif": 36.9
+  },
+  {
+   "aturan": "CENDERUNG BELI muncul",
+   "n": 5761,
+   "unggul_pct": -0.27,
+   "return_pct": 1.47,
+   "pct_positif": 42.5
+  },
+  {
+   "aturan": "JUAL KUAT muncul",
+   "n": 3230,
+   "unggul_pct": -0.33,
+   "return_pct": -0.54,
+   "pct_positif": 41.9
+  },
+  {
+   "aturan": "NETRAL muncul",
+   "n": 4779,
+   "unggul_pct": -0.35,
+   "return_pct": 1.12,
+   "pct_positif": 43.0
+  },
+  {
+   "aturan": "CENDERUNG JUAL muncul",
+   "n": 6265,
+   "unggul_pct": -0.37,
+   "return_pct": 1.07,
+   "pct_positif": 45.3
+  },
+  {
+   "aturan": "NETRAL bertahan 2h",
+   "n": 1517,
+   "unggul_pct": -0.42,
+   "return_pct": 0.92,
+   "pct_positif": 45.2
+  },
+  {
+   "aturan": "CENDERUNG JUAL bertahan 2h",
+   "n": 4966,
+   "unggul_pct": -0.46,
+   "return_pct": 0.84,
+   "pct_positif": 43.7
+  },
+  {
+   "aturan": "JUAL muncul",
+   "n": 4499,
+   "unggul_pct": -0.67,
+   "return_pct": -0.05,
+   "pct_positif": 43.0
+  },
+  {
+   "aturan": "JUAL KUAT bertahan 2h",
+   "n": 1838,
+   "unggul_pct": -0.73,
+   "return_pct": -0.77,
+   "pct_positif": 42.7
+  },
+  {
+   "aturan": "JUAL bertahan 2h",
+   "n": 2445,
+   "unggul_pct": -0.87,
+   "return_pct": -0.23,
+   "pct_positif": 41.2
+  }
+ ]
+}

@@ -64,9 +64,21 @@
   :root[data-theme="light"] .landing-nav{background:rgba(248,252,249,.82)}
   :root[data-theme="light"] .landing-preview-frame,:root[data-theme="light"] .landing-mock-card{background:rgba(255,255,255,.72);border-color:rgba(23,36,29,.1)}
   *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
+  /* overflow-x DIPASANG DI html, BUKAN CUMA DI body.
+     BUG NYATA (laporan penulis, tangkapan layar mobile): halaman
+     tergeser ke samping, header terpotong, dan pinggir kanan jadi pita
+     gelap. Sebabnya jebakan CSS yang klasik -- `overflow-x:hidden` di
+     body SAJA tidak menahan dokumen dari menggulir mendatar; elemen
+     html tetap bisa menggulir, dan satu elemen yang kelebaran di mana
+     pun akan menggeser SELURUH halaman.
+     Dipakai `clip`, bukan `hidden`: `hidden` membuat elemennya jadi
+     wadah gulir, yang mematahkan `position:sticky` pada header. `hidden`
+     ditulis lebih dulu sebagai cadangan untuk peramban yang belum
+     mengenal `clip`. */
+  html{scroll-behavior:smooth;overflow-x:hidden;overflow-x:clip}
   body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;
-    line-height:1.55;overflow-x:hidden;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+    line-height:1.55;overflow-x:hidden;overflow-x:clip;max-width:100vw;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
     font-feature-settings:"tnum" 1;}
     /* CATATAN safe-area: body SENGAJA TIDAK memberi padding-top safe-area lagi.
        Dulu body DAN header sama-sama pakai env(safe-area-inset-top) -> di

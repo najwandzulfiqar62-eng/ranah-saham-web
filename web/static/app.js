@@ -2068,7 +2068,7 @@ async function loadVonis(){
     </div>
     <div style="background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:14px;font-size:11.5px;line-height:1.65">
       <b>Yang sudah diukur</b> \u2014 ${(u.n_episode||0).toLocaleString('id-ID')} episode vonis, keunggulan rata-rata terhadap pasar setelah ${u.horizon_hari||20} hari bursa, pada ${u.diukur_pada||'emiten likuid'}:<br>
-      <span style="color:var(--bull)">Beli Kuat yang <b>bertahan dua hari</b>: ${(u.bertahan_pct>=0?'+':'')+fmt(u.bertahan_pct,2)}%</span> \u2014 keunggulan terbesar yang pernah diukur di aplikasi ini.<br>
+      <span style="color:var(--bull)">${u.bertahan_vonis||'Beli'} yang <b>bertahan dua hari</b>: ${(u.bertahan_pct>=0?'+':'')+fmt(u.bertahan_pct,2)}%</span> \u2014 keunggulan terukur terbesar di aplikasi ini.<br>
       Beli Kuat (sehari): ${(u.beli_kuat_pct>=0?'+':'')+fmt(u.beli_kuat_pct,2)}% &middot;
       Beli: ${(u.beli_pct>=0?'+':'')+fmt(u.beli_pct,2)}% &middot;
       <span style="color:var(--bear)">Jual Kuat: ${fmt(u.jual_kuat_pct,2)}%</span><br>
@@ -5972,7 +5972,9 @@ function _buildRencana(d){
       <b>Jaraknya terlalu sempit.</b> Potensi untungnya lebih kecil daripada risikonya \u2014 angka di bawah cuma batas, bukan peluang.</div>`:''}
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       ${sel3('BELI DI', r.beli?rp(r.beli.harga)+sel(r.beli):kosong, r.beli?'var(--bull)':'')}
-      ${sel3('JUAL DI', r.jual?rp(r.jual.harga)+sel(r.jual):kosong, r.jual?'var(--bear)':'')}
+      ${sel3('JUAL DI', r.jual?rp(r.jual.harga)+sel(r.jual)
+          :`<span class="muted" style="font-size:11.5px;font-weight:400">belum ada<br><span style="font-size:10px">tekanan beli belum melemah</span></span>`,
+        r.jual?'var(--bear)':'')}
       ${sel3('BATAL DI', rp(r.invalidasi)+selAbs(r.invalidasi), 'var(--gold)')}
       ${(r.target||[]).length?sel3('TARGET',(r.target||[]).slice(0,2).map(rp).join(' \u00b7 '),''):''}
     </div>
@@ -6142,11 +6144,11 @@ function _tagKeandalan(label){
    Vonisnya sendiri TIDAK diubah -- signal_history memakai semantik lama,
    dan menggesernya membuat riwayat lama dan baru tidak sebanding tanpa
    satu pun tanda. Yang ditambahkan cuma kejujuran tentang artinya. */
-// Diukur ulang 11 Okt 2026 pada vonis BARU (RSI dibalik + suara TREN),
-// 23.755 episode. Angka lama dicabut, bukan disimpan sebagai cadangan:
-// ia mengukur mesin vonis yang sudah tidak ada.
-const _UNGGUL_VONIS={'BELI KUAT':1.11,'BELI':0.38,'CENDERUNG BELI':-0.01,
-  'NETRAL':0.13,'CENDERUNG JUAL':-0.21,'JUAL':-0.66,'JUAL KUAT':-0.95};
+// Diukur ulang di 786 emiten dengan dasar pembanding SETANGGAL.
+// Angka sebelumnya memakai dasar TETAP, yang tidak bisa membedakan
+// "vonis ini unggul" dari "vonis ini kebetulan sering muncul di
+// bulan yang bagus". Rinciannya di UNGGUL_VONIS pada web/app.py.
+const _UNGGUL_VONIS={'BELI KUAT':0.2,'BELI':0.8,'CENDERUNG BELI':-0.27,'NETRAL':-0.35,'CENDERUNG JUAL':-0.37,'JUAL':-0.67,'JUAL KUAT':-0.33};
 
 function _keandalanVonis(d, overall){
   const dh = d.dua_hari || {};
@@ -6505,9 +6507,9 @@ const EDU_PANDUAN=[
   {j:'Apa yang dilakukannya',
    d:'Tujuh indikator masing-masing memilih "beli", "netral", atau "jual". Hasil penghitungan suaranya jadi satu vonis, dari BELI KUAT sampai JUAL KUAT.'},
   {j:'Empat dari tujuh vonisnya tidak memberi tahu apa pun',
-   d:'Diukur pada 23.755 kejadian selama dua tahun: <b>BELI KUAT +1,11%</b> dan <b>JUAL KUAT −0,95%</b> dibanding rata-rata pasar dalam 20 hari bursa. Tapi BELI, CENDERUNG BELI, NETRAL, dan CENDERUNG JUAL semuanya berada dalam rentang ±0,25% — tidak bisa dibedakan dari tidak tahu apa-apa. Angkanya ditampilkan di bawah vonis supaya kamu tidak perlu menebak.'},
+   d:'Diukur di 786 saham selama dua tahun, dibanding rata-rata pasar pada tanggal yang sama: <b>BELI +0,80%</b>, <b>BELI KUAT +0,20%</b>, <b>JUAL −0,67%</b>. Perhatikan urutannya — vonis yang terdengar lebih kuat justru lebih lemah. Angkanya ditampilkan di bawah vonis supaya kamu tidak perlu menebak.'},
   {j:'Vonis yang BERTAHAN dua hari jauh lebih berarti',
-   d:'BELI KUAT yang masih BELI KUAT keesokan harinya terukur <b>+4,59%</b> — empat kali lipat versi seharinya. Alasannya: satu hari bisa kebetulan, dua hari berturut-turut lebih sulit kebetulan. Kalau kamu melihat tulisan "Bertahan dua hari" di panel itu, itu kabar yang jauh lebih kuat daripada vonisnya sendiri.'},
+   d:'Vonis yang masih sama keesokan harinya jauh lebih berarti: <b>BELI yang bertahan dua hari +2,88%</b> (911 kejadian), sementara BELI yang baru muncul cuma +0,80%. Berlaku juga di sisi jual (−0,87% vs −0,67%). Satu hari bisa kebetulan; dua hari berturut-turut lebih sulit kebetulan.'},
   {j:'Satu suaranya ditandai "terbalik", dan itu disengaja',
    d:'Kartu <b>Volume</b> diberi tanda peringatan karena terukur memilih ke arah yang salah (−0,77%). Ia tetap ikut memilih supaya vonisnya tetap sebanding dengan riwayat lama, tapi kamu berhak tahu untuk tidak menimbangnya berat.'},
   {j:'Yang mengejutkan soal RSI',
@@ -6609,7 +6611,7 @@ const EDU_PANDUAN=[
   {j:'Kenapa panduan ini ada',
    d:'Aplikasi saham umumnya menampilkan semua fiturnya dengan percaya diri yang sama. Pembaca pemula tidak punya cara membedakan fitur yang sudah diuji dari fitur yang cuma kelihatan meyakinkan. Daftar di bawah dibuat supaya kamu punya caranya.'},
   {j:'Sudah diukur, dan terbukti bekerja',
-   d:'• <b>Pemulihan</b> berlabel KUAT: +4,01% (222 kejadian)<br>• <b>BELI KUAT yang bertahan dua hari</b>: +4,59% (398)<br>• <b>Jarak stop berbasis volatilitas</b>: ekspektasi +2,61% vs +0,79%<br>• <b>Tangga harga beli</b>: diukur pada dua universe, arahnya sama'},
+   d:'• <b>Pemulihan</b> berlabel KUAT: +4,01% (222 kejadian)<br>• <b>BELI yang bertahan dua hari</b>: +2,88% (911)<br>• <b>Head &amp; Shoulders tembus</b>: −3,36% (290)<br>• <b>Segitiga Menaik tembus</b>: +3,24% (464)<br>• <b>Jarak stop berbasis volatilitas</b>: ekspektasi +2,61% vs +0,79%'},
   {j:'Sudah diukur, dan TIDAK bekerja — jadi tidak dipasang',
    d:'• <b>Inverse Head & Shoulders</b>: −0,68%, lebih buruk dari acak<br>• <b>Falling Wedge</b>: win rate di bawah pasar di semua tingkat<br>• <b>Bull Flag</b>: positif tapi tidak stabil antar periode<br>Ketiganya ada di kode aplikasi beserta angkanya, tapi sengaja tidak dijadikan sinyal.'},
   {j:'Ditampilkan sebagai keterangan, belum diukur meramalkan',
@@ -7298,7 +7300,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v75';
+const APP_VERSION='v77';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

@@ -232,3 +232,74 @@ def test_rencana_kosong_tidak_meledak():
     r = rc.susun(1000, [], [])
     assert r["beli"] is None and r["jual"] is None
     assert r["invalidasi"] < 1000
+
+
+# ---------------------------------------------------------------------------
+# Area jual = tempat tekanan beli terbukti melemah
+# ---------------------------------------------------------------------------
+
+def _L(h, t, n, nama="L"):
+    return {"harga": h, "tipe": t, "sentuh": n, "terakhir": "2026-09-01",
+            "pertama": "2026-05-01", "kuat": n >= 3, "nama": nama}
+
+
+_POLA_NAIK = [{"nama": "Segitiga Menaik", "arah": "naik", "fase": "TEMBUS",
+               "level_kunci": 1010, "unggul_pct": 3.24, "n_ukur": 464}]
+
+
+def test_di_tren_naik_atap_lemah_jadi_target_bukan_tempat_jual():
+    """PERMINTAAN PENULIS: "untuk area jual cari area pucuk/tekanan beli
+    melemah; kalau masih potensi naik ya cari area buy lagi".
+
+    Benar, dan versi pertama keliru: ia selalu memakai atap TERDEKAT. Di
+    tren yang sedang naik, atap terdekat justru yang paling sering
+    tertembus -- menyuruh jual di situ berarti menyuruh keluar dari tren
+    yang masih berjalan."""
+    lv = [_L(950, "support", 4, "Support Terdekat"),
+          _L(1020, "resistance", 1, "Resistance Terdekat"),   # lemah
+          _L(1150, "resistance", 5, "Resistance Swing")]      # pucuk nyata
+    r = rc.susun(1000, lv, _POLA_NAIK, ma20=980, ma50=960)
+    assert r["bias"] == "bullish"
+    assert r["jual"]["harga"] == 1150, "jual harus di pucuk, bukan atap terdekat"
+    assert 1020 in r["target"], "atap lemah harus jadi target"
+
+
+def test_tren_naik_tanpa_pucuk_teruji_TIDAK_punya_area_jual():
+    """Ketiadaan area jual itu TEMUAN, bukan kolom yang gagal terisi.
+    Memaksa satu angka berarti mengarang titik keluar supaya kolomnya
+    tidak kosong."""
+    lv = [_L(950, "support", 4, "Support Terdekat"),
+          _L(1020, "resistance", 1, "Resistance Terdekat")]
+    r = rc.susun(1000, lv, _POLA_NAIK, ma20=980, ma50=960)
+    assert r["bias"] == "bullish"
+    assert r["jual"] is None
+    # ...tapi area BELI tetap ada: "kalau masih potensi naik ya cari
+    # area buy lagi".
+    assert r["beli"]["harga"] == 950
+    assert "belum ada area jual" in r["narasi"].lower()
+
+
+def test_di_luar_tren_naik_jual_tetap_di_pucuk_terkuat():
+    """Bukti penolakan tetap yang menentukan, bukan kedekatan."""
+    lv = [_L(950, "support", 4), _L(1020, "resistance", 1, "Resistance Terdekat"),
+          _L(1150, "resistance", 5, "Resistance Swing")]
+    r = rc.susun(1000, lv, [], ma20=1050, ma50=1080)
+    assert r["jual"]["harga"] == 1150
+
+
+def test_pucuk_dipilih_dari_bukti_penolakan_bukan_kedekatan():
+    lv = [_L(950, "support", 3),
+          _L(1010, "resistance", 2, "Resistance Terdekat"),
+          _L(1080, "resistance", 6, "Resistance Swing"),
+          _L(1200, "resistance", 3, "Puncak Mayor")]
+    r = rc.susun(1000, lv, [], ma20=1000, ma50=1000)
+    assert r["jual"]["harga"] == 1080, "yang 6x ditolak harus menang"
+
+
+def test_seri_sentuhan_dimenangkan_yang_terdekat():
+    """Level jauh benar, tapi tidak menolong keputusan minggu ini."""
+    lv = [_L(950, "support", 3),
+          _L(1050, "resistance", 4, "Resistance Terdekat"),
+          _L(1250, "resistance", 4, "Resistance Swing")]
+    r = rc.susun(1000, lv, [], ma20=1000, ma50=1000)
+    assert r["jual"]["harga"] == 1050

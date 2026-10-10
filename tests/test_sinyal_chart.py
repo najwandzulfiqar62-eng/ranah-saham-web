@@ -81,13 +81,42 @@ def test_sisi_jual_memakai_aturan_yang_SAMA(monkeypatch):
 
 
 def test_vonis_tengah_tidak_pernah_jadi_sinyal(monkeypatch):
-    """Empat vonis tengah terukur berada dalam rentang +-0,25% dari
-    pasar. Menggambar segitiga untuk mereka berarti menandai sesuatu yang
-    tidak berbeda dari menebak."""
-    for v in ("BELI", "CENDERUNG BELI", "NETRAL", "CENDERUNG JUAL", "JUAL"):
+    """Vonis TENGAH tidak boleh jadi segitiga. Yang masuk hitungan
+    "tengah" ditentukan ANGKANYA, bukan namanya:
+
+        BELI bertahan            +2,88%   <- sinyal
+        BELI KUAT bertahan       +0,81%   <- sinyal
+        CENDERUNG BELI bertahan  +0,32%   <- bukan
+        NETRAL bertahan          -0,42%   <- bukan
+        CENDERUNG JUAL bertahan  -0,46%   <- bukan
+        JUAL bertahan            -0,87%   <- sinyal
+
+    BELI dan JUAL dulu ikut dilarang di sini, dan itu keliru: keduanya
+    justru terukur paling kuat. Menggambar segitiga untuk vonis yang
+    terukur tak berbeda dari menebak tetap dilarang -- yang berubah cuma
+    siapa yang masuk golongan itu.
+    """
+    for v in ("CENDERUNG BELI", "NETRAL", "CENDERUNG JUAL"):
         urut = ["NETRAL", v, v, v, "NETRAL"]
         _pakai_vonis(monkeypatch, urut)
         assert app_module._sinyal_chart_payload("X", _df(urut)) == [], v
+        assert v not in app_module.VONIS_SINYAL_CHART, v
+
+
+def test_vonis_pemicu_sinyal_dipilih_dari_ANGKA(monkeypatch):
+    """Penjagaan arah: yang memicu segitiga harus vonis yang terukur
+    paling kuat di sisinya, bukan yang namanya terdengar paling
+    meyakinkan. BELI terukur di ATAS BELI KUAT, jadi membuangnya akan
+    membuang sinyal terbaik yang punya aplikasi ini."""
+    assert "BELI" in app_module.VONIS_SINYAL_CHART
+    assert "JUAL" in app_module.VONIS_SINYAL_CHART
+    terkuat = max(app_module.UNGGUL_BERTAHAN,
+                  key=app_module.UNGGUL_BERTAHAN.get)
+    assert terkuat in app_module.VONIS_SINYAL_CHART, terkuat
+    # ...dan ia memang memicu, bukan cuma terdaftar.
+    urut = ["NETRAL", terkuat, terkuat, "NETRAL"]
+    _pakai_vonis(monkeypatch, urut)
+    assert len(app_module._sinyal_chart_payload("X", _df(urut))) == 1
 
 
 def test_vonis_panjang_dihitung_SATU_kejadian(monkeypatch):
@@ -163,11 +192,23 @@ def test_angka_sinyal_TIDAK_memakai_tabel_vonis_sehari():
     assert "UNGGUL_VONIS" not in src
 
 
-def test_angka_belum_diukur_dikirim_None_bukan_nol():
-    """Nol adalah klaim ("tidak ada keunggulan"); "belum diukur" bukan."""
-    for v in app_module.UNGGUL_SINYAL_CHART.values():
-        assert v is None or isinstance(v, (int, float))
-    assert set(app_module.UNGGUL_SINYAL_CHART) == {"BELI KUAT", "JUAL KUAT"}
+def test_setiap_vonis_pemicu_punya_angka_terukurnya():
+    """Nol adalah klaim ("tidak ada keunggulan"); None berarti "belum
+    diukur". Keduanya sah, tapi vonis yang SUDAH dipakai memicu
+    segitiga wajib punya angkanya -- menggambar segitiga tanpa angka
+    berarti menyerahkan kesimpulan pada bentuk panah."""
+    for v in app_module.VONIS_SINYAL_CHART:
+        assert v in app_module.UNGGUL_SINYAL_CHART, v
+        assert app_module.UNGGUL_SINYAL_CHART[v] is not None, v
+        assert app_module.N_SINYAL_CHART[v], v
+
+
+def test_angka_sinyal_chart_sama_dengan_tabel_bertahan():
+    """Segitiga menandai aturan BERTAHAN, jadi angkanya harus angka
+    aturan bertahan -- bukan angka vonis sehari, yang mengukur hal
+    yang berbeda."""
+    for v, a in app_module.UNGGUL_SINYAL_CHART.items():
+        assert a == app_module.UNGGUL_BERTAHAN[v], v
 
 
 # ---------------------------------------------------------------------------

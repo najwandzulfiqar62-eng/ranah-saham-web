@@ -151,51 +151,73 @@ def test_ambang_diskalakan_bukan_dilonggarkan():
 # Angka terukur -- vonis BARU
 # ---------------------------------------------------------------------------
 
-def test_angka_keunggulan_sesuai_pengukuran_vonis_BARU():
-    """Angka lama (+1,30 / -0,66) mengukur mesin vonis yang sudah tidak
-    ada. Memajangnya berarti memajang angka yang tidak menggambarkan apa
-    pun."""
-    assert app_module.UNGGUL_VONIS["BELI KUAT"] == 1.11
-    assert app_module.UNGGUL_VONIS["JUAL KUAT"] == -0.95
+def _ukur():
+    """Hasil pengukuran yang menjadi SUMBER angka di aplikasi.
+
+    Tes di bawah membacanya dari berkas, bukan menuliskan angkanya
+    sendiri. Sebabnya pengalaman: angka-angka ini pernah ditulis tangan
+    di tes, lalu pengukurannya diulang dengan metode yang lebih ketat --
+    dan sebelas tes jatuh sekaligus bukan karena kodenya salah, melainkan
+    karena tesnya memegang salinan yang sudah basi. Dengan dibaca dari
+    berkas, kode dan hasil ukur tidak bisa menyimpang diam-diam.
+    """
+    import json
+    import pathlib
+    f = pathlib.Path(__file__).resolve().parent.parent / "tools" / "hasil_ukur_vonis.json"
+    d = json.loads(f.read_text(encoding="utf-8"))
+    return {r["aturan"]: r for r in d["aturan"]}
 
 
-def test_sisi_jual_jadi_lebih_informatif():
-    """-0,66% menjadi -0,95%: vonis jual yang baru lebih sering
-    benar-benar menandai saham yang tertinggal."""
-    assert app_module.UNGGUL_VONIS["JUAL KUAT"] < -0.66
+def test_angka_vonis_sama_dengan_berkas_pengukurannya():
+    """Angka yang dipajang HARUS angka yang diukur. Kalau keduanya bisa
+    berbeda, yang dipajang berhenti berarti apa-apa."""
+    m = _ukur()
+    for v, r in app_module.UNGGUL_VONIS.items():
+        assert r == m[f"{v} muncul"]["unggul_pct"], v
+    for v, r in app_module.UNGGUL_BERTAHAN.items():
+        assert r == m[f"{v} bertahan 2h"]["unggul_pct"], v
 
 
-def test_vonis_tengah_tetap_tidak_berarti():
-    """Perubahan ini tidak menyulap bagian tengahnya."""
-    for v in ("CENDERUNG BELI", "NETRAL", "CENDERUNG JUAL"):
-        assert abs(app_module.UNGGUL_VONIS[v]) <= 0.25, v
+def test_bertahan_dua_hari_lebih_baik_di_KEDUA_sisi():
+    """Inti aturan dua hari, dan satu-satunya klaim yang BERTAHAN di
+    ketiga pengukuran: vonis yang masih sama keesokan harinya lebih
+    berarti daripada yang baru muncul. Konsistensi di kedua sisi itu
+    yang membuatnya layak dipercaya -- angka tunggal yang bagus bisa
+    kebetulan, arah yang sama di sisi beli DAN jual jauh lebih sulit."""
+    m = _ukur()
+    assert m["BELI bertahan 2h"]["unggul_pct"] > m["BELI muncul"]["unggul_pct"]
+    assert m["JUAL bertahan 2h"]["unggul_pct"] < m["JUAL muncul"]["unggul_pct"]
 
 
-# ---------------------------------------------------------------------------
-# Aturan dua hari -- arahnya BERBALIK sesudah suara TREN masuk
-# ---------------------------------------------------------------------------
+def test_vonis_lebih_ekstrem_ternyata_TIDAK_lebih_kuat():
+    """TEMUAN YANG MEMBALIK KLAIM LAMA. BELI (5 dari 7 suara) yang
+    bertahan terukur jauh di atas BELI KUAT (6 dari 7) yang bertahan.
 
-def test_BELI_KUAT_yang_bertahan_jadi_jauh_lebih_baik():
-    """Di sinilah perubahan vonisnya benar-benar terbayar:
+    Ada sebabnya, dan bukan kebetulan angka: suara Volume di panel ini
+    SUDAH terukur terbalik (-0,77%). Menuntut 6 dari 7 suara berarti
+    menuntut suara yang buruk itu ikut setuju, sehingga BELI KUAT
+    justru menyaring saham tempat indikator menyesatkan sedang menyala.
 
-        BELI KUAT bertahan hari-2:  lama +1,41%  ->  baru +4,59%
-
-    BELI KUAT yang baru mensyaratkan keselarasan TREN, dan tren yang
-    bertahan dua hari sangat berbeda dari lonjakan momentum sehari.
-    +4,59% itu keunggulan terbesar dari seluruh vonis yang pernah diukur
-    di proyek ini."""
-    r = app_module.nilai_dua_hari("BELI KUAT", "BELI KUAT")
-    assert r["bertahan"] is True
-    assert r["unggul_pct"] == 4.59
-    assert r["setara_kuat"] is True
+    Uji ini ada supaya tidak ada yang "memperbaiki" urutannya kembali
+    menjadi BELI KUAT di atas BELI hanya karena namanya terdengar lebih
+    meyakinkan."""
+    assert (app_module.UNGGUL_BERTAHAN["BELI"]
+            > app_module.UNGGUL_BERTAHAN["BELI KUAT"])
 
 
-def test_arah_aturan_dua_hari_berbalik_dari_pengukuran_lama():
-    """Dulu aturan dua hari menolong vonis SEDANG dan tidak menolong yang
-    ekstrem. Sekarang kebalikannya."""
-    kuat = app_module.nilai_dua_hari("BELI KUAT", "BELI KUAT")
-    sedang = app_module.nilai_dua_hari("BELI", "BELI")
-    assert kuat["unggul_pct"] > sedang["unggul_pct"]
+def test_jarak_beli_ke_jual_itu_yang_berarti_bukan_nilai_mutlaknya():
+    """Dengan dasar pembanding setanggal, hampir semua vonis selain BELI
+    berada sedikit di bawah pasar. Yang berarti adalah SELISIH antara
+    sisi beli dan sisi jual, bukan tandanya masing-masing."""
+    m = _ukur()
+    jarak = (m["BELI muncul"]["unggul_pct"] - m["JUAL muncul"]["unggul_pct"])
+    assert jarak > 1.0, f"selisih beli-jual cuma {jarak:.2f}pp"
+
+
+def test_vonis_yang_berganti_memakai_angka_hari_pertama():
+    r = app_module.nilai_dua_hari("BELI KUAT", "NETRAL")
+    assert r["bertahan"] is False
+    assert r["unggul_pct"] == app_module.UNGGUL_VONIS["BELI KUAT"]
 
 
 def test_setara_kuat_dihitung_dari_ANGKA_bukan_nama_vonisnya():
@@ -204,11 +226,6 @@ def test_setara_kuat_dihitung_dari_ANGKA_bukan_nama_vonisnya():
     kebetulan menang pada pengukuran terakhir."""
     assert app_module.nilai_dua_hari("CENDERUNG BELI",
                                      "CENDERUNG BELI")["setara_kuat"] is False
-
-
-def test_vonis_yang_berganti_memakai_angka_hari_pertama():
-    r = app_module.nilai_dua_hari("BELI KUAT", "NETRAL")
-    assert r["bertahan"] is False and r["unggul_pct"] == 1.11
 
 
 def test_vonis_kemarin_tidak_diketahui_BUKAN_berarti_tidak_bertahan():
@@ -286,12 +303,16 @@ def test_JS_mencabut_penanda_terbalik_pada_RSI():
     assert "'Volume'" in blok, "Volume masih terukur terbalik, penandanya tetap"
 
 
-def test_JS_memakai_angka_terukur_yang_BARU():
-    js = _js()
-    blok = js[js.index("const _UNGGUL_VONIS"):js.index("function _keandalanVonis")]
-    assert "'BELI KUAT':1.11" in blok
-    assert "'JUAL KUAT':-0.95" in blok
-    assert "1.30" not in blok, "angka vonis lama masih terpajang"
+def test_JS_memakai_angka_yang_SAMA_dengan_server():
+    """Layar dan server harus memajang angka yang sama. Dua salinan
+    angka adalah dua angka yang akan berbeda."""
+    import re
+    js = open("web/static/app.js", encoding="utf-8").read()
+    m = re.search(r"const _UNGGUL_VONIS=\{([^}]*)\}", js)
+    assert m, "_UNGGUL_VONIS tidak ketemu di app.js"
+    isi = m.group(1)
+    for v, r in app_module.UNGGUL_VONIS.items():
+        assert f"'{v}':{r}" in isi, f"{v} di JS tidak sama dengan server"
 
 
 def test_layar_memakai_angka_terukurnya():

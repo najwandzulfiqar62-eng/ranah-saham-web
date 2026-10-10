@@ -94,10 +94,48 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         beli = {"harga": s1["harga"], "alasan": _alasan(s1, "Support"),
                 "teruji": (s1.get("sentuh") or 0) > 1,
                 "jarak_pct": _pct(s1["harga"], harga)}
-    if r1:
-        jual = {"harga": r1["harga"], "alasan": _alasan(r1, "Resistance"),
-                "teruji": (r1.get("sentuh") or 0) > 1,
-                "jarak_pct": _pct(r1["harga"], harga)}
+
+    # AREA JUAL = TEMPAT TEKANAN BELI TERBUKTI MELEMAH, bukan sekadar
+    # atap terdekat.
+    #
+    # KENAPA DIUBAH. Versi pertama selalu memakai resistance terdekat.
+    # Di tren yang sedang naik itu keliru: atap terdekat justru yang
+    # paling sering tertembus, dan menyuruh jual di situ berarti
+    # menyuruh keluar dari tren yang masih berjalan. Penulis
+    # menyebutnya tepat -- "untuk area jual cari area pucuk/tekanan beli
+    # melemah; kalau masih potensi naik ya cari area buy lagi".
+    #
+    # Yang dicari: level dengan BUKTI PENOLAKAN terkuat, yaitu yang
+    # paling sering memantulkan harga. Level yang menolak lima kali
+    # adalah tempat penjual benar-benar menunggu; level yang disentuh
+    # sekali cuma harga yang kebetulan pernah dilewati.
+    kandidat = atas[:3]
+    puncak = None
+    if kandidat:
+        # Terbanyak sentuhannya; kalau seri, yang TERDEKAT -- yang jauh
+        # benar tapi tidak menolong keputusan minggu ini.
+        puncak = max(kandidat,
+                     key=lambda x: ((x.get("sentuh") or 0), -x["harga"]))
+
+    if bias == "bullish":
+        # Di tren naik, atap terdekat diperlakukan sbg TARGET, bukan
+        # tempat jual. Jual hanya kalau ada bukti penolakan sungguhan
+        # (>=3 kali ditolak) di atas sana.
+        if puncak and (puncak.get("sentuh") or 0) >= 3:
+            jual = {"harga": puncak["harga"],
+                    "alasan": _alasan(puncak, "Resistance")
+                              + " — di sinilah tekanan beli berulang kali kalah",
+                    "teruji": True, "jarak_pct": _pct(puncak["harga"], harga)}
+        else:
+            # TIDAK ADA area jual, dan itu jawaban yang benar: belum ada
+            # tanda tekanan belinya melemah. Memaksa satu angka di sini
+            # berarti mengarang titik keluar hanya supaya kolomnya
+            # terisi.
+            jual = None
+    elif puncak:
+        jual = {"harga": puncak["harga"], "alasan": _alasan(puncak, "Resistance"),
+                "teruji": (puncak.get("sentuh") or 0) > 1,
+                "jarak_pct": _pct(puncak["harga"], harga)}
 
     # --- INVALIDASI -------------------------------------------------------
     # Di bawah support KEDUA kalau ada; kalau tidak, pakai jarak ATR yang
@@ -166,11 +204,11 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         "invalidasi": invalidasi, "alasan_invalidasi": alasan_inval,
         "target": target,
         "pola_utama": (pola_utama or {}).get("nama"),
-        "narasi": _narasi(harga, bias, pola_utama, r1, s1, s2, ma20, ma50),
+        "narasi": _narasi(harga, bias, pola_utama, jual, s1, s2, ma20, ma50),
     }
 
 
-def _narasi(harga, bias, pola, r1, s1, s2, ma20, ma50) -> str:
+def _narasi(harga, bias, pola, jual, s1, s2, ma20, ma50) -> str:
     """Paragraf yang SELURUH angkanya bisa diperiksa pembaca di chart.
 
     Ditulis dari fakta, bukan dari gaya. Kalimat seperti "struktur
@@ -219,9 +257,14 @@ def _narasi(harga, bias, pola, r1, s1, s2, ma20, ma50) -> str:
                  "harga berada di bawah semua level yang pernah bertahan "
                  "dalam rentang yang dipindai.")
 
-    if r1:
-        b.append(f"Atap terdekat {_rp(r1['harga'])} "
-                 f"({r1['sentuh']}× teruji).")
+    if jual:
+        b.append(f"Tekanan beli terbukti melemah di {_rp(jual['harga'])} "
+                 f"— di situ harga berulang kali ditolak.")
+    elif bias == "bullish":
+        # Ketiadaan area jual itu TEMUAN, bukan kolom yang gagal terisi.
+        b.append("Belum ada tanda tekanan beli melemah di atas harga "
+                 "sekarang, jadi belum ada area jual — yang ada di "
+                 "atas cuma target, bukan tempat keluar.")
 
     b.append({"bullish": "Arahnya condong naik.",
               "bearish": "Arahnya condong turun.",

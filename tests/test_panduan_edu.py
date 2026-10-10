@@ -42,18 +42,34 @@ def test_semua_panduan_punya_langkah_dan_ringkasan():
 # Angka di panduan harus SAMA dengan angka yang dipakai aplikasinya
 # ---------------------------------------------------------------------------
 
+def _koma(x):
+    """Angka bergaya Indonesia, bertanda, seperti yang ditulis panduan."""
+    tanda = "+" if x >= 0 else "\u2212"
+    return tanda + f"{abs(x):.2f}".replace(".", ",")
+
+
 def test_angka_vonis_di_panduan_sama_dengan_yang_dipakai():
-    """BELI KUAT +1,11% dan JUAL KUAT -0,95% adalah hasil pengukuran yang
-    dipakai mesin vonisnya. Panduan yang menyebut angka lain akan membuat
-    pembaca menghitung peluang dari angka yang tidak berlaku."""
-    assert "+1,11%" in PANDUAN
-    assert str(app_module.UNGGUL_VONIS["BELI KUAT"]).replace(".", ",") in PANDUAN
-    assert "\u22120,95%" in PANDUAN or "-0,95%" in PANDUAN
+    """Panduan yang menyebut angka lain daripada yang dipakai mesinnya
+    membuat pembaca menghitung peluang dari angka yang tidak berlaku.
+
+    Dibaca dari KONSTANTA, bukan ditulis tangan. Angka-angka ini pernah
+    ditulis tangan di sini; lalu pengukurannya diulang dengan dasar
+    pembanding yang lebih ketat, dan tesnya jatuh bukan karena
+    panduannya salah melainkan karena tes memegang salinan yang basi.
+    """
+    for v in ("BELI", "BELI KUAT"):
+        assert _koma(app_module.UNGGUL_VONIS[v]) in PANDUAN, v
 
 
 def test_angka_bertahan_dua_hari_sama():
-    assert "+4,59%" in PANDUAN
-    assert app_module.UNGGUL_BERTAHAN["BELI KUAT"] == 4.59
+    """Keranjang terkuat sekarang BELI yang bertahan, BUKAN BELI KUAT --
+    vonis yang lebih ekstrem terukur lebih lemah. Panduannya harus
+    menyebut yang terkuat menurut angka, bukan yang namanya terdengar
+    paling meyakinkan."""
+    terkuat = max(app_module.UNGGUL_BERTAHAN,
+                  key=app_module.UNGGUL_BERTAHAN.get)
+    assert terkuat == "BELI", terkuat
+    assert _koma(app_module.UNGGUL_BERTAHAN[terkuat]) in PANDUAN
 
 
 def test_ambang_pemulihan_di_panduan_sama_dengan_kodenya():
