@@ -1,0 +1,43 @@
+{
+ "horizon_hari": 20,
+ "n_emiten": 786,
+ "ambang_pct": 2.0,
+ "dasar_pct": 3.35,
+ "aturan": [
+  {
+   "aturan": "sentuh support KUAT (>=3x)",
+   "n": 5997,
+   "unggul_pct": -0.08,
+   "return_pct": 1.41,
+   "pct_positif": 44.3
+  },
+  {
+   "aturan": "sentuh support TERUJI + tren tidak turun",
+   "n": 5930,
+   "unggul_pct": -0.2,
+   "return_pct": 1.37,
+   "pct_positif": 44.0
+  },
+  {
+   "aturan": "sentuh support TERUJI",
+   "n": 6496,
+   "unggul_pct": -0.25,
+   "return_pct": 1.29,
+   "pct_positif": 44.1
+  },
+  {
+   "aturan": "di bawah resistance teruji",
+   "n": 6404,
+   "unggul_pct": -0.31,
+   "return_pct": 1.19,
+   "pct_positif": 44.0
+  },
+  {
+   "aturan": "sentuh support SATU-SENTUHAN",
+   "n": 3458,
+   "unggul_pct": -0.55,
+   "return_pct": 1.14,
+   "pct_positif": 45.4
+  }
+ ]
+}

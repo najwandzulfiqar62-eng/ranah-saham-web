@@ -543,6 +543,7 @@ async function analyze(kode){
       <div class="level-cell"><div class="k">Volatilitas</div><div class="v">${fmt(d.atr_pct,1)}% ATR</div></div>
     </div>
   </section>
+  ${_buildLencana(d)}
   <div class="analysis-layout">
     <div class="analysis-main">
       <section class="panel chart-panel"><p class="eyebrow">Grafik Interaktif</p>
@@ -6078,6 +6079,38 @@ function _buildBeliAman(d){
    berbeda akan berbeda -- Stockbit menyebut MTEL avg 644 dari 31
    rekomendasi, Yahoo 631 dari 15 -- dan tanpa jumlahnya, perbedaan itu
    jadi misteri yang membuat orang mengira salah satunya salah. */
+/* ---------- LENCANA LINTAS-SISTEM ---------- */
+// Menjawab pertanyaan penulis: "di emiten dikasih tau kalau sudah masuk
+// Audit Sinyal dan juga Smart Money". Berguna -- ada enam sumber
+// penanda di aplikasi ini, dan sebelumnya orang harus membuka enam
+// halaman untuk tahu.
+//
+// TAPI SATU HAL WAJIB IKUT TERBACA: lencana yang ditumpuk terlihat
+// seperti konfirmasi berlapis, padahal sumbernya TIDAK saling bebas --
+// Smart Money cuma dicatat kalau vonisnya sudah BELI. Keterangan
+// tumpang tindihnya karena itu TIDAK disembunyikan di balik ketukan;
+// ia muncul langsung begitu ada pasangan yang bertindih.
+function _buildLencana(d){
+  const L=d.lencana;
+  if(!L||!L.lencana||!L.lencana.length) return '';
+  const warna=a=>a==='naik'?'var(--bull)':a==='turun'?'var(--bear)':'var(--gold)';
+  const chip=x=>{
+    const w=warna(x.arah);
+    const ukur = x.unggul_pct==null ? ''
+      : ` <b style="color:${x.unggul_pct>0?'var(--bull)':'var(--bear)'}">${x.unggul_pct>0?'+':''}${fmt(x.unggul_pct,2)}%</b>`;
+    return `<span class="chip" style="border-color:${w};color:${w};font-size:11px"
+      title="${(x.catatan||'').replace(/"/g,'&quot;')}">${x.nama}${ukur}</span>`;
+  };
+  return `<section class="panel" style="margin-bottom:10px">
+    <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:11px;color:var(--muted);letter-spacing:.4px">DITANDAI OLEH</span>
+      ${L.lencana.map(chip).join('')}
+    </div>
+    ${L.keterangan_tumpang?`<p class="muted" style="font-size:11px;line-height:1.6;margin:9px 0 0">
+      \u26a0\ufe0f ${L.keterangan_tumpang}</p>`:''}
+  </section>`;
+}
+
 /* ---------- RENCANA DARI CHART ---------- */
 // Menjawab empat pertanyaan yang ditanyakan orang saat melihat chart:
 // beli di mana, jual di mana, kapan rencananya batal, dan sampai mana
@@ -7477,7 +7510,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v82';
+const APP_VERSION='v83';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

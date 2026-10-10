@@ -143,11 +143,42 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
     #
     # Yang juga terbaca: arah tren naik nyaris tidak membedakan apa pun
     # dari mendatar (-0,27% vs -0,21%). Yang berarti cuma arah TURUN.
+    # SUPPORT KUAT DIUTAMAKAN, dan ini dari pengukuran -- bukan dugaan.
+    #
+    # tools/ukur_entry.py, 786 emiten, jalan maju, dasar setanggal:
+    #
+    #     sentuh support KUAT (>=3x)     -0,08%  (n=5.997)
+    #     sentuh support TERUJI (>=2x)   -0,25%  (n=6.496)
+    #     sentuh support SATU-SENTUHAN   -0,55%  (n=3.458)
+    #
+    # TAK SATU PUN UNGGUL. Yang terbaik praktis nol, dan itu harus
+    # dikatakan: area beli di sini adalah LEVEL, bukan keunggulan. Ia
+    # memberi tahu di mana harga pernah berbalik, bukan bahwa membeli di
+    # situ menguntungkan.
+    #
+    # Tapi urutannya konsisten dan monoton: makin sering diuji, makin
+    # baik, dengan selisih 0,47 poin antara 3x dan 1x. Jadi di antara
+    # dua support terdekat, yang KUAT didahulukan -- perbaikan kecil
+    # yang tidak berongkos apa pun.
     beli = jual = None
-    if s1:
-        beli = {"harga": s1["harga"], "alasan": _alasan(s1, "Support"),
-                "teruji": (s1.get("sentuh") or 0) > 1, "dinamis": False,
-                "jarak_pct": _pct(s1["harga"], harga)}
+    s_pilih = s1
+    for kandidat in bawah[:2]:
+        if (kandidat.get("sentuh") or 0) >= 3:
+            s_pilih = kandidat
+            break
+    if s_pilih:
+        n_sentuh = s_pilih.get("sentuh") or 0
+        ukur = ("-0,08%" if n_sentuh >= 3
+                else "-0,25%" if n_sentuh > 1 else "-0,55%")
+        beli = {"harga": s_pilih["harga"],
+                "alasan": (_alasan(s_pilih, "Support")
+                           + f". Diukur, membeli di level seperti ini "
+                             f"rata-rata {ukur} terhadap pasar — ini "
+                             "LEVEL, bukan keunggulan"),
+                "teruji": n_sentuh > 1, "dinamis": False,
+                "unggul_terukur_pct": (-0.08 if n_sentuh >= 3
+                                       else -0.25 if n_sentuh > 1 else -0.55),
+                "jarak_pct": _pct(s_pilih["harga"], harga)}
 
     # DI TREN TURUN TIDAK ADA AREA BELI, dan itu bukan kolom yang gagal
     # terisi. Bukunya tegas: jangan beli melawan tren sampai garisnya

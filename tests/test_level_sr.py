@@ -368,3 +368,51 @@ def test_arah_naik_tidak_diklaim_unggul():
     assert abs(naik - datar) < 0.5, (
         f"arah naik ({naik}) kini berbeda jauh dari mendatar ({datar}); "
         "tinjau ulang apakah ia layak dipakai")
+
+
+# ---------------------------------------------------------------------------
+# Area beli: diukur, dan hasilnya ditulis apa adanya
+# ---------------------------------------------------------------------------
+
+def _ukur_entry():
+    import json
+    import pathlib
+    f = pathlib.Path(__file__).resolve().parent.parent / "tools" / "hasil_ukur_entry.json"
+    return {r["aturan"]: r for r in json.loads(f.read_text(encoding="utf-8"))["aturan"]}
+
+
+def test_support_lebih_sering_teruji_lebih_baik():
+    """Satu-satunya hal yang benar-benar terbukti soal area beli:
+    urutannya monoton. Makin sering sebuah level diuji, makin baik --
+    selisih 0,47 poin antara 3x dan 1x.
+
+    Keunggulan mutlaknya TIDAK ada (yang terbaik -0,08%), dan itu
+    dikatakan terus terang di layar."""
+    m = _ukur_entry()
+    kuat = m["sentuh support KUAT (>=3x)"]["unggul_pct"]
+    teruji = m["sentuh support TERUJI"]["unggul_pct"]
+    satu = m["sentuh support SATU-SENTUHAN"]["unggul_pct"]
+    assert kuat > teruji > satu, (kuat, teruji, satu)
+
+
+def test_support_KUAT_diutamakan_sbg_area_beli():
+    """Perbaikan kecil yang tidak berongkos: di antara dua support
+    terdekat, yang sudah diuji >=3 kali dipilih."""
+    lv = [_L(980, "support", 1, "Support Terdekat"),
+          _L(940, "support", 5, "Support Swing"),
+          _L(1100, "resistance", 4)]
+    r = rc.susun(1000, lv, [])
+    assert r["beli"]["harga"] == 940
+
+
+def test_area_beli_TIDAK_diklaim_menguntungkan():
+    """Tak satu pun aturan area beli terukur unggul -- yang terbaik
+    -0,08%. Layar harus menyebut bahwa ini LEVEL, bukan keunggulan;
+    kalau tidak, pembaca menyimpulkan sendiri bahwa membeli di situ
+    menguntungkan, dan pengukurannya mengatakan sebaliknya."""
+    m = _ukur_entry()
+    assert all(r["unggul_pct"] <= 0 for r in m.values()), (
+        "ada aturan entry yang kini unggul; tinjau ulang kalimat di layar")
+    r = rc.susun(1000, [_L(950, "support", 4)], [])
+    assert "LEVEL, bukan keunggulan" in r["beli"]["alasan"]
+    assert r["beli"]["unggul_terukur_pct"] <= 0

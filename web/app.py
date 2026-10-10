@@ -2370,6 +2370,79 @@ def _harmonic_chart_payload(df, maks: int = 2) -> list:
     return keluar
 
 
+def _lencana_payload(kode: str, vonis: str | None) -> dict:
+    """Sistem mana saja di aplikasi ini yang sedang menandai emiten ini.
+
+    SELURUH sumbernya sudah dihitung di tempat lain: tiga kueri
+    ber-indeks ke signal_history, dan sisanya dibaca dari cache yang
+    sudah dihangatkan pemanas. TIDAK memindai dan TIDAK mengunduh apa
+    pun -- kalau cache-nya kebetulan dingin, lencana yang bersangkutan
+    cuma tidak muncul, dan itu jauh lebih baik daripada satu halaman
+    saham memicu pemindaian 793 emiten.
+
+    Jebakan yang ditutup modul core/lencana.py: lencana yang ditumpuk
+    terbaca sebagai konfirmasi berlapis, padahal sumbernya tidak saling
+    bebas (Smart Money cuma dicatat kalau vonisnya SUDAH BELI). Lihat
+    catatan panjang di sana.
+    """
+    try:
+        from core.lencana import susun
+    except Exception:
+        return {}
+
+    kode = (kode or "").upper()
+    audit_sumber, audit_aktif = [], False
+    nr7 = mvh = False
+    try:
+        from core.signal_history import (_has_open_mvh, _has_open_nr7,
+                                         _has_open_signal)
+        audit_aktif = bool(_has_open_signal(kode))
+        nr7 = bool(_has_open_nr7(kode))
+        mvh = bool(_has_open_mvh(kode))
+        if audit_aktif:
+            audit_sumber.append("Top Pick / Smart Money")
+        if nr7:
+            audit_sumber.append("NR7 + 52W")
+        if mvh:
+            audit_sumber.append("Minervini \u00d7 Harmonic")
+    except Exception:
+        pass
+
+    sm_pola = None
+    try:
+        ff = _cache_get("foreign_flow:all") or _cache_get("foreign_flow:medium")
+        for x in ((ff or {}).get("akumulasi") or []):
+            if str(x.get("kode", "")).upper() == kode:
+                sm_pola = x.get("pola")
+                break
+    except Exception:
+        pass
+
+    pem_kuat = None
+    try:
+        dv = _cache_get(_DIVERGENCE_CACHE_KEY)
+        for x in ((dv or {}).get("items") or []):
+            if str(x.get("kode", "")).upper() == kode:
+                pem_kuat = bool(x.get("kuat"))
+                break
+    except Exception:
+        pass
+
+    return susun(
+        kode,
+        audit_aktif=bool(audit_aktif or nr7 or mvh),
+        audit_sumber=tuple(audit_sumber),
+        vonis=vonis,
+        vonis_unggul=UNGGUL_VONIS.get(vonis) if vonis else None,
+        vonis_n=None,
+        smart_money_pola=sm_pola,
+        pemulihan_kuat=pem_kuat,
+        pemulihan_unggul=4.01,
+        nr7_aktif=nr7,
+        minervini_harmonic_aktif=mvh,
+    )
+
+
 def _rencana_chart_payload(df, pola: list, sr: dict) -> dict:
     """Beli di mana, jual di mana, batal kapan -- dari level & pola yang
     SUDAH dihitung, tanpa unduhan tambahan.
@@ -2464,7 +2537,7 @@ async def _analyze_payload(kode: str):
     # medan itu sampai TTL-nya habis -- dan gejalanya bukan error,
     # melainkan panel yang diam-diam kosong untuk sebagian pengunjung.
     # Kelas bug ini sudah tercatat di memori proyek.
-    cache_key = f"analyze:v4:{kode}"
+    cache_key = f"analyze:v5:{kode}"
     cached = _cache_get(cache_key)
 
     if cached is None:
@@ -2487,13 +2560,23 @@ async def _analyze_payload(kode: str):
             # /api/insight -- lihat _compute_ringkasan_cepat)
             pola_l = _pola_chart_payload(kode, df)
             sr_l = _level_sr_payload(df)
+            # Vonis dihitung ULANG di sini (bukan diambil dari
+            # _compute_ringkasan_cepat -- itu badge yang berbeda).
+            # Ongkosnya nol: ai_l sudah di tangan.
+            try:
+                vonis_l = (_ringkasan_sinyal_teknikal(ai_l) or {}).get("overall")
+            except Exception:
+                vonis_l = None
+            lencana_l = _lencana_payload(kode, vonis_l)
             return (ai_l, build_smc_summary(df), _compute_ringkasan_cepat(df, ai_l),
-                    pola_l, sr_l, _rencana_chart_payload(df, pola_l, sr_l))
+                    pola_l, sr_l, _rencana_chart_payload(df, pola_l, sr_l),
+                    lencana_l)
 
         hasil_hitung = await asyncio.to_thread(_hitung)
         if hasil_hitung is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
-        ai, smc, ringkasan, pola_chart, sr_level, rencana_chart = hasil_hitung
+        (ai, smc, ringkasan, pola_chart, sr_level, rencana_chart,
+         lencana) = hasil_hitung
         # Vonis KEMARIN dihitung di worker thread -- ia memanggil
         # calculate_ai_score_from_df sekali lagi (7,7 ms), dan loop
         # sinkron di event loop membekukan seluruh server.
@@ -2539,6 +2622,7 @@ async def _analyze_payload(kode: str):
             "sr_level": sr_level.get("level") or [],
             "sr_ringkas": sr_level.get("ringkas") or {},
             "rencana_chart": rencana_chart,
+            "lencana": lencana,
             # Konsensus analis diambil di luar _hitung() karena ia memanggil
             # jaringan (Yahoo .info, 1-2 detik) sedangkan _hitung() jalan di
             # worker thread untuk kerja CPU. Mencampurnya berarti thread itu
