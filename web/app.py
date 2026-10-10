@@ -4868,6 +4868,35 @@ async def _warm_shared_caches():
         except Exception as e:
             print(f"⚠️ cache-warmer harmonic: {type(e).__name__}: {e}")
 
+    # Dua panel yang DILIHAT orang, dihangatkan SEBELUM foreign-flow.
+    #
+    # Urutannya sempat terbalik, dan akibatnya nyata: penulis membuka tab
+    # Vonis sesudah deploy dan cuma menemukan "sedang disiapkan". Bukan
+    # rusak -- cuma antre di belakang foreign_flow scope 'all' yang
+    # sendirian makan 69 detik, padahal 'all' itu dataset untuk perintah
+    # `smartmoney` di bot, BUKAN panel yang sedang ditatap orang. Halaman
+    # yang ditatap orang didahulukan daripada dataset yang dipakai mesin.
+    #
+    # Keduanya WAJIB bersebelahan: mereka berbagi satu unduhan universe
+    # lewat _universe_1y(), yang memonya cuma 15 menit. Menyelipkan
+    # pekerjaan panjang di antaranya membuat universe 793 emiten diunduh
+    # dua kali lagi -- persis masalah yang baru saja diperbaiki.
+    #
+    # Pengunjung TIDAK PERNAH memindai keduanya sendiri (lihat
+    # api_screener_vonis & api_divergence), jadi tanpa dihangatkan di
+    # sini panelnya selamanya menjawab "sedang disiapkan".
+    if _cache_get(_SCREENER_VONIS_KEY) is None:
+        try:
+            await _single_flight(_SCREENER_VONIS_KEY, _build_screener_vonis)
+        except Exception as e:
+            print(f"\u26a0\ufe0f cache-warmer screener-vonis: {type(e).__name__}: {e}")
+
+    if _cache_get(_DIVERGENCE_CACHE_KEY) is None:
+        try:
+            await _single_flight(_DIVERGENCE_CACHE_KEY, _build_divergence)
+        except Exception as e:
+            print(f"\u26a0\ufe0f cache-warmer divergence: {type(e).__name__}: {e}")
+
     # Smart Money: 'core' & 'medium' dihangatkan DI SINI supaya pengunjung
     # membaca cache, bukan memicu unduhan 250 emiten sendiri. Scope bawaan di
     # layar adalah 'medium' -- jadi justru jalur inilah yang paling sering
@@ -4889,24 +4918,6 @@ async def _warm_shared_caches():
             await _single_flight(key, lambda s=scope, k=key: _build_foreign_flow(s, k))
         except Exception as e:
             print(f"⚠️ cache-warmer foreign-flow:{scope}: {type(e).__name__}: {e}")
-
-    # Divergence: 178 emiten, dan pengunjung TIDAK PERNAH memindainya
-    # sendiri (lihat api_divergence). Kalau ini tidak dihangatkan, panel
-    # itu selamanya menjawab "sedang disiapkan".
-    # Screener vonis: 793 emiten x dua panggilan skor AI. Pengunjung tidak
-    # pernah memindainya sendiri (lihat api_screener_vonis), jadi tanpa
-    # dihangatkan di sini halamannya selamanya menjawab "sedang disiapkan".
-    if _cache_get(_SCREENER_VONIS_KEY) is None:
-        try:
-            await _single_flight(_SCREENER_VONIS_KEY, _build_screener_vonis)
-        except Exception as e:
-            print(f"\u26a0\ufe0f cache-warmer screener-vonis: {type(e).__name__}: {e}")
-
-    if _cache_get(_DIVERGENCE_CACHE_KEY) is None:
-        try:
-            await _single_flight(_DIVERGENCE_CACHE_KEY, _build_divergence)
-        except Exception as e:
-            print(f"\u26a0\ufe0f cache-warmer divergence: {type(e).__name__}: {e}")
 
     if _cache_get("sinyal_puncak:v3") is None:
         try:

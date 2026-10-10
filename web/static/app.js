@@ -1638,14 +1638,44 @@ let mvPenuhSaja = false;
 // Daftar semacam itu lebih berbahaya daripada daftar kosong karena
 // terlihat seperti pekerjaan yang sudah dilakukan.
 let vonisSaring = 'semua';
+// Penghitung percobaan ulang saat cache-nya masih dihangatkan.
+// KENAPA ADA: pemanas berjalan BERURUTAN, jadi sesudah server dimulai
+// ulang panel ini memang kosong selama beberapa menit sampai gilirannya
+// tiba. Tanpa muat-ulang otomatis, satu-satunya cara penulis tahu
+// datanya sudah siap adalah menekan tabnya berkali-kali -- dan itu
+// membuat keadaan yang NORMAL terasa seperti kerusakan.
+let _vonisCoba = 0;
+const _VONIS_COBA_MAKS = 20;   // 20 x 20 dtk = ~6,5 menit
+let _vonisTimer = null;
 async function loadVonis(){
+  // Timer lama DIBATALKAN tiap pemanggilan -- tanpa ini, berpindah tab
+  // bolak-balik menumpuk beberapa timer yang semuanya memuat ulang,
+  // persis kelas bug yang pernah membuat Audit Sinyal berat (instance
+  // chart bocor karena tidak pernah dibersihkan sebelum render ulang).
+  if(_vonisTimer){clearTimeout(_vonisTimer);_vonisTimer=null}
   const body=$('#uniBody');
   body.innerHTML='<section class="panel skel loadbar"></section><p class="muted" style="text-align:center;margin-top:10px">Membaca vonis Ringkasan Sinyal\u2026</p>';
   let d; try{d=await api('/api/screener-vonis')}catch(e){body.innerHTML=errBox(e.message);return}
   if(d.menyiapkan){
-    body.innerHTML=`<section class="panel">${emptyState('Data sedang disiapkan di latar belakang. Halaman ini sengaja TIDAK memindai sendiri \u2014 menghitung vonis dua hari untuk 793 saham atas permintaan satu pengunjung akan membuat seluruh aplikasi tersendat. Coba lagi sebentar lagi.','clock')}</section>`;
+    _vonisCoba++;
+    const nyerah=_vonisCoba>=_VONIS_COBA_MAKS;
+    // Pesannya menyebut SEBABNYA dan BERAPA LAMA. "Coba lagi sebentar
+    // lagi" tanpa keduanya membuat orang menyangka ada yang rusak --
+    // dan menunggu tanpa tahu sampai kapan terasa lebih lama daripada
+    // menunggu dengan tahu.
+    body.innerHTML=`<section class="panel">${emptyState(
+      nyerah
+        ? 'Data belum juga siap sesudah beberapa menit. Biasanya ini berarti pemanas cache di server sedang tersendat atau baru dimulai ulang. Buka lagi tab ini nanti \u2014 halaman ini sengaja tidak memindai sendiri, karena memindai 793 saham atas permintaan satu pengunjung akan membuat seluruh aplikasi tersendat.'
+        : 'Data sedang disiapkan di latar belakang. Sesudah server dimulai ulang, panel ini menunggu gilirannya di antrean pemanas \u2014 biasanya beberapa menit. Halaman ini akan memuat sendiri begitu datanya siap, tidak perlu ditekan berulang.',
+      'clock')}
+      ${nyerah?'':`<p class="muted" style="text-align:center;font-size:11px;margin-top:-6px">Memeriksa lagi otomatis\u2026 (percobaan ${_vonisCoba}/${_VONIS_COBA_MAKS})</p>`}
+    </section>`;
+    // Berhenti kalau penulis sudah pindah tab -- memuat ulang panel yang
+    // tidak terlihat cuma menghabiskan permintaan tanpa ada yang membaca.
+    if(!nyerah) _vonisTimer=setTimeout(()=>{if(scrMode==='vonis')loadVonis()},20000);
     return;
   }
+  _vonisCoba=0;
   const u=d.ukuran||{}, semua=d.items||[];
   const items=semua.filter(x=>
     vonisSaring==='semua' ? true :
@@ -6788,7 +6818,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v66';
+const APP_VERSION='v67';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

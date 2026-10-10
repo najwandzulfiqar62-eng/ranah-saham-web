@@ -452,3 +452,50 @@ def test_universe_1y_dikunci_terhadap_pemanggil_bersamaan():
     src = inspect.getsource(app_module._universe_1y)
     assert "_unduh_universe_lock" in src
     assert isinstance(app_module._unduh_universe_lock, asyncio.Lock)
+
+
+# ---------------------------------------------------------------------------
+# Urutan pemanas
+# ---------------------------------------------------------------------------
+
+def test_panel_dihangatkan_sebelum_dataset_perintah_bot():
+    """GEJALA NYATA: penulis membuka tab Vonis sesudah deploy dan cuma
+    menemukan "sedang disiapkan". Bukan rusak -- antre di belakang
+    foreign_flow scope 'all' yang sendirian makan 69 detik, padahal 'all'
+    itu dataset untuk perintah `smartmoney` di bot, bukan panel yang
+    sedang ditatap orang."""
+    src = inspect.getsource(app_module._warm_shared_caches)
+    assert src.index("_SCREENER_VONIS_KEY") < src.index('foreign_flow:{scope}')
+    assert src.index("_DIVERGENCE_CACHE_KEY") < src.index('foreign_flow:{scope}')
+
+
+def test_vonis_dan_divergence_tetap_bersebelahan():
+    """Keduanya berbagi SATU unduhan universe lewat _universe_1y(), yang
+    memonya cuma 15 menit. Menyelipkan pekerjaan panjang di antaranya
+    membuat universe 793 emiten diunduh dua kali lagi -- persis masalah
+    yang sudah diperbaiki sekali."""
+    src = inspect.getsource(app_module._warm_shared_caches)
+    i_v = src.index("_single_flight(_SCREENER_VONIS_KEY")
+    i_d = src.index("_single_flight(_DIVERGENCE_CACHE_KEY")
+    antara = src[min(i_v, i_d):max(i_v, i_d)]
+    # Tidak ada pemanggilan pemanas LAIN di antara keduanya.
+    for lain in ("_build_foreign_flow", "_berita_pasar", "screenerpro(",
+                 "screener_harmonic(", "_build_universe"):
+        assert lain not in antara, f"{lain} menyelip di antara vonis & divergence"
+
+
+def test_layar_memuat_ulang_sendiri_saat_cache_dingin():
+    """Pemanas berjalan berurutan, jadi sesudah server dimulai ulang panel
+    ini memang kosong beberapa menit. Tanpa muat-ulang otomatis, keadaan
+    yang NORMAL terasa seperti kerusakan."""
+    js = open("web/static/app.js", encoding="utf-8").read()
+    i = js.index("async function loadVonis(")
+    blok = js[i:i + 4000]
+    assert "_VONIS_COBA_MAKS" in blok
+    assert "setTimeout(" in blok
+    # Dibatasi, bukan memeriksa selamanya.
+    assert "nyerah" in blok
+    # Berhenti kalau tabnya sudah ditinggalkan.
+    assert "scrMode==='vonis'" in blok
+    # Timer lama dibatalkan supaya tidak menumpuk.
+    assert "clearTimeout(_vonisTimer)" in blok
