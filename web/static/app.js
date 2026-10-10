@@ -730,6 +730,16 @@ function _ovlBersihHarga(st){
 // menuliskan angkanya sendiri di sumbu harga, sehingga angka di sumbu
 // dan garis di chart mustahil berbeda. Menuliskannya sendiri sbg label
 // terpisah akan membuat keduanya bisa menyimpang saat chart di-zoom.
+// Menandai level yang berperan jadi area beli/jual. Dicocokkan pakai
+// toleransi kecil, bukan kesamaan persis: keduanya melewati pembulatan
+// yang berbeda, dan `===` pada pecahan akan gagal diam-diam.
+function _tandaRencana(st, harga){
+  const r=st.rencana; if(!r)return '';
+  const dekat=(a,b)=>a!=null&&b!=null&&Math.abs(a-b)<=Math.max(0.01,Math.abs(b)*0.0005);
+  if(r.beli&&dekat(harga,r.beli.harga)) return r.terlalu_sempit?'▲ ':'▲ BELI · ';
+  if(r.jual&&dekat(harga,r.jual.harga)) return r.terlalu_sempit?'▼ ':'▼ JUAL · ';
+  return '';
+}
 function _gambarSR(kunci, sr){
   const st=_ovlState(kunci);
   if(!st.cs)return;
@@ -751,7 +761,13 @@ function _gambarSR(kunci, sr){
         lineWidth:L.kuat?2:1,
         lineStyle:L.kuat?0:2,
         axisLabelVisible:true,
-        title:`${L.nama||(res?'Resistance':'Support')} ${L.sentuh}×`,
+        // Level yang SEKALIGUS jadi area beli/jual ditandai di sini,
+        // bukan digambar ulang sbg garis kedua. Versi sebelumnya
+        // memasang price-line "AREA BELI" di harga yang PERSIS SAMA
+        // dengan "Support Terdekat" -- dua garis bertumpuk di satu
+        // harga, yang membuat chart terlihat sesak dan membuat penulis
+        // menyangka area beli & jualnya berdempetan.
+        title:`${_tandaRencana(st,L.harga)}${L.nama||(res?'Resistance':'Support')} ${L.sentuh}×`,
       }));
     }catch(e){ console.warn('SR gagal digambar',L,e) }
   }
@@ -767,21 +783,10 @@ function _rpT(v){ return (typeof _rpRingkas==='function')?_rpRingkas(v):('Rp'+fm
 function _gambarRencana(kunci, rencana){
   const st=_ovlState(kunci);
   if(!st.cs||!rencana)return;
-  const pasang=(v,beli)=>{
-    if(!v||!v.harga)return;
-    try{
-      st.garisHarga.push(st.cs.createPriceLine({
-        price:v.harga, color:beli?'#2FB57E':'#E0566B',
-        lineWidth:2, lineStyle:0, axisLabelVisible:true,
-        // Level yang BELUM teruji ulang ditandai di judulnya. Menyebut
-        // "AREA BELI" tanpa catatan akan menjanjikan dasar yang
-        // sebenarnya baru disentuh sekali.
-        title:`${beli?'AREA BELI':'AREA JUAL'}${v.teruji===false?' (belum teruji)':''}`,
-      }));
-    }catch(e){ console.warn('rencana: garis gagal',e) }
-  };
-  pasang(rencana.beli,true);
-  pasang(rencana.jual,false);
+  // Beli & jual TIDAK digambar di sini: harganya sama persis dengan
+  // level S/R yang sudah tergambar, jadi menggambarnya lagi berarti dua
+  // garis bertumpuk di satu harga. Penandanya dipasang di judul garis
+  // S/R itu sendiri (lihat _tandaRencana).
   if(rencana.invalidasi){
     try{
       st.garisHarga.push(st.cs.createPriceLine({
@@ -790,19 +795,31 @@ function _gambarRencana(kunci, rencana){
       }));
     }catch(e){}
   }
-  // Panah ditempel di bar TERAKHIR: areanya belum tentu sudah disentuh,
-  // jadi menempelkannya di masa lalu akan menyiratkan kejadian yang
-  // tidak pernah ada.
-  const tanda=[];
-  if(st.tAkhir){
-    if(rencana.beli&&rencana.beli.harga)
-      tanda.push({time:st.tAkhir,position:'belowBar',color:'#2FB57E',
-        shape:'arrowUp',text:`BELI ${_rpT(rencana.beli.harga)}`});
-    if(rencana.jual&&rencana.jual.harga)
-      tanda.push({time:st.tAkhir,position:'aboveBar',color:'#E0566B',
-        shape:'arrowDown',text:`JUAL ${_rpT(rencana.jual.harga)}`});
-  }
-  try{ st.cs.setMarkers(tanda) }catch(e){ console.warn('rencana: panah gagal',e) }
+}
+
+/* ---- Segitiga BELI / JUAL di TANGGAL kejadiannya ---- */
+// Panah tidak lagi ditempel di bar terakhir sbg "area". Penulis menolak
+// versi itu: ketika harga terjepit di antara support dan resistance yang
+// berdekatan, panah beli dan jual muncul nyaris di ketinggian yang sama,
+// dan dua panah berdempetan menyiratkan peluang yang tidak ada.
+//
+// Sinyal sekarang adalah KEJADIAN bertanggal: segitiga hijau di hari
+// vonis BELI KUAT bertahan ke hari kedua, merah untuk JUAL KUAT. Karena
+// keadaan ekstrem jarang, segitiganya memisahkan dirinya sendiri --
+// biasanya berjarak mingguan, bukan berdempetan.
+function _gambarSinyal(kunci, sinyal){
+  const st=_ovlState(kunci);
+  if(!st.cs)return;
+  const list=(sinyal||[]);
+  if(!list.length){ try{st.cs.setMarkers([])}catch(e){} return }
+  const tanda=list.map(x=>{
+    const beli=x.jenis==='BELI';
+    return {time:x.t, position:beli?'belowBar':'aboveBar',
+            color:beli?'#2FB57E':'#E0566B',
+            shape:beli?'arrowUp':'arrowDown',
+            text:`${x.jenis} ${_rpT(x.harga)}`};
+  });
+  try{ st.cs.setMarkers(tanda) }catch(e){ console.warn('sinyal: panah gagal',e) }
 }
 
 /* ---- Pola ---- */
@@ -913,6 +930,7 @@ function _pasangOverlay(kunci, chart, cs, o, chipsSel){
   // error apa pun.
   _gambarSR(kunci, o.sr||[]);
   _gambarRencana(kunci, st.rencana);
+  _gambarSinyal(kunci, o.sinyal||[]);
   if(st.data.length) _gambarPola(kunci,0); else _renderPolaChips(kunci);
 }
 
@@ -5829,6 +5847,13 @@ function _buildRencana(d){
       <span style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:800;color:${w}">${_BIAS_LABEL[r.bias]}</span>
       ${r.pola_utama?`<span class="chip" style="font-size:10.5px">${r.pola_utama}</span>`:''}
     </div>
+    ${r.terlalu_sempit?`<div style="background:rgba(199,154,42,.1);border:1px solid rgba(199,154,42,.35);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:11.5px;line-height:1.6">
+      <b>Rentangnya terlalu sempit untuk dijadikan rencana.</b> Jarak ke area jual lebih kecil
+      daripada jarak ke titik batal${r.imbal_risiko!=null?` (imbalan ${fmt(r.imbal_risiko,2)}× risiko)`:''},
+      jadi kalaupun benar, untungnya tidak sepadan dengan ruginya kalau salah — apalagi
+      sesudah dipotong biaya transaksi. Levelnya tetap ditampilkan sebagai <b>batas</b>, bukan
+      sebagai anjuran.</div>`:''}
+    ${r.imbal_risiko!=null&&!r.terlalu_sempit?baris('Imbalan vs risiko',`${fmt(r.imbal_risiko,2)}×`,r.imbal_risiko>=2?'var(--bull)':'','Berapa kali lipat potensi untung dibanding kerugian kalau titik batal kena'):''}
     ${baris('Area beli',
         r.beli?rp(r.beli.harga)+jar(r.beli):'<span class="muted" style="font-weight:400;font-size:11.5px">tidak ada level teruji di bawah</span>',
         r.beli?'var(--bull)':'', r.beli?r.beli.alasan:'Harga berada di bawah semua level yang pernah bertahan \u2014 tidak ada lantai yang terbukti.')}
@@ -7168,7 +7193,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v71';
+const APP_VERSION='v72';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

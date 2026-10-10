@@ -2089,6 +2089,96 @@ def _level_sr_payload(df) -> dict:
         return {"level": [], "ringkas": {}}
 
 
+# Jarak minimum antar-sinyal sejenis, dalam bar. Tanpa ini, vonis yang
+# berkedip di sekitar ambangnya melahirkan belasan segitiga berdempetan
+# dalam sepekan -- yang bukan cuma jelek dilihat, tapi menyiratkan
+# belasan kesempatan berbeda padahal itu satu keadaan yang sama.
+JEDA_SINYAL_BAR = 10
+_SINYAL_CHART_TTL = int(os.getenv("SINYAL_CHART_TTL", "3600"))
+
+# Keunggulan terukur ATURAN YANG DIPAKAI DI CHART -- yaitu vonis yang
+# BERTAHAN ke hari kedua, bukan yang baru muncul sehari. Sengaja TIDAK
+# memakai UNGGUL_VONIS: angka itu mengukur vonis sehari, dan memasangnya
+# di sini berarti menempelkan label yang mengukur aturan BERBEDA dari
+# yang digambar. Diisi dari pengukuran jalan-maju tersendiri.
+UNGGUL_SINYAL_CHART: dict[str, float | None] = {
+    "BELI KUAT": None, "JUAL KUAT": None}
+N_SINYAL_CHART: dict[str, int | None] = {
+    "BELI KUAT": None, "JUAL KUAT": None}
+
+
+def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
+    """Kapan sinyal beli/jual MULAI berlaku -- kejadian bertanggal.
+
+    KENAPA BUKAN ZONA HARGA. Versi sebelumnya menandai "area beli" di
+    support terdekat dan "area jual" di resistance terdekat. Penulis
+    menolaknya dengan alasan yang tepat: ketika harga terjepit di antara
+    dua level berdekatan, kedua garis itu nyaris menempel -- dan dua
+    garis berdempetan bukan rencana, ia cuma dua garis. Diukur pada IHSG
+    saat itu: beli -1,7%, jual +2,1%. Tidak ada yang bisa ditindak dari
+    jarak 3,8% yang sudah termakan biaya dan selisih harga.
+
+    Sinyal yang berguna adalah KEJADIAN: pada tanggal berapa keadaannya
+    berubah. Itu yang ditandai di sini, dan ia memisahkan dirinya sendiri
+    -- keadaan ekstrem jarang, jadi segitiganya memang berjauhan.
+
+    SYARAT BERTAHAN DUA HARI, dan di situlah akurasinya. Terukur, vonis
+    yang baru muncul sehari jauh lebih lemah daripada yang bertahan:
+    BELI KUAT +1,11% sehari menjadi +4,59% kalau masih BELI KUAT
+    keesokan harinya (n=398) -- empat kali lipat. Satu hari bisa
+    kebetulan; dua hari berturut-turut lebih sulit kebetulan. Harganya:
+    sinyalnya terlambat satu hari. Itu pertukaran yang disengaja, dan
+    angkanya yang memutuskan.
+
+    HANYA EMPAT VONIS TENGAH YANG DIABAIKAN -- terukur mereka berada
+    dalam rentang +-0,25% dari pasar, jadi menggambar segitiga untuk
+    mereka berarti menandai sesuatu yang tidak berbeda dari menebak.
+
+    HANYA SAAT BERUBAH, bukan tiap bar vonisnya ekstrem. Vonis yang
+    bertahan dua minggu adalah SATU kejadian; menandainya sepuluh kali
+    adalah kesalahan yang sudah tiga kali menggelembungkan angka di
+    proyek ini, kali ini dalam bentuk gambar.
+
+    MAHAL: 18,7 ms per bar. Karena itu DI-CACHE -- chart menyegarkan
+    dirinya tiap 30 detik, dan menghitung ulang 170 bar tiap kali berarti
+    3,2 detik CPU tiap setengah menit untuk tiap penonton.
+    """
+    kunci = f"sinyalchart:v1:{(kode or '').upper()}"
+    hangat = _cache_get(kunci)
+    if hangat is not None:
+        return hangat
+    try:
+        from core.ai_score import calculate_ai_score_from_df
+    except Exception:
+        return []
+    keluar = []
+    try:
+        n = len(df)
+        mulai = max(60, n - n_bar)
+        lalu = lalu2 = None
+        terakhir = {"BELI KUAT": -999, "JUAL KUAT": -999}
+        for i in range(mulai, n):
+            potong = df.iloc[:i + 1]
+            ai = calculate_ai_score_from_df(potong)
+            v = _ringkasan_sinyal_teknikal(ai)["overall"] if ai else None
+            if (v in ("BELI KUAT", "JUAL KUAT") and v == lalu and v != lalu2
+                    and i - terakhir[v] >= JEDA_SINYAL_BAR):
+                terakhir[v] = i
+                keluar.append({
+                    "t": str(df.index[i])[:10],
+                    "jenis": "BELI" if v == "BELI KUAT" else "JUAL",
+                    "vonis": v, "bertahan": True,
+                    "harga": round(float(potong["Close"].iloc[-1]), 2),
+                    "unggul_pct": UNGGUL_SINYAL_CHART.get(v),
+                    "n_ukur": N_SINYAL_CHART.get(v),
+                })
+            lalu2, lalu = lalu, v
+    except Exception:
+        return []
+    _cache_set(kunci, keluar, ttl=_SINYAL_CHART_TTL)
+    return keluar
+
+
 def _rencana_chart_payload(df, pola: list, sr: dict) -> dict:
     """Beli di mana, jual di mana, batal kapan -- dari level & pola yang
     SUDAH dihitung, tanpa unduhan tambahan.
@@ -2309,6 +2399,10 @@ async def ohlc(kode: str, days: int = 140):
     # sering lahir di luar jendela yang kebetulan ditampilkan.
     sr = _level_sr_payload(df)
     rencana = _rencana_chart_payload(df, pola, sr)
+    # Di WORKER THREAD: 170 bar x 18,7 ms = 3,2 detik kalau cache dingin,
+    # dan tiga detik di event loop membekukan SELURUH server, bukan cuma
+    # chart yang memintanya.
+    sinyal = await asyncio.to_thread(_sinyal_chart_payload, label, df)
 
     # Jendela candle DIPERPANJANG kalau polanya mulai lebih awal. Tanpa
     # ini garis polanya terpotong di tepi kiri chart -- dan garis yang
@@ -2388,7 +2482,7 @@ async def ohlc(kode: str, days: int = 140):
     return {"kode": label, "candles": candles, "volume": vol, "ma20": m20, "ma50": m50,
             "phases": detect_phases(df), "pola": pola,
             "sr": sr.get("level") or [], "sr_ringkas": sr.get("ringkas") or {},
-            "rencana": rencana,
+            "rencana": rencana, "sinyal": sinyal,
             "last_price": last_price, "realtime": realtime, "as_of": now_jkt.strftime("%H:%M")}
 
 

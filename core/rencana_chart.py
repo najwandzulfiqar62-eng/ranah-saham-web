@@ -136,9 +136,32 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
     target = [x["harga"] for x in atas[:3]] if bias != "bearish" \
         else [x["harga"] for x in bawah[:3]]
 
+    # --- IMBALAN vs RISIKO ------------------------------------------------
+    # PENOLAKAN PENULIS YANG MELAHIRKAN INI: "area buy dan sell
+    # kedeketan". Benar, dan sebabnya bukan selera melainkan cacat:
+    # ketika harga terjepit di antara support dan resistance yang
+    # berdekatan, dua garis itu nyaris menempel. Diukur pada IHSG saat
+    # itu, beli -1,7% dan jual +2,1% -- jarak 3,8% yang sudah habis oleh
+    # biaya transaksi dan selisih harga.
+    #
+    # Yang salah bukan angkanya, melainkan menyebut dua garis berdempetan
+    # sebagai "rencana". Jadi imbalan/risiko dihitung, dan kalau ia di
+    # bawah 1 rencananya DITANDAI TIDAK LAYAK, bukan disembunyikan --
+    # pembaca tetap berhak melihat levelnya, cuma tidak boleh dibiarkan
+    # mengira itu peluang.
+    rr = None
+    sempit = False
+    if beli and jual and invalidasi:
+        risiko = beli["harga"] - invalidasi
+        imbalan = jual["harga"] - beli["harga"]
+        if risiko > 0:
+            rr = round(imbalan / risiko, 2)
+            sempit = rr < 1.0
+
     return {
         "bias": bias, "skor_bias": round(skor, 1),
         "beli": beli, "jual": jual,
+        "imbal_risiko": rr, "terlalu_sempit": sempit,
         "konfirmasi": konfirmasi, "alasan_konfirmasi": alasan_konf,
         "invalidasi": invalidasi, "alasan_invalidasi": alasan_inval,
         "target": target,
