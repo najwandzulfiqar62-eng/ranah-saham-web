@@ -885,6 +885,36 @@ def get_active_kodes() -> list[str]:
     return [r["kode"] for r in rows]
 
 
+def _tp_sl_rencana(it: dict, is_sell: bool = False) -> tuple[float, float]:
+    """(tp_pct, sl_pct) untuk satu kandidat sinyal.
+
+    DUA HAL YANG BEDA MAKSUD, dan pernah tercampur:
+
+      potensi_naik_pct / risiko_turun_pct  = DI MANA level R1/S1 berada
+      tp_rencana_pct   / sl_rencana_pct    = SEBERAPA JAUH target & stop
+                                             dipasang, sesudah dilantai
+                                             derau harian sahamnya sendiri
+
+    Diukur 7 Okt 2026 pada 658 sinyal: stop lama rata-rata 3% padahal saham
+    median bergerak 3,60% per hari, dan 53,8% sinyal kena stop karena itu.
+    Yang melantai jarak stop ada di core/atr_stop.py.
+
+    Menyatukan keduanya pernah membuat layar menampilkan "RESISTANCE R1:
+    Rp61 (+30,0%)" -- harganya R1, persennya jarak TP rencana. Dilaporkan
+    penulis 10 Okt 2026 dari layarnya sendiri.
+
+    FALLBACK ke jarak R1/S1 bukan basa-basi: ATR bisa tidak terhitung pada
+    saham yang datanya terlalu pendek, dan sinyalnya tetap layak dicatat
+    dengan perilaku lama daripada hilang sama sekali.
+
+    `is_sell` menukar keduanya -- potensi_naik/risiko_turun dihitung dengan
+    asumsi BUY, jadi untuk SELL target dan stopnya bertukar tempat.
+    """
+    tp = it.get("tp_rencana_pct") or it.get("potensi_naik_pct")
+    sl = it.get("sl_rencana_pct") or it.get("risiko_turun_pct")
+    return (sl, tp) if is_sell else (tp, sl)
+
+
 def _has_open_signal(kode: str) -> bool:
     """True kalau `kode` TIDAK BOLEH dapat sinyal baru sekarang -- karena
     (a) masih ada sinyal OPEN utk kode itu (source mana pun), ATAU (b)
@@ -1118,7 +1148,7 @@ async def record_top_picks(items: list[dict], price_lookup=None) -> list[dict]:
                 except Exception:
                     pass
 
-        tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        tp_pct, sl_pct = _tp_sl_rencana(it)
         # TP2/TP3 (permintaan user: "kena tp1 tandai, lanjut ke tp
         # selanjutnya") -- ikut disimpan kalau caller sudah menyediakan
         # (confidence() sekarang menyertakan tp2_pct/tp3_pct dari skenario
@@ -1307,10 +1337,7 @@ async def record_smart_money_signals(items: list[dict], price_lookup=None) -> li
         direction = "SELL" if is_sell else "BUY"
         # Lihat catatan di docstring: utk SELL, tp_pct/sl_pct DITUKAR dari
         # potensi_naik_pct/risiko_turun_pct (yang dihitung dgn asumsi BUY).
-        if is_sell:
-            tp_pct, sl_pct = it["risiko_turun_pct"], it["potensi_naik_pct"]
-        else:
-            tp_pct, sl_pct = it["potensi_naik_pct"], it["risiko_turun_pct"]
+        tp_pct, sl_pct = _tp_sl_rencana(it, is_sell)
         # TP2/TP3 (lihat catatan sama di record_top_picks()) -- utk SELL
         # (jalur ini SAAT INI TIDAK PERNAH tercapai lagi krn gerbang
         # Ringkasan Sinyal Teknikal cuma meloloskan BELI, lihat

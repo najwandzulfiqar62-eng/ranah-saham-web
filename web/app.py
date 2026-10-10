@@ -1938,16 +1938,23 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     s1 = snr["s1"]
     potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
     risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
-    # Stop dilantai oleh derau harian sahamnya sendiri. Lihat core/atr_stop.py
-    # untuk angka pengukurannya -- singkatnya, stop lama rata-rata 3% padahal
-    # saham median bergerak 3,6% per hari, dan 53,8% sinyal kena stop karena
-    # itu. Level teknikalnya TIDAK dibuang; ia cuma tidak boleh berada di
-    # dalam derau satu hari.
+    # Jarak TP/SL RENCANA -- field TERPISAH dari jarak ke R1/S1 di atas.
+    #
+    # BUG YANG DIPERBAIKI DI SINI (10 Okt 2026, dilaporkan penulis dari
+    # layarnya): keduanya sempat saya satukan. Akibatnya layar menampilkan
+    # "RESISTANCE R1: Rp61 (+30,0%)" -- harganya R1, persennya jarak TP
+    # rencana. Dua angka yang menjelaskan hal berbeda disandingkan seolah
+    # menjelaskan hal yang sama, dan +30% itu sebenarnya pagar ATR
+    # (MAKS_SL_PCT 15% x 2), bukan jarak ke Rp61 yang cuma +1,7%.
+    #
+    # Keduanya memang beda maksud dan harus tetap beda:
+    #   potensi_naik_pct / risiko_turun_pct = DI MANA level teknikalnya
+    #   tp_rencana_pct   / sl_rencana_pct   = SEBERAPA JAUH target & stop
+    #                                          dipasang, sesudah dilantai
+    #                                          derau harian sahamnya
     from core.atr_stop import sesuaikan as _sesuaikan_stop
-    _tp, _sl = _sesuaikan_stop(potensi_naik_pct, risiko_turun_pct,
-                               ai.get("atr_pct"))
-    if _sl is not None:
-        potensi_naik_pct, risiko_turun_pct = _tp, _sl
+    tp_rencana_pct, sl_rencana_pct = _sesuaikan_stop(
+        potensi_naik_pct, risiko_turun_pct, ai.get("atr_pct"))
     return {
         "likuiditas": likuiditas,
         "avg_value_20": round(avg_value_20, 0),
@@ -1957,6 +1964,11 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
         "potensi_naik_pct": round(potensi_naik_pct, 2),
         "risiko_turun_pct": round(risiko_turun_pct, 2),
         "r1": round(r1, 2), "s1": round(s1, 2),
+        # Dipakai pencatatan sinyal; None kalau ATR maupun level tidak
+        # terhitung -- pemanggilnya kembali ke jarak R1/S1 apa adanya.
+        "tp_rencana_pct": tp_rencana_pct,
+        "sl_rencana_pct": sl_rencana_pct,
+        "atr_pct": ai.get("atr_pct"),
     }
 
 
