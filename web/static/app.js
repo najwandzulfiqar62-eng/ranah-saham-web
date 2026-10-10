@@ -5483,6 +5483,61 @@ function _buildKonsensus(d){
   </section>`;
 }
 
+/* ---------- KEANDALAN TIAP SUARA, dari pengukuran ----------
+   Enam suara diperlakukan SETARA -- tiap satu bernilai satu suara. Tapi
+   diukur (178 emiten likuid, 2 tahun, 37.195 bar, horizon 20 hari
+   bursa), keenamnya sangat tidak setara. Angka di bawah adalah SELISIH
+   keunggulan antara sinyal "beli" dan "jual" suara itu: positif berarti
+   ia memisahkan ke arah yang benar.
+
+       TREN (calon)  +1,35%   <- terkuat, dan BELUM ADA di Ringkasan
+       MACD          +1,27%
+       %5 Hari       +0,72%
+       %1 Hari       +0,54%
+       AI Score      +0,24%   <- praktis tidak memisahkan
+       Volume        -0,77%   <- TERBALIK
+       RSI           -2,18%   <- TERBALIK, dan parah
+
+   RSI-nya terbalik dan itu bukan kebetulan satu periode. Diuji di
+   seluruh 793 emiten, 353.000 bar, dua paruh waktu, dan khusus saat
+   harga di atas MA50 -- monoton di SEMUA potongan:
+
+       RSI 30-45 ("oversold", dihitung BELI)   unggul -1,56%
+       RSI 70-80 ("overbought", dihitung JUAL) unggul +4,67%
+       RSI >=80  ("overbought", dihitung JUAL) unggul +14,10%
+
+   Saham yang kuat cenderung tetap kuat; RSI tinggi itu tanda momentum,
+   bukan tanda jenuh. Angka +14,10% itu sebagian besar dari saham tidak
+   likuid (di universe likuid saja selisihnya +1,85%), tapi ARAHNYA sama
+   di mana-mana.
+
+   VONISNYA TIDAK DIUBAH di sini. signal_history memakai semantik lama,
+   dan menggesernya membuat riwayat lama dan baru tidak sebanding tanpa
+   satu pun tanda -- itu keputusan pemilik datanya, bukan keputusan yang
+   boleh diambil diam-diam oleh perubahan tampilan. Yang dilakukan layar:
+   mengatakan suara mana yang terukur menyesatkan, supaya pembacanya
+   tidak menimbangnya sama berat. */
+const _KEANDALAN_SUARA = {
+  'RSI (14)':  {pisah:-2.18, catatan:'TERBALIK \u2014 terukur, RSI tinggi justru lebih untung'},
+  'MACD':      {pisah: 1.27, catatan:'memisahkan menang dari kalah'},
+  'Volume':    {pisah:-0.77, catatan:'terbalik \u2014 jangan ditimbang berat'},
+  'AI Score':  {pisah: 0.24, catatan:'nyaris tidak memisahkan'},
+  '%1 Hari':   {pisah: 0.54, catatan:'memisahkan, lemah'},
+  '%5 Hari':   {pisah: 0.72, catatan:'memisahkan'},
+};
+
+function _tagKeandalan(label){
+  const k=_KEANDALAN_SUARA[label];
+  if(!k) return '';
+  const buruk = k.pisah < 0;
+  const lemah = k.pisah >= 0 && k.pisah < 0.5;
+  if(!buruk && !lemah) return '';
+  const c = buruk ? 'var(--bear)' : 'var(--muted)';
+  return `<div style="font-size:9.5px;color:${c};margin-top:3px;line-height:1.35"
+    title="Selisih keunggulan antara sinyal beli dan jual suara ini: ${k.pisah>0?'+':''}${k.pisah}% per 20 hari bursa">
+    \u26a0 ${k.catatan}</div>`;
+}
+
 /* ---------- KEANDALAN VONIS, dari pengukuran ----------
    Tangga tujuh tingkat itu menjanjikan tujuh derajat ketelitian yang
    tidak dimilikinya. Diukur pada 25.097 EPISODE vonis (bukan per bar --
@@ -5566,6 +5621,7 @@ function _buildTechSummary(d){
         <span style="font-size:10px;font-weight:800;color:${cc};letter-spacing:.05em">${bl}</span>
         <span style="font-size:10px;color:var(--muted);line-height:1.3">${i.ctx}</span>
       </div>
+      ${_tagKeandalan(i.label)}
     </div>`;}).join('');
   return`<section class="panel">
     <p class="eyebrow">Ringkasan Sinyal Teknikal</p>
@@ -6442,7 +6498,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v62';
+const APP_VERSION='v63';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

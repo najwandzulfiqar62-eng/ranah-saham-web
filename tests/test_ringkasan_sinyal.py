@@ -228,3 +228,56 @@ def test_layar_memakai_angka_terukurnya():
     assert "_keandalanVonis" in js
     assert "${_keandalanVonis(d, overall)}" in js
     assert "terlalu kecil untuk dijadikan dasar" in js
+
+
+# ---------------------------------------------------------------------------
+# Keandalan TIAP SUARA -- keenamnya tidak setara
+# ---------------------------------------------------------------------------
+# Diukur 11 Okt 2026 (178 emiten likuid, 37.195 bar, horizon 20 hari).
+# Angka = SELISIH keunggulan antara sinyal "beli" dan "jual" suara itu:
+#
+#     TREN (calon)  +1,35%   belum ada di Ringkasan
+#     MACD          +1,27%
+#     %5 Hari       +0,72%
+#     %1 Hari       +0,54%
+#     AI Score      +0,24%   praktis tidak memisahkan
+#     Volume        -0,77%   TERBALIK
+#     RSI           -2,18%   TERBALIK, dan parah
+
+def test_layar_menandai_suara_yang_TERBALIK():
+    """Suara yang memilih ke arah salah tetap ikut menentukan vonis.
+    Selama itu tidak dikatakan, pembacanya menimbangnya sama berat dengan
+    suara yang benar."""
+    import pathlib
+
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "_KEANDALAN_SUARA" in js
+    assert "${_tagKeandalan(i.label)}" in js, "tag tidak dipakai kartu indikator"
+    assert "TERBALIK" in js
+
+
+def test_angka_keandalan_suara_sesuai_yang_diukur():
+    """Kalau digeser tanpa pengukuran baru, uji ini memaksa penggesernya
+    berhenti dan mengukur dulu."""
+    import pathlib
+    import re
+
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    blok = js[js.index("const _KEANDALAN_SUARA"):js.index("function _tagKeandalan")]
+    angka = dict(re.findall(r"'([^']+)':\s*\{pisah:\s*(-?[\d.]+)", blok))
+    assert float(angka["RSI (14)"]) == -2.18
+    assert float(angka["Volume"]) == -0.77
+    assert float(angka["MACD"]) == 1.27
+
+
+def test_vonis_TIDAK_ikut_berubah_oleh_temuan_ini():
+    """Menggeser vonisnya membuat riwayat lama dan baru tidak sebanding
+    tanpa satu pun tanda. Itu keputusan pemilik datanya, bukan keputusan
+    yang boleh diambil diam-diam oleh perubahan tampilan.
+
+    RSI <45 TETAP dihitung 'beli' walau terukur merugikan -- yang berubah
+    cuma bahwa layar sekarang mengatakannya."""
+    r = _vonis(rsi=40, macd=True, vol=1.5, score=70, c1=2.0, c5=5.0)
+    assert r["beli"] == 6 and r["overall"] == "BELI KUAT"
