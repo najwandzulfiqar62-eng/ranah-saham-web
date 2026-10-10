@@ -6719,7 +6719,7 @@ const EDU_PANDUAN=[
   {j:'Kenapa panduan ini ada',
    d:'Aplikasi saham umumnya menampilkan semua fiturnya dengan percaya diri yang sama. Pembaca pemula tidak punya cara membedakan fitur yang sudah diuji dari fitur yang cuma kelihatan meyakinkan. Daftar di bawah dibuat supaya kamu punya caranya.'},
   {j:'Sudah diukur, dan terbukti bekerja',
-   d:'• <b>Pemulihan</b> berlabel KUAT: +4,01% (222 kejadian)<br>• <b>BELI yang bertahan dua hari</b>: +2,88% (911)<br>• <b>Head &amp; Shoulders tembus</b>: −3,36% (290)<br>• <b>Segitiga Menaik tembus</b>: +3,24% (464)<br>• <b>Jarak stop berbasis volatilitas</b>: ekspektasi +2,61% vs +0,79%'},
+   d:'• <b>Bull Flag tembus</b>: +4,93% (2.063 kejadian)<br>• <b>Pemulihan</b> berlabel KUAT: +4,01% (222)<br>• <b>Head &amp; Shoulders tembus</b>: −3,36% (290)<br>• <b>Segitiga Menaik tembus</b>: +3,24% (464)<br>• <b>BELI yang bertahan dua hari</b>: +2,88% (911)<br>• <b>Jarak stop berbasis volatilitas</b>: ekspektasi +2,61% vs +0,79%'},
   {j:'Sudah diukur, dan TIDAK bekerja — jadi tidak dipasang',
    d:'• <b>Inverse Head & Shoulders</b>: −0,68%, lebih buruk dari acak<br>• <b>Falling Wedge</b>: win rate di bawah pasar di semua tingkat<br>• <b>Bull Flag</b>: positif tapi tidak stabil antar periode<br>Ketiganya ada di kode aplikasi beserta angkanya, tapi sengaja tidak dijadikan sinyal.'},
   {j:'Ditampilkan sebagai keterangan, belum diukur meramalkan',
@@ -7408,7 +7408,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v79';
+const APP_VERSION='v80';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

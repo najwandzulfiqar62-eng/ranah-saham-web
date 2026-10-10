@@ -107,33 +107,19 @@ def keterangan(nama: str) -> str:
 #   - JALAN MAJU. Deteksi pada bar t hanya melihat data sampai t;
 #     hasilnya diukur dari t ke t+20 bar.
 #   - PER POLA, BUKAN PER HARI. Satu pola yang bertahan dua minggu
-#     dihitung SEKALI. Tanpa ini, n menggelembung dan hasilnya saling
-#     berkorelasi -- sudah terjadi tiga kali di proyek ini (divergence
-#     10 setup terhitung 80, falling wedge 3.808/tahun).
-#   - JEDA ANTAR-SAMPEL. Penjagaan kedua di atas yang pertama: untuk
-#     tiap (emiten, pola, fase), sampel berikutnya baru dihitung sesudah
-#     20 bar berlalu, supaya jendelanya tidak bertindihan.
-#   - DASAR SETANGGAL. Dibandingkan dengan rata-rata return 20 hari
-#     SELURUH emiten yang mulai di tanggal yang sama -- bukan rata-rata
-#     seluruh periode. Pola yang kebetulan banyak muncul di bulan bagus
-#     tidak jadi terlihat hebat karenanya.
+#     dihitung SEKALI. Tanpa ini n menggelembung dan hasilnya saling
+#     berkorelasi -- sudah terjadi tiga kali di proyek ini.
+#   - JEDA ANTAR-SAMPEL sepanjang horizon, supaya jendelanya tidak
+#     bertindihan.
+#   - DASAR SETANGGAL: dibandingkan rata-rata return 20 hari SELURUH
+#     emiten yang mulai di tanggal yang sama, bukan rata-rata seluruh
+#     periode.
 #
-# n < 15 SENGAJA TIDAK dimasukkan. Keunggulan dari sepuluh kejadian
-# tidak bisa dibedakan dari kebetulan, dan menampilkannya sebagai angka
-# membuatnya terbaca sama meyakinkan dengan angka dari lima ratus.
-# WEDGE SENGAJA TIDAK ADA DI TABEL INI.
-#
-# Angkanya DICABUT 11 Okt 2026, bukan diperbarui. Detektor wedge
-# diperbaiki hari itu juga: ia dulu cuma memeriksa tanda kemiringan
-# garis regresi, tanpa menuntut pivotnya benar-benar berurutan menurun.
-# Sesudah diperbaiki, deteksi turun dari 19 ke 1 per 200 emiten --
-# artinya ~95% yang diukur dulu BUKAN wedge sama sekali, dan angka
-# +0,07 / -0,71 / -0,12 / +1,07 itu mengukur bentuk yang lain.
-#
-# Dibiarkan KOSONG sampai pengukuran ulang selesai. Layar menuliskan
-# "belum diukur", dan itu jujur. Memajang angka dari detektor yang sudah
-# berganti jauh lebih buruk daripada tidak memajang angka: pembaca tidak
-# punya cara mengetahui bahwa angkanya mengukur hal yang berbeda.
+# n < 100 SENGAJA TIDAK DIPAJANG. Tiga puluh sel diuji sekaligus; dari
+# sampel kecil, satu di antaranya hampir pasti terlihat luar biasa
+# karena kebetulan. Wedge contohnya: sesudah detektornya diperbaiki,
+# "Rising Wedge TERBENTUK +18,06%" datang dari 23 kejadian saja, dan
+# keunggulan 18% dalam 20 hari bursa tidak kredibel.
 UNGGUL_POLA: dict[tuple[str, str], dict] = {
     ("Bear Flag", "TEMBUS"): {"unggul_pct": -0.92, "n": 2343, "pct_positif": 47.8},
     ("Bear Flag", "TERBENTUK"): {"unggul_pct": -0.75, "n": 4355, "pct_positif": 47.7},
@@ -158,10 +144,14 @@ UNGGUL_POLA: dict[tuple[str, str], dict] = {
     ("Segitiga Menurun", "TERBENTUK"): {"unggul_pct": -1.3, "n": 1385, "pct_positif": 48.0},
     ("Segitiga Simetris", "TEMBUS"): {"unggul_pct": -0.18, "n": 1303, "pct_positif": 47.1},
     ("Segitiga Simetris", "TERBENTUK"): {"unggul_pct": -1.58, "n": 817, "pct_positif": 43.3},
-    ("Triple Bottom", "TEMBUS"): {"unggul_pct": 0.24, "n": 88, "pct_positif": 39.8},
     ("Triple Bottom", "TERBENTUK"): {"unggul_pct": -1.0, "n": 737, "pct_positif": 48.6},
-    ("Triple Top", "TEMBUS"): {"unggul_pct": 1.12, "n": 70, "pct_positif": 60.0},
     ("Triple Top", "TERBENTUK"): {"unggul_pct": -0.51, "n": 487, "pct_positif": 45.0},
+    # Falling Wedge / TEMBUS: n=26 -- di bawah MIN_N, sengaja tanpa angka
+    # Falling Wedge / TERBENTUK: n=18 -- di bawah MIN_N, sengaja tanpa angka
+    # Rising Wedge / TEMBUS: n=47 -- di bawah MIN_N, sengaja tanpa angka
+    # Rising Wedge / TERBENTUK: n=23 -- di bawah MIN_N, sengaja tanpa angka
+    # Triple Bottom / TEMBUS: n=88 -- di bawah MIN_N, sengaja tanpa angka
+    # Triple Top / TEMBUS: n=70 -- di bawah MIN_N, sengaja tanpa angka
 }
 
 # Dasar pembanding: rata-rata return 20 hari bursa SELURUH emiten
@@ -169,4 +159,4 @@ UNGGUL_POLA: dict[tuple[str, str], dict] = {
 DASAR_PCT: float | None = 3.38
 HORIZON_HARI = 20
 N_EMITEN_UKUR: int | None = 790
-TANGGAL_UKUR: str | None = "2026-10-11"
+TANGGAL_UKUR: str | None = "2026-10-12"
