@@ -303,3 +303,68 @@ def test_seri_sentuhan_dimenangkan_yang_terdekat():
           _L(1250, "resistance", 4, "Resistance Swing")]
     r = rc.susun(1000, lv, [], ma20=1000, ma50=1000)
     assert r["jual"]["harga"] == 1050
+
+
+# ---------------------------------------------------------------------------
+# Garis tren: dipakai SEPARUH, menurut angkanya
+# ---------------------------------------------------------------------------
+
+def _ukur_tren():
+    import json
+    import pathlib
+    f = pathlib.Path(__file__).resolve().parent.parent / "tools" / "hasil_ukur_tren.json"
+    return {r["aturan"]: r for r in json.loads(f.read_text(encoding="utf-8"))["aturan"]}
+
+
+def test_garis_tren_naik_TIDAK_dipakai_sebagai_area_beli():
+    """DIUKUR, DAN TERNYATA SALAH. "Beli saat harga turun menyentuh
+    garis tren naik" adalah metode baku di buku, dan ia sempat dipasang
+    atas dasar itu. Terukur -1,22% di bawah pasar (n=2.003) -- salah satu
+    baris terburuk di tabelnya.
+
+    Satu metode yang separuh benar tidak boleh dipakai utuh hanya karena
+    asalnya terhormat. Uji ini gagal kalau ada yang memasangnya kembali.
+    """
+    m = _ukur_tren()
+    beli = m["sentuh garis tren NAIK (calon beli)"]
+    assert beli["unggul_pct"] < 0, "pengukurannya berubah; tinjau ulang aturannya"
+    tr = {"arah": "naik", "garis_kini": 980, "tembus": False,
+          "n_puncak": 4, "n_lembah": 4, "alasan": "x"}
+    r = rc.susun(1000, [_L(950, "support", 4, "Support Terdekat")], [], tren=tr)
+    assert r["beli"]["harga"] == 950, "area beli memakai garis tren lagi"
+    assert not r["beli"].get("dinamis")
+
+
+def test_garis_tren_turun_TETAP_dipakai_sebagai_area_jual():
+    """Sisi jualnya terukur BENAR (-0,89%, n=1.839). Keduanya dinilai
+    sendiri-sendiri, bukan diterima atau ditolak sepaket."""
+    m = _ukur_tren()
+    assert m["sentuh garis tren TURUN (calon jual)"]["unggul_pct"] < 0
+    tr = {"arah": "turun", "garis_kini": 1050, "tembus": False,
+          "n_puncak": 5, "n_lembah": 4, "alasan": "x"}
+    r = rc.susun(1000, [_L(950, "support", 4), _L(1100, "resistance", 4)],
+                 [], tren=tr)
+    assert r["jual"]["harga"] == 1050
+    assert r["jual"].get("dinamis") is True
+
+
+def test_larangan_beli_di_tren_turun_didukung_angkanya():
+    """Saham di tren turun terukur 1,23% di bawah pasar (n=4.335)."""
+    m = _ukur_tren()
+    assert m["arah turun"]["unggul_pct"] < -0.5
+    tr = {"arah": "turun", "garis_kini": 1050, "tembus": False,
+          "n_puncak": 5, "n_lembah": 4, "alasan": "x"}
+    r = rc.susun(1000, [_L(950, "support", 4)], [], tren=tr)
+    assert r["beli"] is None
+    assert "1,23%" in (r["alasan_tanpa_beli"] or "")
+
+
+def test_arah_naik_tidak_diklaim_unggul():
+    """Terukur -0,27% vs mendatar -0,21% -- nyaris tidak membedakan apa
+    pun. Yang berarti cuma arah TURUN, dan layar tidak boleh menjanjikan
+    lebih dari itu."""
+    m = _ukur_tren()
+    naik, datar = m["arah naik"]["unggul_pct"], m["arah mendatar"]["unggul_pct"]
+    assert abs(naik - datar) < 0.5, (
+        f"arah naik ({naik}) kini berbeda jauh dari mendatar ({datar}); "
+        "tinjau ulang apakah ia layak dipakai")

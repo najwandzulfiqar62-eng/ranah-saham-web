@@ -1,0 +1,57 @@
+{
+ "horizon_hari": 20,
+ "n_emiten": 778,
+ "ambang_sentuh_pct": 2.0,
+ "dasar_pct": 3.37,
+ "aturan": [
+  {
+   "aturan": "arah mendatar",
+   "n": 8700,
+   "unggul_pct": -0.21,
+   "return_pct": 2.81,
+   "pct_positif": 44.5
+  },
+  {
+   "aturan": "arah naik",
+   "n": 4434,
+   "unggul_pct": -0.27,
+   "return_pct": 2.68,
+   "pct_positif": 44.7
+  },
+  {
+   "aturan": "sentuh garis tren TURUN (calon jual)",
+   "n": 1839,
+   "unggul_pct": -0.89,
+   "return_pct": 2.73,
+   "pct_positif": 47.5
+  },
+  {
+   "aturan": "sentuh garis tren NAIK (calon beli)",
+   "n": 2003,
+   "unggul_pct": -1.22,
+   "return_pct": 1.45,
+   "pct_positif": 45.1
+  },
+  {
+   "aturan": "arah turun",
+   "n": 4335,
+   "unggul_pct": -1.23,
+   "return_pct": 1.68,
+   "pct_positif": 45.3
+  },
+  {
+   "aturan": "garis tren turun DITEMBUS",
+   "n": 2905,
+   "unggul_pct": -1.23,
+   "return_pct": 1.67,
+   "pct_positif": 44.2
+  },
+  {
+   "aturan": "garis tren naik DITEMBUS",
+   "n": 2549,
+   "unggul_pct": -1.5,
+   "return_pct": 0.36,
+   "pct_positif": 42.8
+  }
+ ]
+}

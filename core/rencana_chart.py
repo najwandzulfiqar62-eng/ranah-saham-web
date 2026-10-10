@@ -43,10 +43,18 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
     jelas, yang menahan harga adalah GARIS TREN-nya, bukan atap atau
     lantai mendatar yang kebetulan terdekat.
 
-    CATATAN KEJUJURAN: aturan garis tren ini BELUM diukur terpisah.
-    Yang sudah diukur adalah level mendatar dan vonis; garis tren masuk
-    karena ia metode baku di buku rujukan, bukan karena angkanya sudah
-    diperiksa. Layar menyebutkan itu.
+    SUDAH DIUKUR, dan hasilnya memisahkan dua sisinya
+    (tools/ukur_tren.py, 778 emiten, jalan maju, dasar setanggal):
+
+        sentuh garis tren TURUN   -0,89%  (n=1.839)  -> DIPAKAI utk jual
+        sentuh garis tren NAIK    -1,22%  (n=2.003)  -> DICABUT
+        arah turun                -1,23%  (n=4.335)  -> DIPAKAI
+        arah naik                 -0,27%  vs mendatar -0,21%  -> tidak dipakai
+
+    Jadi metode garis tren dipakai SEPARUH: sisi jual dan larangan beli
+    di tren turun terbukti; "beli di garis tren naik" terukur merugi dan
+    dicabut walau ia metode baku di bukunya. Satu metode yang separuh
+    benar tidak boleh dipakai utuh hanya karena asalnya terhormat.
     """
     if not harga or harga <= 0:
         return {}
@@ -116,16 +124,27 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
     t_garis = t.get("garis_kini")
     t_sah = bool(t_garis) and not t.get("tembus")
 
+    # GARIS TREN NAIK TIDAK DIPAKAI SEBAGAI AREA BELI -- DIUKUR, DAN
+    # TERNYATA SALAH.
+    #
+    # Aturan "beli saat harga turun menyentuh garis tren naik" adalah
+    # metode baku di buku, dan ia sempat dipasang di sini atas dasar itu.
+    # Lalu diukur (tools/ukur_tren.py, 778 emiten, jalan maju, dasar
+    # setanggal +3,37%):
+    #
+    #     sentuh garis tren NAIK    -1,22%  (n=2.003)   <- MERUGI
+    #     sentuh garis tren TURUN   -0,89%  (n=1.839)   <- benar
+    #     arah turun                -1,23%  (n=4.335)   <- benar
+    #     arah naik                 -0,27%  vs mendatar -0,21%
+    #
+    # Membeli di garis tren naik terukur 1,22% DI BAWAH pasar. Sisi
+    # jualnya benar, sisi belinya tidak -- dan satu metode yang separuh
+    # benar tidak boleh dipakai utuh hanya karena asalnya terhormat.
+    #
+    # Yang juga terbaca: arah tren naik nyaris tidak membedakan apa pun
+    # dari mendatar (-0,27% vs -0,21%). Yang berarti cuma arah TURUN.
     beli = jual = None
-    if t_sah and t_arah == "naik":
-        beli = {
-            "harga": t_garis,
-            "alasan": (f"garis tren naik, ditarik lewat {t.get('n_lembah', 0)} "
-                       f"lembah — di situlah harga disangga selama "
-                       "trennya bertahan"),
-            "teruji": True, "dinamis": True,
-            "jarak_pct": _pct(t_garis, harga)}
-    elif s1:
+    if s1:
         beli = {"harga": s1["harga"], "alasan": _alasan(s1, "Support"),
                 "teruji": (s1.get("sentuh") or 0) > 1, "dinamis": False,
                 "jarak_pct": _pct(s1["harga"], harga)}
@@ -143,8 +162,9 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         # kerusakan.
         alasan_tanpa_beli = (
             "tren turun menurut Dow (puncak dan lembah sama-sama "
-            f"menurun). Garis tren di {_rp(t_garis)} — tunggu harga "
-            "menembusnya ke ATAS sebelum mencari titik beli.")
+            "menurun), dan saham di tren turun terukur 1,23% di bawah "
+            f"pasar (4.335 kejadian). Garis tren di {_rp(t_garis)} — "
+            "tunggu harga menembusnya ke ATAS sebelum mencari titik beli.")
 
     # AREA JUAL = TEMPAT TEKANAN BELI TERBUKTI MELEMAH, bukan sekadar
     # atap terdekat.
@@ -172,9 +192,14 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         # Di tren turun, yang menahan kenaikan adalah GARIS TREN TURUN --
         # harga naik menyentuhnya lalu ditolak. Itu area jualnya, dan ia
         # bergerak turun tiap hari.
+        # DIPERTAHANKAN karena TERUKUR BENAR: menyentuh garis tren
+        # turun -> -0,89% di bawah pasar (n=1.839). Pasangannya di sisi
+        # beli dicabut karena terukur salah; keduanya dinilai sendiri-
+        # sendiri, bukan diterima atau ditolak sepaket.
         jual = {"harga": t_garis,
                 "alasan": (f"garis tren turun, ditarik lewat {t.get('n_puncak', 0)} "
-                           "puncak — di situ kenaikan berulang kali ditolak"),
+                           "puncak — terukur -0,89% di bawah pasar "
+                           "(1.839 kejadian)"),
                 "teruji": True, "dinamis": True,
                 "jarak_pct": _pct(t_garis, harga)}
     elif bias == "bullish":
