@@ -2113,6 +2113,16 @@ async def _analyze_payload(kode: str):
             "potensi_naik_pct": ringkasan["potensi_naik_pct"],
             "risiko_turun_pct": ringkasan["risiko_turun_pct"],
             "r1": ringkasan["r1"], "s1": ringkasan["s1"],
+            "tp_rencana_pct": ringkasan.get("tp_rencana_pct"),
+            "sl_rencana_pct": ringkasan.get("sl_rencana_pct"),
+            "beli_aman": ringkasan.get("beli_aman"),
+            # Konsensus analis diambil di luar _hitung() karena ia memanggil
+            # jaringan (Yahoo .info, 1-2 detik) sedangkan _hitung() jalan di
+            # worker thread untuk kerja CPU. Mencampurnya berarti thread itu
+            # dipegang selama menunggu jaringan -- dan kolam thread adalah
+            # sumber daya yang sudah pernah jadi penyebab seluruh aplikasi
+            # tersendat.
+            "konsensus": await asyncio.to_thread(_konsensus_analis, kode),
             "smc": None if not smc else {
                 "narasi": smc.get("narasi"),
                 "n_bos": smc.get("n_bos"), "n_choch": smc.get("n_choch"),

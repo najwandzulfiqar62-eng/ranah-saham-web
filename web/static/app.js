@@ -575,6 +575,8 @@ async function analyze(kode){
         </div>
       </section>
       ${_buildTechSummary(d)}
+      ${_buildBeliAman(d)}
+      ${_buildKonsensus(d)}
       <section class="panel news" id="newsBox"><p class="eyebrow">Berita Terkait</p><div class="skel loadbar"></div></section>
     </div>
     <aside class="analysis-side">
@@ -5397,6 +5399,90 @@ async function shareCard(){
 }
 
 /* ========== TECHNICAL SUMMARY (analisis view) ========== */
+/* ---------- HARGA BELI AMAN ----------
+   Menampilkan KEDUA angka berdampingan -- peluang naik DAN harapan --
+   dan itu bukan soal kelengkapan, itu inti fiturnya.
+
+   Diukur 11 Okt 2026: menunggu diskon menaikkan win rate dari 44,4% ke
+   54,7%, TAPI menurunkan harapan dari +1,32% ke +0,77%, karena order
+   yang tidak pernah kena berarti peluang yang hilang sepenuhnya.
+
+   Meringkasnya jadi satu "harga rekomendasi" akan menyembunyikan
+   pertukaran itu, dan orang akan mengira ia dapat harga terbaik padahal
+   ia sedang memilih salah satu ujung. */
+function _buildBeliAman(d){
+  const b = d.beli_aman;
+  if(!b || !b.tangga || !b.tangga.length) return '';
+  const baris = b.tangga.map(t=>{
+    const pasar = t.diskon_pct===0;
+    const terbaik = b.paling_untung && t.harga===b.paling_untung.harga;
+    const teraman = b.paling_aman && t.harga===b.paling_aman.harga;
+    const tag = terbaik ? '<span class="sm-asing" style="color:var(--bull);border-color:var(--bull)55">harapan tertinggi</span>'
+              : teraman ? '<span class="sm-asing" style="color:var(--gold);border-color:var(--gold)55">paling sering benar</span>' : '';
+    return `<tr${pasar?' style="font-weight:600"':''}>
+      <td style="padding:5px 8px">${pasar?'pasar':'\u2212'+fmt(t.diskon_pct,0)+'%'}</td>
+      <td style="padding:5px 8px;font-family:'JetBrains Mono',monospace">Rp${fmt(t.harga)}</td>
+      <td style="padding:5px 8px;color:var(--muted)">${fmt(t.terisi_pct,0)}%</td>
+      <td style="padding:5px 8px;color:var(--bull)">${fmt(t.naik_pct,1)}%</td>
+      <td style="padding:5px 8px;font-family:'JetBrains Mono',monospace">${t.harapan_pct>=0?'+':''}${fmt(t.harapan_pct,2)}%</td>
+      <td style="padding:5px 8px">${tag}</td>
+    </tr>`;}).join('');
+  const c = b.cicil;
+  return `<section class="panel" style="margin-top:10px">
+    <p class="eyebrow">Harga Beli \u2014 aman vs menguntungkan</p>
+    <div style="overflow-x:auto;margin-top:8px">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:430px">
+        <thead><tr style="color:var(--muted);font-size:10.5px;letter-spacing:.05em;text-align:left">
+          <th style="padding:5px 8px">BELI DI</th><th style="padding:5px 8px">HARGA</th>
+          <th style="padding:5px 8px">KENA</th><th style="padding:5px 8px">NAIK</th>
+          <th style="padding:5px 8px">HARAPAN</th><th></th>
+        </tr></thead><tbody>${baris}</tbody>
+      </table>
+    </div>
+    ${c&&c.harga_cicil?`<p class="insight muted" style="font-size:12.5px;margin-top:10px">
+      <b>Saran:</b> ${c.porsi_pasar_pct}% sekarang di <b>Rp${fmt(c.harga_pasar)}</b>,
+      sisanya pasang di <b>Rp${fmt(c.harga_cicil)}</b> (\u2212${fmt(c.diskon_cicil_pct,0)}%,
+      peluang kena ${fmt(c.peluang_cicil_terisi_pct,0)}%).<br>
+      Membaginya membuat hasilmu tidak bergantung pada tebakan apakah harga akan turun dulu.</p>`:''}
+    <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6">
+      <b>Menunggu diskon itu ada ongkosnya.</b> Makin dalam diskonnya, makin sering kamu benar
+      (${fmt(b.tangga[0].naik_pct,1)}% \u2192 ${fmt(b.tangga[b.tangga.length-1].naik_pct,1)}%)
+      \u2014 tapi makin kecil harapannya
+      (${fmt(b.tangga[0].harapan_pct,2)}% \u2192 ${fmt(b.tangga[b.tangga.length-1].harapan_pct,2)}%),
+      karena order yang tidak pernah kena berarti peluang yang hilang sepenuhnya.<br>
+      Diukur ${b.diukur}: order ditunggu ${b.tunggu_hari} hari bursa, lalu ditahan ${b.tahan_hari} hari.
+      Bukan ajakan membeli/menjual.</p>
+  </section>`;
+}
+
+/* ---------- KONSENSUS ANALIS ----------
+   Jumlah analisnya SELALU ditampilkan. Angka target dari penyedia
+   berbeda akan berbeda -- Stockbit menyebut MTEL avg 644 dari 31
+   rekomendasi, Yahoo 631 dari 15 -- dan tanpa jumlahnya, perbedaan itu
+   jadi misteri yang membuat orang mengira salah satunya salah. */
+function _buildKonsensus(d){
+  const k = d.konsensus;
+  if(!k || !k.target_rata2) return '';
+  const naik = k.potensi_pct!=null && k.potensi_pct>0;
+  const label = {strong_buy:'STRONG BUY',buy:'BUY',hold:'HOLD',
+                 sell:'SELL',strong_sell:'STRONG SELL'}[k.rekomendasi]||k.rekomendasi||'\u2013';
+  return `<section class="panel" style="margin-top:10px">
+    <p class="eyebrow">Konsensus Analis</p>
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-top:6px">
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:800;color:${naik?'var(--bull)':'var(--bear)'}">${label}</div>
+      <div style="font-size:13px">target rata-rata <b style="font-family:'JetBrains Mono',monospace">Rp${fmt(k.target_rata2)}</b>
+        ${k.potensi_pct!=null?`<span style="color:${naik?'var(--bull)':'var(--bear)'}">(${naik?'+':''}${fmt(k.potensi_pct,1)}%)</span>`:''}</div>
+      <div style="font-size:12px;color:var(--muted)">dari ${k.jumlah_analis} analis</div>
+    </div>
+    ${k.target_terendah&&k.target_tertinggi?`<div style="font-size:12px;color:var(--muted);margin-top:6px">
+      rentang Rp${fmt(k.target_terendah)} \u2013 Rp${fmt(k.target_tertinggi)}</div>`:''}
+    <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6">
+      Sumber: ${k.sumber}. <b>Angka ini akan berbeda dari aplikasi lain</b> \u2014 tiap penyedia
+      punya panel analis sendiri, dan jumlah analisnya ditampilkan supaya bedanya terlihat.
+      Target analis cenderung optimis secara sistematis; ia keterangan, bukan ramalan.</p>
+  </section>`;
+}
+
 function _buildTechSummary(d){
   let beli=0,jual=0,netral=0;
   const indikators=[];
@@ -6311,7 +6397,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v60';
+const APP_VERSION='v61';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
