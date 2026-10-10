@@ -920,6 +920,46 @@ function _gambarHarmonic(kunci, idx){
   _renderPolaChips(kunci);
 }
 
+/* ---- Fibonacci dari ayunan BERARAH ---- */
+// MATI secara bawaan, seperti XABCD. Chart baru saja dilegakan dari dua
+// belas label jadi empat; menyalakan lima garis lagi secara otomatis
+// akan membatalkan pekerjaan itu dalam satu baris kode.
+//
+// Arah ayunannya yang membuat levelnya berarti: ayunan NAIK -> garis di
+// BAWAH harga (lantai saat mundur), ayunan TURUN -> garis di ATAS
+// (atap saat memantul). Versi lama di core/indicators.py mengabaikan
+// urutan waktu, jadi garisnya bisa jatuh di tempat yang tidak punya
+// arti apa-apa.
+function _gambarFibo(kunci, nyala){
+  const st=_ovlState(kunci);
+  if(!st.cs)return;
+  for(const pl of (st.fiboGaris||[])){ try{st.cs.removePriceLine(pl)}catch{} }
+  st.fiboGaris=[]; st.fiboNyala=!!nyala;
+  const f=st.fibo;
+  if(!nyala||!f||!f.level||!f.level.length){ _renderPolaChips(kunci); return }
+  const naik=f.arah==='naik';
+  for(const L of f.level){
+    const ext=L.jenis==='extension';
+    try{
+      st.fiboGaris.push(st.cs.createPriceLine({
+        price:L.harga,
+        // Retracement & extension dibedakan warnanya: yang pertama
+        // tempat harga mungkin BERHENTI, yang kedua tempat ia mungkin
+        // SAMPAI. Dua pertanyaan berbeda.
+        color: ext?'rgba(199,154,42,.7)':(naik?'rgba(47,181,126,.6)':'rgba(224,86,107,.6)'),
+        lineWidth:1, lineStyle:ext?3:2, axisLabelVisible:true,
+        // Angka terukurnya ikut di judul kalau ada. Level yang
+        // belum cukup sampel tampil polos -- bukan dengan nol.
+        title:_sempit()
+          ? L.nama.replace('Fibo ','').replace('Target ','T')
+          : L.nama + (L.unggul_pct==null?''
+              :` ${L.unggul_pct>0?'+':''}${fmt(L.unggul_pct,2)}%`),
+      }));
+    }catch(e){ console.warn('fibo: garis gagal',e) }
+  }
+  _renderPolaChips(kunci);
+}
+
 /* ---- Segitiga BELI / JUAL di TANGGAL kejadiannya ---- */
 // Panah tidak lagi ditempel di bar terakhir sbg "area". Penulis menolak
 // versi itu: ketika harga terjepit di antara support dan resistance yang
@@ -1079,6 +1119,14 @@ function _renderPolaChips(kunci){
       title="Segitiga di chart adalah REKAMAN sinyal pada tanggalnya, bukan anjuran transaksi. Angka di belakangnya hasil 20 hari bursa sesudah sinyal itu: ✓ berarti arahnya benar, ✗ berarti salah. Sinyal beli dan jual di chart ini TIDAK berpasangan — keduanya kejadian terpisah.">
       ${sg.length} sinyal · ${h.length?`${benar}/${h.length} arahnya benar`:'belum ada yang genap 20 hari'}</span>`);
   }
+  const fb=st.fibo;
+  if(fb&&fb.level&&fb.level.length){
+    const w=fb.arah==='naik'?'var(--bull)':'var(--bear)';
+    bagian.push(`<button class="chip ${st.fiboNyala?'active':''}" data-fibo="1"
+      style="${st.fiboNyala?`border-color:${w};color:${w}`:''}"
+      title="Fibonacci dari ayunan ${fb.arah} ${fb.ayunan_pct}% (${fb.awal_tanggal} → ${fb.akhir_tanggal}), ${fb.ayunan_atr}× ATR. Jumlah garis mengikuti besar ayunan: ayunan kecil cuma dapat dua, supaya garisnya tidak lebih rapat daripada gerak sehari.">
+      ${st.fiboNyala?'Sembunyikan Fibo':`Fibonacci (${fb.arah})`}</button>`);
+  }
   const hm=st.harm||[];
   if(hm.length){
     bagian.push(`<span class="muted" style="font-size:11px;align-self:center;margin-left:6px;margin-right:2px">Harmonic:</span>`);
@@ -1125,6 +1173,10 @@ ${uk}">
       + bagianSR.join(' <span class="muted">·</span> ') + `</span>`);
   }
   box.innerHTML=bagian.join('');
+  box.querySelectorAll('[data-fibo]').forEach(b=>b.addEventListener('click',()=>{
+    const s2=_ovlState(kunci);
+    _gambarFibo(kunci, !s2.fiboNyala);
+  }));
   box.querySelectorAll('[data-srpenuh]').forEach(b=>b.addEventListener('click',()=>{
     const s2=_ovlState(kunci);
     s2.srPenuh=!s2.srPenuh;
@@ -1172,6 +1224,7 @@ function _pasangOverlay(kunci, chart, cs, o, chipsSel){
   _gambarRencana(kunci, st.rencana);
   st.sinyal=o.sinyal||[];
   _gambarSinyal(kunci, st.sinyal);
+  st.fibo=o.fibo||null; st.fiboGaris=[]; st.fiboNyala=false;
   st.harm=o.harmonic||[]; st.harmSeri=[]; st.harmGaris=[];
   // XABCD MATI secara bawaan. Ia lapisan paling berat secara visual --
   // garis putus-putus melintang seluruh chart plus satu garis PRZ --
@@ -7510,7 +7563,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v83';
+const APP_VERSION='v85';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

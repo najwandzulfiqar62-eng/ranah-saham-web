@@ -2255,15 +2255,16 @@ def _chart_overlay_payload(kode: str, df) -> dict:
     hari ini, dan kunci tanpa versi berarti kolom diam-diam kosong
     sesudah deploy, tanpa satu pun error.
     """
-    kunci = f"chartovl:v3:{(kode or '').upper()}"
+    kunci = f"chartovl:v5:{(kode or '').upper()}"
     hangat = _cache_get(kunci)
     if hangat is not None:
         return hangat
     pola = _pola_chart_payload(kode, df)
     harmonic = _harmonic_chart_payload(df)
+    fibo = _fibo_chart_payload(df)
     sr = _level_sr_payload(df)
     out = {
-        "pola": pola, "harmonic": harmonic, "sr": sr,
+        "pola": pola, "harmonic": harmonic, "fibo": fibo, "sr": sr,
         "rencana": _rencana_chart_payload(df, pola, sr),
         # SINYAL SENGAJA TIDAK DISIMPAN DI SINI -- lihat catatan di ohlc().
         # Kalau ia ikut tersimpan, daftar kosong pada pembukaan pertama
@@ -2309,6 +2310,31 @@ async def _sinyal_chart_latar(kode: str, df) -> None:
         print(f"⚠️ sinyal-chart {k}: {type(e).__name__}: {e}")
     finally:
         _SINYAL_SEDANG_DIHITUNG.discard(k)
+
+
+def _fibo_chart_payload(df) -> dict:
+    """Fibonacci dari ayunan BERARAH terakhir (core/fibo.py).
+
+    BUKAN calculate_fibonacci_levels() yang lama: fungsi itu mengambil
+    High.max() dan Low.min() dari 90 bar TANPA memedulikan mana yang
+    lebih dulu, sehingga kalau puncaknya terjadi sebelum lembahnya,
+    levelnya mengukur gerakan yang tidak pernah terjadi ke arah itu.
+    Fungsi lama tetap dipakai panel angka di halaman IHSG; yang
+    digambar di chart memakai yang berarah.
+
+    Tidak mengunduh apa pun; df sudah di tangan pemanggil.
+    """
+    try:
+        from core.fibo import hitung
+    except Exception:
+        return {}
+    try:
+        d = df.tail(260)
+        f = hitung([str(x)[:10] for x in d.index], d["High"].tolist(),
+                   d["Low"].tolist(), d["Close"].tolist())
+        return f.dict() if f else {}
+    except Exception:
+        return {}
 
 
 def _harmonic_chart_payload(df, maks: int = 2) -> list:
@@ -2683,6 +2709,7 @@ async def ohlc(kode: str, days: int = 140):
     # Tidak ada error yang muncul; polanya cuma pelan-pelan hilang.
     pola = [dict(p) for p in (ovl.get("pola") or [])]
     harmonic = [dict(h) for h in (ovl.get("harmonic") or [])]
+    fibo = dict(ovl.get("fibo") or {})
     sr = ovl.get("sr") or {}
     rencana = ovl.get("rencana") or {}
 
@@ -2800,6 +2827,7 @@ async def ohlc(kode: str, days: int = 140):
             "phases": detect_phases(df), "pola": pola,
             "sr": sr.get("level") or [], "sr_ringkas": sr.get("ringkas") or {},
             "rencana": rencana, "sinyal": sinyal, "harmonic": harmonic,
+            "fibo": fibo,
             "last_price": last_price, "realtime": realtime, "as_of": now_jkt.strftime("%H:%M")}
 
 
