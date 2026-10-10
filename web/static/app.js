@@ -5885,6 +5885,169 @@ async function loadHomeNews(){
 }
 
 /* ---------- EDUKASI / GLOSARIUM ---------- */
+/* ================= PANDUAN ANALISA BERLANGKAH =================
+   Glosarium menjawab "apa arti kata ini". Panduan menjawab "saya harus
+   mulai dari mana" -- dan itu pertanyaan yang sebenarnya dipunyai orang
+   yang baru pertama membuka aplikasi ini.
+
+   ATURAN MENULISNYA, dan ini yang membedakannya dari panduan saham pada
+   umumnya: setiap kali sebuah panel disebut, angka terukurnya ikut
+   disebut. Kalau sesuatu BELUM diukur, itu dikatakan juga. Pembaca
+   pemula tidak punya cara membedakan fitur yang terbukti dari fitur yang
+   kelihatan meyakinkan -- kalau aplikasinya sendiri tidak memberi tahu,
+   tidak ada yang akan. */
+const EDU_PANDUAN=[
+{id:'alur',judul:'Alur analisa 10 menit',menit:4,
+ ringkas:'Urutan membuka panel kalau kamu belum tahu harus mulai dari mana.',
+ langkah:[
+  {j:'1. Lihat kondisi pasarnya dulu, bukan sahamnya',
+   d:'Buka <b>Pasar &rsaquo; IHSG</b>. Kalau IHSG sedang jatuh, hampir semua saham ikut jatuh — dan saham bagus di pasar buruk tetap rugi. Ini bukan alasan tidak membeli, tapi alasan memperkecil ukuran pembelian.'},
+  {j:'2. Cari kandidatnya lewat satu saringan, bukan semuanya',
+   d:'Pilih <b>satu</b> yang cocok dengan gayamu: <b>Screener</b> (Minervini — saham yang trennya kuat), <b>Pemulihan</b> (saham yang sudah jatuh dan tekanan jualnya mereda), atau <b>Smart Money</b> (volume tidak biasa). Membuka ketiganya sekaligus menghasilkan daftar panjang yang tidak terbaca, bukan analisa yang lebih baik.'},
+  {j:'3. Buka satu saham, baca Ringkasan Sinyal Teknikal',
+   d:'Ketik kodenya di <b>Analisis</b>. Yang dibaca pertama bukan tujuh kartunya, tapi satu baris kecil di bawah vonisnya: angka terukur. Kalau tertulis "terlalu kecil untuk dijadikan dasar", berhenti di situ — saham itu tidak sedang memberi tahu apa pun.'},
+  {j:'4. Tentukan stop loss SEBELUM menentukan target',
+   d:'Panel <b>Trading Plan</b> sudah menghitungnya dari volatilitas saham itu sendiri. Stop yang terlalu dekat akan kena oleh hari biasa, bukan oleh analisis yang salah — diukur di aplikasi ini, stop 3% pada saham yang bergerak 3,6% sehari kena 53,8% dari waktu.'},
+  {j:'5. Tentukan harga belinya dari panel Harga Beli',
+   d:'Ada dua baris yang ditandai: <b>harapan tertinggi</b> dan <b>paling sering benar</b>. Keduanya bukan harga yang sama, dan itu bukan kesalahan — baca panduan "Aman bukan berarti untung".'},
+  {j:'6. Hitung jumlah lotnya dari risiko, bukan dari modal',
+   d:'Jangan "beli Rp5 juta". Tentukan dulu berapa rupiah yang kamu rela hilang kalau salah (misal 2% dari modal), lalu bagi dengan jarak ke stop loss. Panel <b>Racik</b> melakukannya untukmu.'},
+ ],
+ catatan:'Kalau kamu cuma punya waktu untuk satu langkah, pilih langkah 4. Menentukan di mana kamu akan mengaku salah lebih menentukan hasil akhirmu daripada memilih saham yang tepat.'},
+
+{id:'ringkasan',judul:'Membaca Ringkasan Sinyal Teknikal',menit:5,
+ ringkas:'Tujuh suara, tapi hanya dua vonis yang terukur berarti. Ini cara membedakannya.',
+ langkah:[
+  {j:'Apa yang dilakukannya',
+   d:'Tujuh indikator masing-masing memilih "beli", "netral", atau "jual". Hasil penghitungan suaranya jadi satu vonis, dari BELI KUAT sampai JUAL KUAT.'},
+  {j:'Empat dari tujuh vonisnya tidak memberi tahu apa pun',
+   d:'Diukur pada 23.755 kejadian selama dua tahun: <b>BELI KUAT +1,11%</b> dan <b>JUAL KUAT −0,95%</b> dibanding rata-rata pasar dalam 20 hari bursa. Tapi BELI, CENDERUNG BELI, NETRAL, dan CENDERUNG JUAL semuanya berada dalam rentang ±0,25% — tidak bisa dibedakan dari tidak tahu apa-apa. Angkanya ditampilkan di bawah vonis supaya kamu tidak perlu menebak.'},
+  {j:'Vonis yang BERTAHAN dua hari jauh lebih berarti',
+   d:'BELI KUAT yang masih BELI KUAT keesokan harinya terukur <b>+4,59%</b> — empat kali lipat versi seharinya. Alasannya: satu hari bisa kebetulan, dua hari berturut-turut lebih sulit kebetulan. Kalau kamu melihat tulisan "Bertahan dua hari" di panel itu, itu kabar yang jauh lebih kuat daripada vonisnya sendiri.'},
+  {j:'Satu suaranya ditandai "terbalik", dan itu disengaja',
+   d:'Kartu <b>Volume</b> diberi tanda peringatan karena terukur memilih ke arah yang salah (−0,77%). Ia tetap ikut memilih supaya vonisnya tetap sebanding dengan riwayat lama, tapi kamu berhak tahu untuk tidak menimbangnya berat.'},
+  {j:'Yang mengejutkan soal RSI',
+   d:'Banyak panduan mengajarkan "RSI di atas 70 berarti jenuh beli, saatnya jual". Diukur di 793 saham IDX selama dua tahun, yang terjadi justru sebaliknya: RSI ≥80 memberi <b>+14,10%</b> di atas rata-rata pasar, sedangkan RSI 30–45 memberi <b>−1,56%</b>. Saham yang kuat cenderung tetap kuat. Aplikasi ini mengikuti hasil ukurnya, bukan buku teksnya.'},
+ ],
+ catatan:'Kalau vonisnya ada di tengah (BELI, CENDERUNG BELI, NETRAL, CENDERUNG JUAL), perlakukan sebagai "tidak ada informasi" — bukan sebagai sinyal lemah. Sinyal lemah menggoda untuk ditindaklanjuti; tidak-ada-informasi tidak.'},
+
+{id:'beliaman',judul:'Harga beli: aman bukan berarti untung',menit:4,
+ ringkas:'Menunggu diskon membuat kamu lebih sering benar — dan menghasilkan lebih sedikit.',
+ langkah:[
+  {j:'Pertanyaannya bukan "berapa harga bagusnya"',
+   d:'Itu tidak bisa dijawab siapa pun. Yang bisa dijawab: kalau kamu pasang order di bawah harga sekarang, seberapa sering ia kena, dan apa yang terjadi sesudahnya.'},
+  {j:'Angkanya, dari dua tahun data',
+   d:'Order ditunggu 10 hari bursa, lalu ditahan 20 hari:<br>• beli di <b>harga pasar</b> → kena 96%, benar 44%, harapan <b>+1,32%</b><br>• beli <b>−3%</b> → kena 60%, benar 50%, harapan <b>+0,97%</b><br>• beli <b>−8%</b> → kena 27%, benar <b>55%</b>, harapan <b>+0,77%</b>'},
+  {j:'Baca arahnya: dua angka bergerak berlawanan',
+   d:'Makin dalam diskon yang kamu tunggu, makin sering kamu benar — tapi makin kecil hasil totalnya. Sebabnya sederhana: order yang tidak pernah kena berarti peluang yang hilang <b>sepenuhnya</b>, dan itu dihitung nol.'},
+  {j:'Jadi mana yang dipilih?',
+   d:'Kalau kamu sering panik saat posisi merah, pilih yang lebih aman walau hasilnya lebih kecil — strategi yang kamu tinggalkan di tengah jalan menghasilkan nol. Kalau kamu bisa tahan, harga pasar memberi harapan tertinggi.'},
+  {j:'Atau bagi dua, dan itu yang disarankan panelnya',
+   d:'Sebagian sekarang di harga pasar (mengunci peluang), sebagian dipasang di diskon (menurunkan harga rata-rata). Membaginya membuat hasilmu tidak bergantung pada tebakan apakah harga akan turun dulu.'},
+ ],
+ catatan:'Saham yang jarang ditransaksikan menunjukkan angka jauh lebih bagus di tabel itu — dan sebagian besar itu ilusi. Harga penutupan di saham sepi bukan harga yang benar-benar bisa kamu dapat. Panelnya memakai tabel berbeda untuk saham likuid dan tidak likuid.'},
+
+{id:'pemulihan',judul:'Membaca panel Pemulihan',menit:4,
+ ringkas:'Saham yang sudah jatuh tapi tekanan jualnya mereda. Yang berlabel KUAT saja yang terukur.',
+ langkah:[
+  {j:'Apa yang dicarinya',
+   d:'Harga membuat dasar baru yang <b>lebih rendah</b>, tapi RSI membuat dasar yang <b>lebih tinggi</b>. Artinya: harga masih turun, tapi tenaga yang mendorongnya turun sudah berkurang.'},
+  {j:'Divergence saja TIDAK cukup — ini yang jarang diberitahukan',
+   d:'Diukur pada 283 kejadian: divergence tanpa syarat tambahan berkinerja <b>−0,94% di bawah</b> rata-rata pasar. Aplikasi lain menjualnya sebagai fitur unggulan; di data IDX, ia sendirian tidak bekerja.'},
+  {j:'Yang membuatnya bekerja: seberapa dalam harga sudah jatuh',
+   d:'Setup yang harganya sudah jatuh <b>5–15%</b> antara kedua dasarnya memberi <b>60,8% naik</b> dan <b>+4,01%</b> di atas pasar (222 kejadian, dua tahun). Lebih dangkal dari 5%: tidak berarti. Lebih dalam dari 15%: justru rugi — itu pisau jatuh, bukan pemulihan.'},
+  {j:'Karena itu cuma baca yang berlabel KUAT',
+   d:'Yang tidak berlabel bukan "sinyal lebih lemah" — ia terukur <b>lebih buruk daripada memilih saham acak</b>.'},
+  {j:'Sinyalnya memang terlambat tiga hari, dan itu disengaja',
+   d:'Sebuah dasar baru bisa disebut dasar setelah beberapa hari berikutnya terbukti lebih tinggi. Mendeteksinya pada hari kejadian berarti memakai informasi yang saat itu belum ada — dan angka yang dihasilkan cara begitu selalu terlihat bagus dan tidak pernah bisa diulang.'},
+ ],
+ catatan:'Setup ini justru lebih sering muncul dan lebih sering benar saat IHSG sedang lemah (64,8% naik, dibanding 49,1% saat IHSG kuat). Masuk akal: ini pola "pulih sesudah jatuh", dan jatuh memang terjadi saat pasar lemah.'},
+
+{id:'smartmoney',judul:'Membaca Smart Money & aliran asing',menit:4,
+ ringkas:'Dua lapis bukti dengan kekuatan berbeda. Jangan menimbangnya sama.',
+ langkah:[
+  {j:'Rasio volume itu TEBAKAN',
+   d:'Panel ini mencari saham yang volumenya jauh di atas kebiasaannya sendiri. Tapi volume besar bisa berarti dikumpulkan, bisa juga berarti dilepas — arahnya <b>disimpulkan</b> dari gerak harga, bukan diketahui.'},
+  {j:'Baris "asing net" itu CATATAN, bukan tebakan',
+   d:'Angka itu datang langsung dari laporan resmi Bursa Efek Indonesia: berapa lembar dibeli dan dijual investor asing di saham itu. Di layar ia dibuat bergaris tepi, berbeda dari label pola di sebelahnya — supaya dua jenis bukti tidak terlihat sama kuat.'},
+  {j:'Contoh nyata kenapa ini penting',
+   d:'Pada 6 Oktober 2026, lima saham ditandai "akumulasi diam-diam" oleh tebakan volume. PTBA ternyata memang dibeli asing Rp26,8 miliar. Tapi BULL justru <b>dilepas</b> asing Rp6,9 miliar. Tebakan volume memberi label yang sama ke keduanya.'},
+  {j:'Yang tetap tidak bisa dijawab',
+   d:'Asing bukan bandar. Saham yang digerakkan broker lokal tidak akan terlihat sama sekali di angka itu. Data "broker mana yang membeli" adalah produk berbayar Bursa, dan tidak ada versi gratisnya.'},
+ ],
+ catatan:'Kalau sebuah baris bertanda "⚠ 4h lalu", anomalinya terjadi empat hari lalu, bukan hari ini. Harga sudah bergerak sejak itu.'},
+
+{id:'stoploss',judul:'Stop loss & ukuran posisi',menit:4,
+ ringkas:'Stop yang terlalu dekat bukan stop — ia cuma biaya yang kamu bayar berulang kali.',
+ langkah:[
+  {j:'Masalah yang paling sering tidak disadari pemula',
+   d:'Saham IDX pada umumnya bergerak sekitar <b>3,6% per hari</b> dalam perdagangan normal. Stop loss di 3% berada <b>di dalam</b> gerakan satu hari biasa. Ia tidak kena karena analisismu salah — ia kena karena harinya hari biasa.'},
+  {j:'Angkanya, dari 658 sinyal sungguhan',
+   d:'Dengan stop 3%: <b>53,8%</b> sinyal kena stop. Dengan stop yang disesuaikan volatilitas saham itu sendiri: <b>19%</b>. Selisih itu bukan sinyal yang lebih baik — itu sinyal yang sama, dengan stop yang tidak lagi berada di jalur derau.'},
+  {j:'Karena itu jarak stop di aplikasi ini berbeda tiap saham',
+   d:'Saham tenang dapat stop ketat, saham liar dapat stop longgar. Keduanya berarti hal yang sama: "di luar gerakan normalnya".'},
+  {j:'Tapi stop lebih longgar BUKAN berarti rugi lebih besar',
+   d:'Yang menjaga rupiahmu tetap sama adalah <b>jumlah lot</b>, bukan jarak stop. Stop dua kali lebih lebar → beli setengah lot → rupiah yang dipertaruhkan identik. Panel Racik menghitungnya otomatis.'},
+  {j:'Cara memakainya dalam satu kalimat',
+   d:'Tentukan berapa rupiah yang kamu rela hilang, bagi dengan jarak ke stop, itulah jumlah lotmu. Jangan pernah urutan sebaliknya.'},
+ ],
+ catatan:'Angka stop yang lebih besar akan terlihat lebih menakutkan di layar. Itu wajar — yang bertambah cuma angkanya, bukan risikonya, selama jumlah lotnya ikut menyesuaikan.'},
+
+{id:'percaya',judul:'Angka mana yang boleh dipercaya',menit:5,
+ ringkas:'Tidak semua yang ditampilkan aplikasi ini punya bukti yang sama kuat. Ini daftarnya.',
+ langkah:[
+  {j:'Kenapa panduan ini ada',
+   d:'Aplikasi saham umumnya menampilkan semua fiturnya dengan percaya diri yang sama. Pembaca pemula tidak punya cara membedakan fitur yang sudah diuji dari fitur yang cuma kelihatan meyakinkan. Daftar di bawah dibuat supaya kamu punya caranya.'},
+  {j:'Sudah diukur, dan terbukti bekerja',
+   d:'• <b>Pemulihan</b> berlabel KUAT: +4,01% (222 kejadian)<br>• <b>BELI KUAT yang bertahan dua hari</b>: +4,59% (398)<br>• <b>Jarak stop berbasis volatilitas</b>: ekspektasi +2,61% vs +0,79%<br>• <b>Tangga harga beli</b>: diukur pada dua universe, arahnya sama'},
+  {j:'Sudah diukur, dan TIDAK bekerja — jadi tidak dipasang',
+   d:'• <b>Inverse Head & Shoulders</b>: −0,68%, lebih buruk dari acak<br>• <b>Falling Wedge</b>: win rate di bawah pasar di semua tingkat<br>• <b>Bull Flag</b>: positif tapi tidak stabil antar periode<br>Ketiganya ada di kode aplikasi beserta angkanya, tapi sengaja tidak dijadikan sinyal.'},
+  {j:'Ditampilkan sebagai keterangan, belum diukur meramalkan',
+   d:'• <b>Ukuran tiket transaksi</b> (ramai ritel vs tiket besar)<br>• <b>Konsensus analis</b> — target analis cenderung optimis secara sistematis<br>• Pola harmonic, SMC, dan sebagian besar indikator di glosarium<br>Bukan berarti salah — berarti belum ada bukti seberapa sering ia benar.'},
+  {j:'Cara membaca semua angka di aplikasi ini',
+   d:'Kalau sebuah panel menyebut angka terukur beserta jumlah kejadiannya, itu hasil pengujian. Kalau tidak menyebut, itu keterangan. Keduanya berguna, tapi hanya yang pertama yang boleh dipakai menaksir peluang.'},
+ ],
+ catatan:'Semua angka di atas diukur pada data masa lalu. Tidak ada yang menjamin masa depan mengikutinya — yang bisa dijanjikan cuma bahwa angkanya tidak dikarang.'},
+];
+
+let _eduBuka=new Set();
+
+function renderPanduan(){
+  const box=$('#eduPanduan');
+  if(!box) return;
+  box.innerHTML=`<section class="panel">
+    <p class="eyebrow">Panduan Analisa \u00b7 mulai dari sini</p>
+    <p class="muted" style="font-size:12.5px;margin-top:6px;line-height:1.6">
+      Tujuh panduan berlangkah untuk membaca aplikasi ini. Tiap panduan menyebut
+      <b>angka terukurnya</b> \u2014 dan kalau sesuatu belum diukur, itu dikatakan juga.</p>
+    <div style="display:grid;gap:8px;margin-top:12px">
+      ${EDU_PANDUAN.map(p=>{
+        const buka=_eduBuka.has(p.id);
+        return `<div class="edu-card" style="cursor:pointer" data-pid="${p.id}">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+            <div class="edu-term" style="margin:0">${p.judul}</div>
+            <span style="font-size:10.5px;color:var(--muted);white-space:nowrap;flex:none">
+              ${p.menit} menit ${buka?'\u25b2':'\u25bc'}</span>
+          </div>
+          <div class="edu-def" style="margin-top:5px">${p.ringkas}</div>
+          ${buka?`<div style="margin-top:12px;display:grid;gap:11px">
+            ${p.langkah.map(l=>`<div>
+              <div style="font-size:12.5px;font-weight:700;margin-bottom:3px">${l.j}</div>
+              <div style="font-size:12.5px;color:var(--muted);line-height:1.65">${l.d}</div>
+            </div>`).join('')}
+            ${p.catatan?`<div class="edu-note" style="margin-top:3px">
+              ${icon('alert-triangle',{size:13})}<span>${p.catatan}</span></div>`:''}
+          </div>`:''}
+        </div>`;}).join('')}
+    </div>
+  </section>`;
+  box.querySelectorAll('[data-pid]').forEach(el=>el.onclick=()=>{
+    const id=el.dataset.pid;
+    _eduBuka.has(id)?_eduBuka.delete(id):_eduBuka.add(id);
+    renderPanduan();
+  });
+}
+
 const EDU_TERMS=[
   // Dasar Teknikal
   {cat:'Dasar Teknikal',t:'RSI',a:'Relative Strength Index',d:`Osilator momentum 0–100 yang mengukur kecepatan & besar pergerakan harga. Di atas 70 sering disebut "jenuh beli", di bawah 30 "jenuh jual".`,n:`Bukan sinyal beli/jual otomatis — di tren kuat, RSI bisa bertahan lama di zona ekstrem.`},
@@ -5948,6 +6111,7 @@ const EDU_TERMS=[
 ];
 let eduCat='Semua';
 function renderEdu(){
+  renderPanduan();
   const catBox=$('#eduCats');
   if(catBox && !catBox.dataset.built){
     const cats=['Semua',...new Set(EDU_TERMS.map(x=>x.cat))];
@@ -6524,7 +6688,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v64';
+const APP_VERSION='v65';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
