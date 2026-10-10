@@ -4738,6 +4738,15 @@ async def _warm_shared_caches():
         except Exception as e:
             print(f"⚠️ cache-warmer foreign-flow:{scope}: {type(e).__name__}: {e}")
 
+    # Divergence: 178 emiten, dan pengunjung TIDAK PERNAH memindainya
+    # sendiri (lihat api_divergence). Kalau ini tidak dihangatkan, panel
+    # itu selamanya menjawab "sedang disiapkan".
+    if _cache_get(_DIVERGENCE_CACHE_KEY) is None:
+        try:
+            await _single_flight(_DIVERGENCE_CACHE_KEY, _build_divergence)
+        except Exception as e:
+            print(f"\u26a0\ufe0f cache-warmer divergence: {type(e).__name__}: {e}")
+
     if _cache_get("sinyal_puncak:v3") is None:
         try:
             from core.signal_history import get_signal_report
@@ -6640,6 +6649,110 @@ def _compute_sm_items(tickers: list, data: dict) -> list:
 _FOREIGN_FLOW_TTL = int(os.getenv("FOREIGN_FLOW_TTL", "900"))
 
 
+# =========================
+# PEMULIHAN SETELAH JATUH (divergence RSI)
+# =========================
+# Aturannya + seluruh alasan angkanya ada di core/divergence.py. Yang di
+# sini cuma pemindaian, cache, dan penyajian.
+#
+# KUNCI CACHE BERVERSI. Bentuk payload-nya baru; memakai kunci lama berarti
+# sesudah deploy pembaca mendapat bentuk lama dari cache dan kolomnya diam-
+# diam kosong -- bukan error, cuma salah. Naikkan versinya SETIAP kali
+# bentuknya berubah.
+_DIVERGENCE_CACHE_KEY = "divergence:v1"
+# Bar harian: yang berubah di tengah sesi cuma harga kininya, sedangkan
+# pivot & RSI dasarnya sudah tetap. Setengah jam lebih dari cukup.
+_DIVERGENCE_TTL = int(os.getenv("DIVERGENCE_TTL", "1800"))
+
+
+def _rsi_seri(close):
+    """RSI Wilder. Dihitung di sini, bukan diambil dari ai_score, supaya
+    pemindaian ini tidak ikut menanggung seluruh perhitungan skor."""
+    d = close.diff()
+    naik = d.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+    turun = (-d.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+    rs = naik / turun.replace(0, _np.nan)
+    return (100 - 100 / (1 + rs)).fillna(50)
+
+
+def _pindai_divergence(tickers: list, data: dict) -> list:
+    """Loop per emiten -- DIJALANKAN DI WORKER THREAD.
+
+    Alasannya sama dengan _compute_sm_items dan _compute_universe_items:
+    loop sinkron tanpa `await` di event loop membekukan SELURUH server,
+    bukan cuma endpoint ini.
+    """
+    from core.divergence import cari_setup, urutkan
+
+    keluar = []
+    for t in tickers:
+        df = (data or {}).get(t)
+        if df is None:
+            continue
+        try:
+            df = fix_yf_columns(df).apply(pd.to_numeric, errors="coerce").dropna()
+            if len(df) < 80:
+                continue
+            close = df["Close"]
+            tgl = [str(x)[:10] for x in df.index]
+            s = cari_setup(t.replace(".JK", ""), tgl, list(close.values),
+                           list(_rsi_seri(close).values))
+            if s:
+                keluar.append(s)
+        except Exception:
+            continue
+    return [{
+        "kode": x.kode, "setup_id": x.setup_id,
+        "tanggal_dasar1": x.tanggal_dasar1, "tanggal_dasar2": x.tanggal_dasar2,
+        "harga_dasar1": round(x.harga_dasar1), "harga_dasar2": round(x.harga_dasar2),
+        "rsi_dasar1": x.rsi_dasar1, "rsi_dasar2": x.rsi_dasar2,
+        "jatuh_pct": x.jatuh_pct, "gap_rsi": x.gap_rsi,
+        "jarak_bar": x.jarak_bar, "umur_bar": x.umur_bar,
+        "harga": round(x.harga_kini), "kuat": x.kuat,
+    } for x in urutkan(keluar)]
+
+
+async def _build_divergence() -> dict:
+    """Bagian BERAT -- dipisah supaya bisa dipanggil pemanas cache DAN
+    dibungkus single-flight."""
+    from core.async_yf import async_download_many
+
+    tickers = [t + ".JK" for t in LIQUID_250]
+    data = await async_download_many(tickers, period="1y", interval="1d")
+    items = await asyncio.to_thread(_pindai_divergence, tickers, data)
+    kuat = [x for x in items if x["kuat"]]
+    payload = _py({
+        "items": items, "kuat": len(kuat), "total": len(items),
+        "universe": len(tickers),
+        # Angka harapan yang TERUKUR, ikut dikirim supaya layar & bot tidak
+        # perlu menuliskannya sendiri-sendiri (dan jadi berbeda).
+        "ukuran": {"n": 59, "per_tahun": 30, "naik_pct": 62.7,
+                   "unggul_pct": 4.11, "horizon_hari": 20,
+                   "dasar_pct": 1.95, "diukur": "2026-10-10"},
+    })
+    _cache_set_durable(_DIVERGENCE_CACHE_KEY, payload, ttl=_DIVERGENCE_TTL)
+    return payload
+
+
+@app.get("/api/divergence")
+async def api_divergence():
+    """Saham yang sudah jatuh tapi tekanan jualnya mereda.
+
+    TIDAK PERNAH memindai atas permintaan pengunjung. Pemanas cache yang
+    menanggungnya (lihat _warm_shared_caches); kalau cache dingin, jawabannya
+    SEKETIKA dengan penanda `menyiapkan` -- pola yang sama dipakai screener
+    Minervini & harmonic, dan alasannya sama: memindai 178 emiten atas
+    permintaan satu pengunjung membuat seluruh aplikasi tersendat.
+    """
+    hangat = _cache_get(_DIVERGENCE_CACHE_KEY)
+    if hangat:
+        return hangat
+    basi = _cache_get_stale(_DIVERGENCE_CACHE_KEY)
+    if basi:
+        return {**basi, "basi": True}
+    return _py({"items": [], "kuat": 0, "total": 0, "menyiapkan": True})
+
+
 # Umur cache aliran asing. Sumbernya ringkasan harian IDX yang terbit SEKALI
 # sesudah penutupan, jadi menyegarkannya lebih sering dari sejam cuma
 # mengunduh ulang angka yang sama persis. Satu permintaan = seluruh pasar
@@ -7889,6 +8002,8 @@ _WA_BANTUAN = (
     "• *breakout* — saringan breakout volume\n"
     "• *smartmoney* (atau *bandar*) — saham yang volumenya jauh di atas "
     "kebiasaannya sendiri, dipilah akumulasi vs distribusi\n"
+    "• *pemulihan* — saham yang sudah jatuh 5-15% tapi tekanan jualnya "
+    "mereda (divergence RSI)\n"
     "• *harmonic* — saringan pola harmonic (*harmonic KODE* untuk rincian)\n"
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
     "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
@@ -10370,6 +10485,58 @@ async def _wa_smartmoney() -> str:
             "tetap hangat, jadi yang berikutnya langsung keluar.")
 
 
+def _wa_fmt_pemulihan(payload: dict) -> str:
+    """Setup pemulihan-setelah-jatuh untuk WhatsApp.
+
+    HANYA yang berlabel KUAT yang didaftar. Itu bukan pemangkasan demi
+    ringkas, melainkan karena yang lain memang TIDAK layak ditindaklanjuti:
+    diukur pada 283 setup unik selama 2 tahun, divergence tanpa syarat
+    jatuh harga berkinerja -2,26% DI BAWAH rata-rata pasar. Mencantumkannya
+    berarti mengirimi orang daftar yang lebih buruk daripada menebak.
+    """
+    if not isinstance(payload, dict):
+        return "_Data pemulihan belum siap. Coba lagi sebentar._"
+    if payload.get("menyiapkan"):
+        return ("*Pemulihan setelah jatuh*\n\n_Pemindaian sedang disiapkan, "
+                "sekitar semenit._\n\nKirim `pemulihan` lagi sebentar lagi.")
+
+    semua = payload.get("items") or []
+    kuat = [x for x in semua if isinstance(x, dict) and x.get("kuat")]
+    u = payload.get("ukuran") or {}
+    baris = ["*Pemulihan setelah jatuh* \u2014 divergence RSI"]
+    if payload.get("basi"):
+        baris.append("_\u26a0 Hasil pemindaian terakhir, belum diperbarui._")
+
+    if not kuat:
+        baris += ["", f"_Tidak ada setup KUAT hari ini"
+                  + (f" (dari {len(semua)} setup lemah)." if semua else ".") + "_",
+                  "", f"Wajar \u2014 hanya sekitar {u.get('per_tahun', 30)} kejadian "
+                  "per tahun dari seluruh universe. Hari tanpa hasil bukan "
+                  "tanda datanya rusak."]
+        return "\n".join(baris)
+
+    baris += ["", f"*{len(kuat)} saham*"]
+    for it in kuat:
+        baris.append(f"\u2022 *{it.get('kode')}* \u00b7 jatuh {it.get('jatuh_pct')}% "
+                     f"\u00b7 {_rp(it.get('harga'))}")
+        baris.append(f"   dasar {_rp(it.get('harga_dasar1'))} \u2192 "
+                     f"{_rp(it.get('harga_dasar2'))} \u00b7 RSI "
+                     f"{it.get('rsi_dasar1')} \u2192 {it.get('rsi_dasar2')} "
+                     f"\u00b7 terdeteksi {it.get('umur_bar')} hari lalu")
+
+    if u.get("n"):
+        baris += ["", f"_Terukur: {u['naik_pct']}% naik dalam {u['horizon_hari']} hari "
+                  f"bursa, rata-rata +{u['unggul_pct']}% di atas pasar "
+                  f"(dari {u['n']} kejadian selama 2 tahun, diukur {u['diukur']})._"]
+    baris += ["_Yang TIDAK berlabel kuat sengaja tidak didaftar: divergence tanpa "
+              "syarat jatuh harga berkinerja di BAWAH rata-rata pasar._",
+              "_Dasar harga baru sah sesudah 3 bar berikutnya lebih tinggi, jadi "
+              "sinyalnya memang terlambat 3 hari._",
+              "", "Ketik kode emitennya untuk rencana entry lengkap.",
+              "_Bukan ajakan membeli/menjual._"]
+    return "\n".join(baris)
+
+
 async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
     """Cocokkan pengirim dengan akun ter-approve, mencoba SEMUA identitas yang
     dikirim wa-bot.
@@ -10545,7 +10712,8 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             and kunci not in {"sinyal", "screener", "minervini", "breakout",
                               "kepemilikan", "x15", "ihsg", "pasar", "harmonic",
                               "harmonik", "bantuan", "help", "menu",
-                              "smartmoney", "sm", "bandar", "akumulasi"}):
+                              "smartmoney", "sm", "bandar", "akumulasi",
+                              "pemulihan", "divergence", "divergensi"}):
         return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -10583,6 +10751,10 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_screener(await screener()), None
         if kunci in {"smartmoney", "sm", "bandar", "akumulasi"}:
             return await _wa_smartmoney(), None
+        if kunci in {"pemulihan", "divergence", "divergensi"}:
+            # Membaca endpoint-nya, yang membaca cache. Bot TIDAK pernah
+            # memicu pemindaian sendiri -- pemanas cache yang menanggungnya.
+            return _wa_fmt_pemulihan(await api_divergence()), None
         if kode_harmonic:
             return _wa_fmt_harmonic_kode(kode_harmonic,
                                          await harmonic_kode(kode_harmonic)), None

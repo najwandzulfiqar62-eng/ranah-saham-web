@@ -235,6 +235,7 @@ const NAV_GROUPS=[
     {v:'makro',l:'Makro Global',icon:'zap'}]},
   {label:'Data',items:[
     {v:'asing',l:'Smart Money',icon:'gem'},
+    {v:'pemulihan',l:'Pemulihan',icon:'trending-up'},
     {v:'pemegang',l:'Pemegang Saham',icon:'user'},
     {v:'berita',l:'Berita',icon:'bell'}]},
   {label:'Komunitas',items:[
@@ -363,6 +364,7 @@ function _applyRoute(v){
     if(v==='ihsg'&&!loaded.ihsg){loaded.ihsg=1;showIhsg()}
     if(v==='makro'&&!loaded.makro){loaded.makro=1;loadMakro()}
     if(v==='asing'&&!loaded.asing){loaded.asing=1;loadForeignFlow($('#smScope')?.value||'medium')}
+    if(v==='pemulihan'&&!loaded.pemulihan){loaded.pemulihan=1;loadPemulihan()}
     if(v==='pemegang'&&!loaded.pemegang){loaded.pemegang=1;loadX15(0);loadBerulang();_initPemegangChips()}
     if(v==='berita'&&!loaded.berita){loaded.berita=1;loadNews()}
     if(v==='screener'&&!loaded.screener){loaded.screener=1;loadUniverse()}
@@ -4113,6 +4115,64 @@ let _smKongloFilter='';
 // "Thohir" sengaja menggabungkan ketiganya sebagai satu filter praktis,
 // beda dari grup lain yang memang satu entitas korporat.
 const THOHIR_GROUPS=['Grup Adaro (Garibaldi Thohir)','Grup Merdeka (Soeryadjaya/Thohir)','Grup Indika Energy'];
+/* ---------- PEMULIHAN SETELAH JATUH (divergence RSI) ---------- */
+// Namanya bukan "Bullish Divergence", dan itu kesimpulan pengukuran bukan
+// pilihan kata. Diukur pada 283 setup unik selama 2 tahun: divergence
+// MURNI punya keunggulan NEGATIF (-0,94%). Yang memisahkan menang dari
+// kalah cuma satu hal -- seberapa dalam harga sudah jatuh di antara kedua
+// dasarnya. Karena itu badge "KUAT" menandai jatuh 5-15%, dan daftar ini
+// TIDAK diurut berdasarkan selisih RSI walau itu yang ditonjolkan
+// aplikasi lain (selisih RSI: keunggulan -0,35%, praktis nol).
+function _pemulihanBaris(it){
+  const c = it.kuat ? 'var(--bull)' : 'var(--muted)';
+  const badge = it.kuat
+    ? `<span class="sm-asing" style="color:var(--bull);border-color:var(--bull)55" title="Jatuh 5-15% \u2014 satu-satunya penyaring yang terbukti berpengaruh">KUAT</span>`
+    : '';
+  return `<div class="sm-row" onclick="analyze('${it.kode}')">
+    <div class="sm-ticker">${tickerTag(it.kode,16)}</div>
+    <div class="sm-chg" style="color:${c}">${fmt(it.jatuh_pct,1)}%</div>
+    <div class="sm-bar-wrap">
+      <div class="sm-vol-lbl">dasar ${_rpRingkas(it.harga_dasar1)} \u2192 ${_rpRingkas(it.harga_dasar2)}
+        \u00b7 RSI ${fmt(it.rsi_dasar1,0)} \u2192 ${fmt(it.rsi_dasar2,0)}
+        \u00b7 ${it.jarak_bar} hari \u00b7 terdeteksi ${it.umur_bar} hari lalu</div>
+    </div>${badge}
+  </div>`;
+}
+
+async function loadPemulihan(){
+  const body=$('#pemulihanBody');
+  body.innerHTML='<section class="panel skel loadbar"></section>';
+  let d; try{d=await api('/api/divergence')}catch(e){
+    body.innerHTML=`<section class="panel">${emptyState('Gagal memuat: '+e.message,'alert-triangle')}</section>`;return}
+  if(d.menyiapkan){
+    body.innerHTML=`<section class="panel">${emptyState('Pemindaian sedang disiapkan di latar belakang. Halaman ini sengaja TIDAK memindai sendiri \u2014 memindai 178 saham atas permintaan satu pengunjung membuat seluruh aplikasi tersendat. Coba lagi sebentar.','clock')}</section>`;
+    return;
+  }
+  const u=d.ukuran||{}, items=d.items||[], kuat=items.filter(x=>x.kuat);
+  body.innerHTML=`
+  <section class="panel">
+    <p class="eyebrow">Pemulihan Setelah Jatuh \u00b7 divergence RSI</p>
+    <div style="font-size:24px;font-weight:800;font-family:'Space Grotesk',sans-serif;color:${kuat.length?'var(--bull)':'var(--muted)'};line-height:1.15;margin-top:4px">
+      ${kuat.length} kuat${items.length>kuat.length?` \u00b7 ${items.length-kuat.length} lemah`:''}</div>
+    <p class="muted" style="font-size:12.5px;margin-top:6px">
+      Harga membuat dasar lebih rendah, tapi RSI membuat dasar lebih tinggi \u2014 tekanan jualnya mereda.
+      Dari ${d.universe} saham likuid.${d.basi?' <b>Data pemindaian terakhir</b>, belum diperbarui.':''}</p>
+    ${u.n?`<p class="insight muted" style="font-size:12px;margin-top:10px">
+      <b>Yang terukur, bukan yang dijanjikan.</b> Diuji pada ${u.n} setup berlabel KUAT selama 2 tahun
+      (${u.diukur}): <b>${u.naik_pct}% naik</b> dalam ${u.horizon_hari} hari bursa, rata-rata
+      <b>+${u.unggul_pct}%</b> di atas pasar (dasar +${u.dasar_pct}%). Sekitar ${u.per_tahun} kejadian per tahun.<br>
+      Divergence TANPA syarat jatuh harga justru berkinerja <b>di bawah</b> rata-rata pasar \u2014
+      itu sebabnya yang tidak berlabel KUAT tidak layak ditindaklanjuti.</p>`:''}
+  </section>
+  ${items.length?`<section class="panel" style="margin-top:10px">${items.map(_pemulihanBaris).join('')}</section>`
+    :`<section class="panel" style="margin-top:10px">${emptyState('Tidak ada setup aktif hari ini. Hari tanpa hasil itu wajar \u2014 sekitar '+(u.per_tahun||30)+' kejadian KUAT per tahun dari seluruh universe.','search')}</section>`}
+  <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6">
+    Dasar harga baru dihitung sebagai dasar setelah 3 bar berikutnya terbukti lebih tinggi,
+    jadi sinyalnya memang terlambat 3 hari \u2014 itu harga kejujurannya: tanpa jeda itu,
+    sinyalnya memakai informasi yang pada hari kejadian belum ada.<br>
+    Bukan ajakan membeli/menjual.</p>`;
+}
+
 async function loadForeignFlow(forceScope){
   const scopeEl=$('#smScope');
   const scope=forceScope||(scopeEl?scopeEl.value:'medium');
@@ -6251,7 +6311,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v59';
+const APP_VERSION='v60';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
