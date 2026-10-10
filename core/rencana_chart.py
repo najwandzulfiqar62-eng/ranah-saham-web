@@ -35,8 +35,19 @@ def _pct(a: float, b: float) -> float | None:
 
 
 def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
-          atr_pct: float | None = None) -> dict:
-    """Rencana lengkap untuk satu emiten (atau IHSG)."""
+          atr_pct: float | None = None, tren: dict | None = None) -> dict:
+    """Rencana lengkap untuk satu emiten (atau IHSG).
+
+    `tren` dari core/tren.py (Dow). Ia MENDAHULUI level mendatar untuk
+    menentukan area beli/jual, dan itu mengikuti bukunya: di tren yang
+    jelas, yang menahan harga adalah GARIS TREN-nya, bukan atap atau
+    lantai mendatar yang kebetulan terdekat.
+
+    CATATAN KEJUJURAN: aturan garis tren ini BELUM diukur terpisah.
+    Yang sudah diukur adalah level mendatar dan vonis; garis tren masuk
+    karena ia metode baku di buku rujukan, bukan karena angkanya sudah
+    diperiksa. Layar menyebutkan itu.
+    """
     if not harga or harga <= 0:
         return {}
 
@@ -89,11 +100,42 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         return (f"{lv.get('nama') or cadangan} — {bukti}, "
                 f"terakhir {lv['terakhir']}")
 
+    # GARIS TREN MENDAHULUI LEVEL MENDATAR (Dow, lewat bukunya).
+    #
+    # Di tren yang jelas, yang menahan harga adalah garis trennya, bukan
+    # atap/lantai mendatar yang kebetulan terdekat. Bedanya mendasar:
+    # level mendatar menjawab "di harga berapa pasar PERNAH berbalik";
+    # garis tren menjawab "di harga berapa pasar akan berbalik BESOK,
+    # kalau trennya bertahan" -- dan angkanya bergerak tiap hari.
+    #
+    # Dipakai hanya kalau trennya BELUM ditembus. Garis tren yang sudah
+    # dilanggar bukan lagi penahan; memakainya berarti menyuruh orang
+    # membeli di garis yang harga sudah membuktikan tidak dihormatinya.
+    t = tren or {}
+    t_arah = t.get("arah") or "mendatar"
+    t_garis = t.get("garis_kini")
+    t_sah = bool(t_garis) and not t.get("tembus")
+
     beli = jual = None
-    if s1:
+    if t_sah and t_arah == "naik":
+        beli = {
+            "harga": t_garis,
+            "alasan": (f"garis tren naik, ditarik lewat {t.get('n_lembah', 0)} "
+                       f"lembah — di situlah harga disangga selama "
+                       "trennya bertahan"),
+            "teruji": True, "dinamis": True,
+            "jarak_pct": _pct(t_garis, harga)}
+    elif s1:
         beli = {"harga": s1["harga"], "alasan": _alasan(s1, "Support"),
-                "teruji": (s1.get("sentuh") or 0) > 1,
+                "teruji": (s1.get("sentuh") or 0) > 1, "dinamis": False,
                 "jarak_pct": _pct(s1["harga"], harga)}
+
+    # DI TREN TURUN TIDAK ADA AREA BELI, dan itu bukan kolom yang gagal
+    # terisi. Bukunya tegas: jangan beli melawan tren sampai garisnya
+    # ditembus ke atas. Memberi satu angka beli di tren turun berarti
+    # mengundang orang menangkap pisau jatuh.
+    if t_sah and t_arah == "turun":
+        beli = None
 
     # AREA JUAL = TEMPAT TEKANAN BELI TERBUKTI MELEMAH, bukan sekadar
     # atap terdekat.
@@ -117,7 +159,16 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         puncak = max(kandidat,
                      key=lambda x: ((x.get("sentuh") or 0), -x["harga"]))
 
-    if bias == "bullish":
+    if t_sah and t_arah == "turun":
+        # Di tren turun, yang menahan kenaikan adalah GARIS TREN TURUN --
+        # harga naik menyentuhnya lalu ditolak. Itu area jualnya, dan ia
+        # bergerak turun tiap hari.
+        jual = {"harga": t_garis,
+                "alasan": (f"garis tren turun, ditarik lewat {t.get('n_puncak', 0)} "
+                           "puncak — di situ kenaikan berulang kali ditolak"),
+                "teruji": True, "dinamis": True,
+                "jarak_pct": _pct(t_garis, harga)}
+    elif bias == "bullish":
         # Di tren naik, atap terdekat diperlakukan sbg TARGET, bukan
         # tempat jual. Jual hanya kalau ada bukti penolakan sungguhan
         # (>=3 kali ditolak) di atas sana.
@@ -204,6 +255,8 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         "invalidasi": invalidasi, "alasan_invalidasi": alasan_inval,
         "target": target,
         "pola_utama": (pola_utama or {}).get("nama"),
+        "tren": t_arah, "tren_garis": t_garis, "tren_tembus": bool(t.get("tembus")),
+        "tren_alasan": t.get("alasan"),
         "narasi": _narasi(harga, bias, pola_utama, jual, s1, s2, ma20, ma50),
     }
 

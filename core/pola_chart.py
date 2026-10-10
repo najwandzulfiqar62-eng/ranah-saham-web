@@ -306,6 +306,26 @@ def cari_falling_wedge(kode: str, tanggal: list, tinggi: list, rendah: list,
     if ma >= mb:
         return None
 
+    # PIVOTNYA HARUS BENAR-BENAR BERURUTAN MENURUN.
+    #
+    # CACAT NYATA, ditemukan penulis dengan MATA pada chart IHSG yang
+    # dilabeli "Falling Wedge" padahal bentuknya reli lalu anjlok.
+    # Pivot puncaknya: 6.454 -> 6.463 -> 6.552 -> 6.713 -> 6.216.
+    # Naik, naik, naik, lalu jatuh.
+    #
+    # Syarat di atas cuma memeriksa TANDA KEMIRINGAN garis regresinya,
+    # dan satu pivot terakhir yang ambruk sudah cukup menyeret garis
+    # sebuah struktur NAIK menjadi negatif. Regresi menjawab
+    # "rata-ratanya ke mana"; wedge menuntut "tiap langkahnya ke mana"
+    # -- dua pertanyaan berbeda, dan yang kedua itu yang dilihat mata.
+    #
+    # Berlaku untuk rising wedge juga: ia dibuat dari pencerminan modul
+    # ini, jadi satu perbaikan menutup keduanya.
+    if not all(tinggi[b] < tinggi[a] for a, b in zip(puncak, puncak[1:])):
+        return None
+    if not all(rendah[b] < rendah[a] for a, b in zip(lembah, lembah[1:])):
+        return None
+
     mulai = min(puncak[0], lembah[0])
     lebar_awal = (ma * mulai + ca) - (mb * mulai + cb)
     atas_kini = ma * akhir + ca

@@ -294,6 +294,48 @@ def ringkas_harmonic(pola: list[dict]) -> str:
 # pada Shark). Ini aturan target harmonic yang lazim dipakai; sengaja BUKAN
 # diukur ke seluruh pola, karena pada Butterfly/Crab leg terakhirnya sangat
 # panjang sehingga target "sampai titik A" jadi angka yang cuma enak dibaca.
+# ===========================================================================
+# HASIL PENGUKURAN -- dibaca sebelum mempercayai modul ini
+# ===========================================================================
+# Diukur 20 hari bursa ke depan, jalan maju, per pola, pada
+# 249 emiten likuid. Dasar pasar +1.79%.
+#
+#     SEMUA bearish   +0.20%  (n=458)   <- pola TURUN, harganya NAIK
+#     SEMUA bullish   -0.12%  (n=414)   <- pola NAIK, harganya TURUN
+#     ABCD  bearish   +0.24%  (n=340)
+#     ABCD  bullish   +0.09%  (n=327)
+#
+# KEDUA ARAH MENUNJUK TERBALIK, dan selisihnya nyaris nol. Angka per-pola
+# (Gartley, Butterfly, Bat, Shark) punya n cuma 15-44 -- itu derau, bukan
+# temuan, dan sengaja TIDAK dikutip sebagai keunggulan.
+#
+# Artinya: pola harmonic sebagaimana terpasang di sini TIDAK punya
+# keunggulan terukur. Ia tetap digambar di chart karena ia KETERANGAN
+# BENTUK yang bisa diperiksa sendiri oleh pembaca, dengan angkanya
+# ditempel apa adanya -- bukan karena ia bekerja.
+#
+# Pola harmonic juga BUKAN dari buku rujukan penulis (Edianto Ong). Ia
+# dari H.M. Gartley (1935), disistematiskan Scott Carney. Yang ada di
+# buku itu Fibonacci retracement & extension, yaitu bahan dasarnya.
+UNGGUL_HARMONIC = {
+    ("SEMUA", "bearish"): {"unggul_pct": 0.2, "n": 458, "pct_positif": 37.1},
+    ("SEMUA", "bullish"): {"unggul_pct": -0.12, "n": 414, "pct_positif": 33.8},
+    ("ABCD", "bearish"): {"unggul_pct": 0.24, "n": 340, "pct_positif": 36.2},
+    ("ABCD", "bullish"): {"unggul_pct": 0.09, "n": 327, "pct_positif": 34.6},
+}
+# n minimum agar sebuah angka layak dikutip. Di bawah ini, keunggulannya
+# tidak bisa dibedakan dari kebetulan.
+MIN_N_HARMONIC = 100
+
+
+def unggul_harmonic(pola: str, arah: str) -> dict | None:
+    """Angka terukur pola harmonic, atau None kalau belum cukup sampel."""
+    r = UNGGUL_HARMONIC.get((pola, arah)) or UNGGUL_HARMONIC.get(("SEMUA", arah))
+    if not r or r["n"] < MIN_N_HARMONIC:
+        return None
+    return r
+
+
 HARMONIC_TP_FIB = (0.382, 0.618, 1.0)
 
 # Jarak aman di luar titik invalidasi. Pola yang cuma tersenggol ekor candle

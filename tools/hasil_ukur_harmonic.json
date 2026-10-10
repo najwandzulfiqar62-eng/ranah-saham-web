@@ -1,0 +1,87 @@
+{
+ "horizon_hari": 20,
+ "n_emiten": 249,
+ "dasar_pct": 1.79,
+ "pola": [
+  {
+   "pola": "ABCD",
+   "arah": "bearish",
+   "n": 340,
+   "unggul_pct": 0.24,
+   "return_pct": -2.02,
+   "pct_positif": 36.2
+  },
+  {
+   "pola": "ABCD",
+   "arah": "bullish",
+   "n": 327,
+   "unggul_pct": 0.09,
+   "return_pct": -1.51,
+   "pct_positif": 34.6
+  },
+  {
+   "pola": "Bat",
+   "arah": "bearish",
+   "n": 18,
+   "unggul_pct": -1.04,
+   "return_pct": -5.15,
+   "pct_positif": 33.3
+  },
+  {
+   "pola": "Butterfly",
+   "arah": "bearish",
+   "n": 25,
+   "unggul_pct": -2.33,
+   "return_pct": -4.17,
+   "pct_positif": 32.0
+  },
+  {
+   "pola": "Butterfly",
+   "arah": "bullish",
+   "n": 27,
+   "unggul_pct": 1.43,
+   "return_pct": -1.86,
+   "pct_positif": 29.6
+  },
+  {
+   "pola": "Gartley",
+   "arah": "bearish",
+   "n": 44,
+   "unggul_pct": 1.88,
+   "return_pct": 1.51,
+   "pct_positif": 52.3
+  },
+  {
+   "pola": "Gartley",
+   "arah": "bullish",
+   "n": 34,
+   "unggul_pct": -2.32,
+   "return_pct": -4.78,
+   "pct_positif": 38.2
+  },
+  {
+   "pola": "SEMUA",
+   "arah": "bearish",
+   "n": 458,
+   "unggul_pct": 0.2,
+   "return_pct": -2.0,
+   "pct_positif": 37.1
+  },
+  {
+   "pola": "SEMUA",
+   "arah": "bullish",
+   "n": 414,
+   "unggul_pct": -0.12,
+   "return_pct": -2.07,
+   "pct_positif": 33.8
+  },
+  {
+   "pola": "Shark",
+   "arah": "bearish",
+   "n": 15,
+   "unggul_pct": 1.85,
+   "return_pct": -0.64,
+   "pct_positif": 40.0
+  }
+ ]
+}

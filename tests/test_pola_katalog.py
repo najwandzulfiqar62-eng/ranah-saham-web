@@ -291,3 +291,50 @@ def test_deret_terlalu_pendek_tidak_meledak():
 def test_data_cacat_tidak_meledak():
     assert pk.deteksi("X", [], [], [], []) == []
     assert pk._cermin([1.0], [0.0], [1.0]) is None   # harga nol -> tolak
+
+
+# ---------------------------------------------------------------------------
+# Wedge: pivotnya harus benar-benar berurutan
+# ---------------------------------------------------------------------------
+
+def test_wedge_menolak_pivot_yang_tidak_berurutan():
+    """CACAT NYATA, ditemukan penulis dengan MATA: chart IHSG dilabeli
+    "Falling Wedge" padahal bentuknya reli lalu anjlok. Pivot puncaknya
+    6.454 -> 6.463 -> 6.552 -> 6.713 -> 6.216: naik, naik, naik, lalu
+    jatuh.
+
+    Syarat lama cuma memeriksa TANDA KEMIRINGAN garis regresinya, dan
+    satu pivot terakhir yang ambruk sudah cukup menyeret garis sebuah
+    struktur NAIK menjadi negatif. Regresi menjawab "rata-ratanya ke
+    mana"; wedge menuntut "tiap langkahnya ke mana".
+
+    Dampaknya besar: deteksi turun dari 19 ke 1 per 200 emiten, yaitu
+    95% yang sebelumnya terdeteksi bukan wedge sama sekali.
+    """
+    import inspect
+    from core import pola_chart as pc
+    src = inspect.getsource(pc.cari_falling_wedge)
+    assert "tinggi[b] < tinggi[a]" in src, "puncak tidak diperiksa berurutan"
+    assert "rendah[b] < rendah[a]" in src, "lembah tidak diperiksa berurutan"
+
+
+def test_wedge_buatan_yang_berurutan_tetap_terdeteksi():
+    """Perbaikannya tidak boleh mematikan polanya sama sekali."""
+    n = 150
+    tinggi, rendah, tutup = [], [], []
+    for i in range(n):
+        # Dua garis sama-sama turun, atas lebih curam -> menyempit.
+        # Kemiringannya dipilih supaya keduanya BELUM berpotongan di
+        # ujung jendela: dengan -2,2 dan -0,6 mereka bersilang di bar 62,
+        # dan sesudah bersilang itu bukan wedge lagi melainkan pola yang
+        # sudah selesai.
+        atas = 1000 - i * 0.9
+        bawah = 900 - i * 0.3
+        fase = i % 12
+        v = bawah + (atas - bawah) * (1 - abs(fase - 6) / 6)
+        tutup.append(v)
+        tinggi.append(v * 1.004)
+        rendah.append(v * 0.996)
+    tgl = [f"2025-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(n)]
+    pol = [p.nama for p in pk.deteksi("UJI", tgl, tinggi, rendah, tutup)]
+    assert "Falling Wedge" in pol, f"tidak terdeteksi; yang ketemu: {pol}"

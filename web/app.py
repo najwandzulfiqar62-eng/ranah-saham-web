@@ -2355,7 +2355,21 @@ def _harmonic_chart_payload(df, maks: int = 2) -> list:
                  for t in (p.get("titik") or [])]
         if len(titik) < 4:
             continue
+        u = None
+        try:
+            from core.harmonic import unggul_harmonic
+            u = unggul_harmonic(p.get("pola"), p.get("arah"))
+        except Exception:
+            u = None
         keluar.append({
+            # Angka terukurnya ikut, dan ia TIDAK menyenangkan: kedua
+            # arah menunjuk terbalik (+0,20% untuk pola turun, -0,12%
+            # untuk pola naik). Ditempel apa adanya -- menggambar pola
+            # tanpa angka berarti menyerahkan kesimpulan pada bentuk
+            # yang kebetulan terlihat meyakinkan.
+            "unggul_pct": (u or {}).get("unggul_pct"),
+            "n_ukur": (u or {}).get("n"),
+            "pct_positif": (u or {}).get("pct_positif"),
             "pola": p.get("pola"), "arah": p.get("arah"),
             "skor": p.get("skor"), "prz": p.get("prz"),
             "potensi_pct": p.get("potensi_pct"),
@@ -2391,8 +2405,16 @@ def _rencana_chart_payload(df, pola: list, sr: dict) -> dict:
                                c.tolist())
         except Exception:
             pass
+        tren = None
+        try:
+            from core.tren import arah_tren
+            tren = arah_tren([str(x)[:10] for x in df.index],
+                             df["High"].tolist(), df["Low"].tolist(),
+                             c.tolist()).dict()
+        except Exception:
+            tren = None
         return susun(harga, sr.get("level") or [], pola or [],
-                     ma20=ma20, ma50=ma50, atr_pct=atr_pct)
+                     ma20=ma20, ma50=ma50, atr_pct=atr_pct, tren=tren)
     except Exception:
         return {}
 

@@ -733,12 +733,25 @@ function _ovlBersihHarga(st){
 // Menandai level yang berperan jadi area beli/jual. Dicocokkan pakai
 // toleransi kecil, bukan kesamaan persis: keduanya melewati pembulatan
 // yang berbeda, dan `===` pada pecahan akan gagal diam-diam.
+// Dicocokkan dengan toleransi kecil, bukan kesamaan persis: level dan
+// rencana melewati pembulatan yang berbeda, dan `===` pada pecahan akan
+// gagal diam-diam.
+function _dekatHarga(a,b){
+  return a!=null&&b!=null&&Math.abs(a-b)<=Math.max(0.01,Math.abs(b)*0.0005);
+}
+function _peranRencana(st, harga){
+  const r=st.rencana; if(!r)return null;
+  if(r.beli&&_dekatHarga(harga,r.beli.harga)) return 'beli';
+  if(r.jual&&_dekatHarga(harga,r.jual.harga)) return 'jual';
+  return null;
+}
 function _tandaRencana(st, harga){
-  const r=st.rencana; if(!r)return '';
-  const dekat=(a,b)=>a!=null&&b!=null&&Math.abs(a-b)<=Math.max(0.01,Math.abs(b)*0.0005);
-  if(r.beli&&dekat(harga,r.beli.harga)) return r.terlalu_sempit?'▲ ':'▲ BELI · ';
-  if(r.jual&&dekat(harga,r.jual.harga)) return r.terlalu_sempit?'▼ ':'▼ JUAL · ';
-  return '';
+  const p=_peranRencana(st,harga);
+  if(!p)return '';
+  // Saat rencananya tidak layak (imbalan < risiko), panahnya tetap
+  // dipasang tapi tanpa kata BELI/JUAL -- ia batas, bukan anjuran.
+  if(st.rencana.terlalu_sempit) return p==='beli'?'▲ ':'▼ ';
+  return p==='beli'?'▲ BELI · ':'▼ JUAL · ';
 }
 function _gambarSR(kunci, sr){
   const st=_ovlState(kunci);
@@ -759,7 +772,25 @@ function _gambarSR(kunci, sr){
   // keputusan minggu ini.
   const _atas=st.sr.filter(x=>x.tipe==='resistance').slice(0,2);
   const _bawah=st.sr.filter(x=>x.tipe==='support').slice(-2);
-  const tampil = st.srPenuh ? st.sr : _atas.concat(_bawah);
+  let tampil = st.srPenuh ? st.sr : _atas.concat(_bawah);
+  // AREA BELI & JUAL SELALU IKUT, berapa pun batasnya.
+  //
+  // CACAT NYATA (laporan penulis: "buy sell nya jangan di ilangin").
+  // Area jual dipilih dari BUKTI PENOLAKAN terkuat, yang bisa jatuh di
+  // level ketiga atau keempat -- di luar "dua terdekat per sisi".
+  // Akibatnya garisnya tidak tergambar, dan penandanya ikut hilang
+  // bersamanya: dua hal yang paling dicari orang di panel ini lenyap
+  // hanya karena aturan kerapian, tanpa satu pun error.
+  if(!st.srPenuh && st.rencana){
+    const wajib=[st.rencana.beli, st.rencana.jual].filter(Boolean);
+    for(const w of wajib){
+      const ada=tampil.some(x=>_dekatHarga(x.harga,w.harga));
+      if(ada) continue;
+      const asli=st.sr.find(x=>_dekatHarga(x.harga,w.harga));
+      if(asli) tampil=tampil.concat([asli]);
+    }
+    tampil=tampil.slice().sort((a,b)=>a.harga-b.harga);
+  }
   for(const L of tampil){
     const res=L.tipe==='resistance';
     // Judulnya memakai NAMA level, bukan cuma "R"/"S". "Dasar Mayor"
@@ -767,14 +798,21 @@ function _gambarSR(kunci, sr){
     // menamai keduanya sama membuang perbedaan yang justru dicari orang.
     // Jumlah sentuhan ikut ditulis supaya kekuatan buktinya terlihat:
     // level satu-sentuhan TIDAK boleh terbaca sekuat yang delapan kali.
+    // Garis yang membawa area BELI/JUAL dibuat PEKAT dan tebal; level
+    // lain dibiarkan samar. Tanpa pembedaan ini keenam garis terlihat
+    // sama penting, dan dua yang paling dicari orang tenggelam di
+    // antara yang cuma keterangan.
+    const peran=_peranRencana(st,L.harga);
     try{
       st.garisHarga.push(st.cs.createPriceLine({
         price:L.harga,
-        color:res?'rgba(224,86,107,.75)':'rgba(47,181,126,.75)',
+        color: peran
+          ? (peran==='beli'?'#2FB57E':'#E0566B')
+          : (res?'rgba(224,86,107,.42)':'rgba(47,181,126,.42)'),
         // Teruji >=3 kali digambar tegas; sisanya putus-putus. Bedanya
         // terlihat, dan itu memang informasi.
-        lineWidth:L.kuat?2:1,
-        lineStyle:L.kuat?0:2,
+        lineWidth: peran?2:1,
+        lineStyle: peran?0:(L.kuat?0:2),
         axisLabelVisible:true,
         // Level yang SEKALIGUS jadi area beli/jual ditandai di sini,
         // bukan digambar ulang sbg garis kedua. Versi sebelumnya
@@ -1016,10 +1054,18 @@ function _renderPolaChips(kunci){
       // angka yang ditempel di garis membuat chartnya tidak terbaca,
       // sementara yang mau memeriksanya cukup menahan kursor.
       const ras=Object.entries(h.rasio||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
+      // Angka terukurnya dibawa ke chip, dan ia tidak menyenangkan:
+      // kedua arah menunjuk terbalik. Menggambar pola tanpa angkanya
+      // berarti menyerahkan kesimpulan pada bentuk yang kebetulan
+      // terlihat meyakinkan.
+      const uk = h.unggul_pct==null ? 'belum diukur'
+        : `terukur ${h.unggul_pct>=0?'+':''}${fmt(h.unggul_pct,2)}% vs pasar (${h.n_ukur} kejadian) — `
+          + ((h.arah==='bullish') === (h.unggul_pct>0) ? 'searah dgn artinya' : 'BERLAWANAN dgn artinya');
       return `<button class="chip ${on?'active':''}" data-harm="${i}"
         style="${on?`border-color:${w};color:${w}`:''}"
         title="${h.pola} ${h.arah} · skor ${h.skor} · PRZ ${h.prz}
-${ras}">
+${ras}
+${uk}">
         ${h.pola} <span class="muted">${h.arah==='bullish'?'naik':'turun'}</span></button>`;
     }).join(''));
     if(st.harmAktif>=0) bagian.push(`<button class="chip" data-harm="-1">Sembunyikan XABCD</button>`);
@@ -7362,7 +7408,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v78';
+const APP_VERSION='v79';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
