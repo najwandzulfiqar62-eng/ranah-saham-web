@@ -860,12 +860,36 @@ function _gambarSinyal(kunci, sinyal){
   if(!st.cs)return;
   const list=(sinyal||[]);
   if(!list.length){ try{st.cs.setMarkers([])}catch(e){} return }
+  // LABELNYA REKAMAN, BUKAN PERINTAH.
+  //
+  // Versi pertama menulis "BELI Rp132" dan "JUAL Rp109", dan penulis
+  // membacanya persis sebagaimana tertulis: beli 132, jual 109, rugi.
+  // Ia tidak salah membacanya -- dua angka bersebelahan dengan kata
+  // BELI dan JUAL memang terbaca sebagai satu transaksi, padahal itu
+  // dua kejadian terpisah di tanggal yang berbeda.
+  //
+  // Menyembunyikan sinyal yang merugi bukan jawabannya: terukur cuma
+  // 40,5% berakhir naik, jadi yang merugi memang banyak. Yang benar
+  // adalah menuliskan HASILNYA, sehingga segitiga berhenti jadi
+  // perintah dan jadi catatan -- sama seperti Audit Sinyal, yang
+  // menampilkan yang kalah sejujur yang menang.
   const tanda=list.map(x=>{
     const beli=x.jenis==='BELI';
+    let ekor='';
+    if(x.hasil_pct==null){
+      ekor=' · blm genap';          // belum cukup umur untuk dinilai
+    }else{
+      // BENAR untuk sinyal beli = harga NAIK; untuk sinyal jual =
+      // harga TURUN. Tanpa pembedaan ini, "+1,4%" pada sinyal jual
+      // akan terbaca seolah sinyalnya berhasil.
+      const benar = beli ? x.hasil_pct>0 : x.hasil_pct<0;
+      const n = (x.hasil_pct>=0?'+':'')+fmt(x.hasil_pct,1)+'%';
+      ekor = ` ${benar?'✓':'✗'} ${n}`;
+    }
     return {time:x.t, position:beli?'belowBar':'aboveBar',
             color:beli?'#2FB57E':'#E0566B',
             shape:beli?'arrowUp':'arrowDown',
-            text:`${x.jenis} ${_rpT(x.harga)}`};
+            text:`${x.jenis} ${_rpT(x.harga)}${ekor}`};
   });
   try{ st.cs.setMarkers(tanda) }catch(e){ console.warn('sinyal: panah gagal',e) }
 }
@@ -936,6 +960,14 @@ function _renderPolaChips(kunci){
     }).join(''));
     bagian.push(`<button class="chip" data-ovl="${kunci}" data-pola="-1">Sembunyikan pola</button>`);
   }
+  const sg=st.sinyal||[];
+  if(sg.length){
+    const h=sg.filter(x=>x.hasil_pct!=null);
+    const benar=h.filter(x=>x.jenis==='BELI'?x.hasil_pct>0:x.hasil_pct<0).length;
+    bagian.push(`<span class="muted" style="font-size:11px;align-self:center;margin-left:4px"
+      title="Segitiga di chart adalah REKAMAN sinyal pada tanggalnya, bukan anjuran transaksi. Angka di belakangnya hasil 20 hari bursa sesudah sinyal itu: ✓ berarti arahnya benar, ✗ berarti salah. Sinyal beli dan jual di chart ini TIDAK berpasangan — keduanya kejadian terpisah.">
+      ${sg.length} sinyal · ${h.length?`${benar}/${h.length} arahnya benar`:'belum ada yang genap 20 hari'}</span>`);
+  }
   const hm=st.harm||[];
   if(hm.length){
     bagian.push(`<span class="muted" style="font-size:11px;align-self:center;margin-left:6px;margin-right:2px">Harmonic:</span>`);
@@ -999,7 +1031,8 @@ function _pasangOverlay(kunci, chart, cs, o, chipsSel){
   // error apa pun.
   _gambarSR(kunci, o.sr||[]);
   _gambarRencana(kunci, st.rencana);
-  _gambarSinyal(kunci, o.sinyal||[]);
+  st.sinyal=o.sinyal||[];
+  _gambarSinyal(kunci, st.sinyal);
   st.harm=o.harmonic||[]; st.harmSeri=[]; st.harmGaris=[];
   _gambarHarmonic(kunci, st.harm.length?0:-1);
   if(st.data.length) _gambarPola(kunci,0); else _renderPolaChips(kunci);
@@ -5905,41 +5938,45 @@ function _buildRencana(d){
   const r=d.rencana_chart;
   if(!r||!r.bias) return '';
   const w=_BIAS_WARNA[r.bias]||'var(--muted)';
-  const baris=(label,isi,warna,catatan)=>`
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
-      <div style="font-size:11.5px;color:var(--muted)">${label}${catatan?`<div style="font-size:10.5px;line-height:1.5;margin-top:2px">${catatan}</div>`:''}</div>
-      <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;white-space:nowrap;${warna?`color:${warna}`:''}">${isi}</div>
-    </div>`;
   const rp=v=>v==null?'\u2013':(typeof _rpRingkas==='function'?_rpRingkas(v):'Rp'+fmt(v));
-  const jar=v=>v&&v.jarak_pct!=null?` <span class="muted" style="font-weight:400">(${v.jarak_pct>=0?'+':''}${fmt(v.jarak_pct,1)}%)</span>`:'';
+  // SATU BARIS = SATU ANGKA, tanpa kalimat penjelas di tiap baris.
+  // Penulis minta tulisannya dikurangi, dan dari panel ini yang
+  // benar-benar dibaca memang cuma empat angkanya. Penjelasannya tidak
+  // dibuang, cuma dipindah ke balik satu ketukan -- yang mau tahu tetap
+  // bisa tahu tanpa memaksa yang tidak.
+  const sel=v=>v&&v.jarak_pct!=null
+    ? `<span class="muted" style="font-weight:400;font-size:11px"> ${v.jarak_pct>=0?'+':''}${fmt(v.jarak_pct,1)}%</span>` : '';
+  const selAbs=v=>(v==null||!d.price)?''
+    : `<span class="muted" style="font-weight:400;font-size:11px"> ${((v-d.price)/d.price*100)>=0?'+':''}${fmt((v-d.price)/d.price*100,1)}%</span>`;
+  const sel3=(lbl,isi,warna)=>`<div style="flex:1 1 110px;min-width:110px">
+      <div style="font-size:10px;color:var(--muted);letter-spacing:.4px">${lbl}</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;${warna?`color:${warna}`:''}">${isi}</div></div>`;
+  const kosong='<span class="muted" style="font-size:12px;font-weight:400">tidak ada</span>';
+  const detail=[
+    r.narasi||'',
+    r.beli?`<br><br><b>Beli di</b> \u2014 ${r.beli.alasan}.`
+          :'<br><br>Tidak ada level teruji di bawah harga sekarang.',
+    r.jual?`<br><b>Jual di</b> \u2014 ${r.jual.alasan}.`:'',
+    r.alasan_invalidasi?`<br><b>Batal di</b> \u2014 ${r.alasan_invalidasi}.`:'',
+    r.konfirmasi?`<br><b>Konfirmasi</b> \u2014 ${rp(r.konfirmasi)}, ${r.alasan_konfirmasi}.`:'',
+    r.imbal_risiko!=null?`<br><b>Imbalan vs risiko</b> \u2014 ${fmt(r.imbal_risiko,2)}\u00d7.`:'',
+    '<br><br>Semua angka di atas berasal dari level yang bisa kamu hitung sendiri di chart, dari level kunci polanya, dan dari ATR. Tidak ada angka keyakinan di panel ini. Edukasi, bukan nasihat keuangan.',
+  ].join('');
   return `<section class="panel" style="margin-top:10px">
     <p class="eyebrow">Rencana dari Chart</p>
-    <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:4px 0 10px">
+    <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:2px 0 10px">
       <span style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:800;color:${w}">${_BIAS_LABEL[r.bias]}</span>
       ${r.pola_utama?`<span class="chip" style="font-size:10.5px">${r.pola_utama}</span>`:''}
     </div>
-    ${r.terlalu_sempit?`<div style="background:rgba(199,154,42,.1);border:1px solid rgba(199,154,42,.35);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:11.5px;line-height:1.6">
-      <b>Rentangnya terlalu sempit untuk dijadikan rencana.</b> Jarak ke area jual lebih kecil
-      daripada jarak ke titik batal${r.imbal_risiko!=null?` (imbalan ${fmt(r.imbal_risiko,2)}× risiko)`:''},
-      jadi kalaupun benar, untungnya tidak sepadan dengan ruginya kalau salah — apalagi
-      sesudah dipotong biaya transaksi. Levelnya tetap ditampilkan sebagai <b>batas</b>, bukan
-      sebagai anjuran.</div>`:''}
-    ${r.imbal_risiko!=null&&!r.terlalu_sempit?baris('Imbalan vs risiko',`${fmt(r.imbal_risiko,2)}×`,r.imbal_risiko>=2?'var(--bull)':'','Berapa kali lipat potensi untung dibanding kerugian kalau titik batal kena'):''}
-    ${baris('Area beli',
-        r.beli?rp(r.beli.harga)+jar(r.beli):'<span class="muted" style="font-weight:400;font-size:11.5px">tidak ada level teruji di bawah</span>',
-        r.beli?'var(--bull)':'', r.beli?r.beli.alasan:'Harga berada di bawah semua level yang pernah bertahan \u2014 tidak ada lantai yang terbukti.')}
-    ${baris('Area jual',
-        r.jual?rp(r.jual.harga)+jar(r.jual):'<span class="muted" style="font-weight:400;font-size:11.5px">tidak ada level teruji di atas</span>',
-        r.jual?'var(--bear)':'', r.jual?r.jual.alasan:'')}
-    ${r.konfirmasi?baris('Konfirmasi',rp(r.konfirmasi),'',r.alasan_konfirmasi):''}
-    ${baris('Rencana batal di',rp(r.invalidasi),'var(--gold)',r.alasan_invalidasi)}
-    ${(r.target||[]).length?baris('Target berikutnya',(r.target||[]).map(rp).join(' \u00b7 '),'','Level teruji berikutnya searah bias, bukan ramalan harga'):''}
-    ${r.narasi?`<p class="insight" style="font-size:12.5px;line-height:1.7;margin-top:11px">${r.narasi}</p>`:''}
-    <p class="muted" style="font-size:10.5px;margin-top:9px;line-height:1.6">
-      Semua angka di atas berasal dari level yang bisa kamu hitung sendiri di chart
-      (titik balik berulang), dari level kunci polanya, dan dari ATR. <b>Tidak ada
-      angka keyakinan</b> di panel ini \u2014 yang ada cuma hasil pengukuran, dan pola
-      yang belum diukur ditulis apa adanya. Edukasi, bukan nasihat keuangan.</p>
+    ${r.terlalu_sempit?`<div style="background:rgba(199,154,42,.1);border:1px solid rgba(199,154,42,.35);border-radius:8px;padding:8px 11px;margin-bottom:10px;font-size:11.5px;line-height:1.55">
+      <b>Jaraknya terlalu sempit.</b> Potensi untungnya lebih kecil daripada risikonya \u2014 angka di bawah cuma batas, bukan peluang.</div>`:''}
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${sel3('BELI DI', r.beli?rp(r.beli.harga)+sel(r.beli):kosong, r.beli?'var(--bull)':'')}
+      ${sel3('JUAL DI', r.jual?rp(r.jual.harga)+sel(r.jual):kosong, r.jual?'var(--bear)':'')}
+      ${sel3('BATAL DI', rp(r.invalidasi)+selAbs(r.invalidasi), 'var(--gold)')}
+      ${(r.target||[]).length?sel3('TARGET',(r.target||[]).slice(0,2).map(rp).join(' \u00b7 '),''):''}
+    </div>
+    ${infoNote(detail,'Kenapa angkanya begitu')}
   </section>`;
 }
 
@@ -5957,58 +5994,55 @@ function _buildPolaChart(d){
   if(!pol.length){
     return `<section class="panel" style="margin-top:10px">
       <p class="eyebrow">Pola Chart</p>
-      <p class="muted" style="font-size:12.5px;line-height:1.65;margin-top:6px">
-        Tidak ada pola chart klasik yang sedang berlaku di saham ini.
-        <b>Itu keadaan yang normal</b>, bukan tanda ada yang rusak \u2014 pola
-        baku hanya muncul sesekali, dan memaksa setiap saham punya pola
-        berarti menamai sesuatu yang sebenarnya cuma gerak biasa.</p>
+      <p class="muted" style="font-size:12px;line-height:1.6;margin-top:4px">
+        Tidak ada pola klasik yang sedang berlaku. Itu normal \u2014 pola baku memang jarang muncul.</p>
     </section>`;
   }
+  // SATU BARIS PER POLA. Versi pertama memuat paragraf arti di setiap
+  // baris; dengan tiga pola sekaligus panelnya jadi dinding teks, dan
+  // pembaca baru cenderung melewatkannya sama sekali. Artinya sekarang
+  // di balik tautan "apa ini?" yang membuka di tempat.
   const baris=pol.map(p=>{
     const w=_POLA_WARNA[p.arah]||'var(--muted)';
     const tembus=p.fase==='TEMBUS';
-    // Angka terukur ditulis apa adanya, termasuk yang negatif dan yang
-    // belum ada. "Belum diukur" bukan nol -- nol itu klaim.
-    let ukur;
-    if(p.unggul_pct==null){
-      ukur=`<span class="muted">belum diukur</span>`;
-    }else{
-      const baik=p.unggul_pct>0;
-      ukur=`<b style="color:${baik?'var(--bull)':'var(--bear)'}">${baik?'+':''}${fmt(p.unggul_pct,2)}%</b>
-        <span class="muted">vs pasar, 20 hari \u00b7 ${p.n_ukur} kejadian${p.pct_positif!=null?` \u00b7 ${fmt(p.pct_positif,0)}% berakhir naik`:''}</span>`;
-    }
-    return `<div style="border:1px solid var(--line);border-left:3px solid ${w};border-radius:9px;padding:11px 13px;margin-bottom:9px">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <b style="font-size:13.5px">${p.nama}</b>
-        <span style="font-size:9px;font-weight:700;color:${w};border:1px solid ${w};border-radius:4px;padding:1px 5px;letter-spacing:.3px">${_POLA_ARAH[p.arah]||''}</span>
-        <span style="font-size:9px;font-weight:700;color:${tembus?'var(--bull)':'var(--muted)'};border:1px solid ${tembus?'var(--bull)':'var(--line)'};border-radius:4px;padding:1px 5px;letter-spacing:.3px"
-          title="${tembus?'Harga sudah menutup melewati level kuncinya \u2014 pola dianggap terkonfirmasi.':'Bentuknya sudah lengkap tapi harga BELUM menembus level kuncinya. Sebagian besar pola tidak pernah menembus.'}">${p.fase}</span>
-        <span class="muted" style="font-size:10.5px;margin-left:auto">${p.keluarga}</span>
+    const ukur = p.unggul_pct==null
+      ? '<span class="muted" style="font-size:11px">belum diukur</span>'
+      : `<b style="color:${p.unggul_pct>0?'var(--bull)':'var(--bear)'};font-size:13px">${p.unggul_pct>0?'+':''}${fmt(p.unggul_pct,2)}%</b>`;
+    const lvl=(typeof _rpRingkas==='function')?_rpRingkas(p.level_kunci):('Rp'+fmt(p.level_kunci));
+    return `<div style="border-left:3px solid ${w};padding:7px 0 7px 10px;margin-bottom:7px">
+      <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+        <b style="font-size:13px">${p.nama}</b>
+        <span style="font-size:9px;font-weight:700;color:${w};border:1px solid ${w};border-radius:4px;padding:1px 5px">${_POLA_ARAH[p.arah]||''}</span>
+        <span style="font-size:9px;font-weight:700;color:${tembus?'var(--bull)':'var(--muted)'};border:1px solid ${tembus?'var(--bull)':'var(--line)'};border-radius:4px;padding:1px 5px">${tembus?'TEMBUS':'TERBENTUK'}</span>
+        <span style="margin-left:auto">${ukur}</span>
       </div>
-      <div style="font-size:11.5px;margin-top:7px;line-height:1.6">
-        Level kunci <b style="font-family:'JetBrains Mono',monospace">${_rpRingkas?_rpRingkas(p.level_kunci):'Rp'+fmt(p.level_kunci)}</b>
-        ${p.potensi_pct!=null?` \u00b7 tinggi pola ${fmt(p.potensi_pct,1)}%`:''}
-        ${p.tanggal_kunci?` \u00b7 terbentuk ${p.tanggal_kunci}`:''}
+      <div class="muted" style="font-size:10.5px;margin-top:3px">
+        level ${lvl}${p.n_ukur?` \u00b7 ${Number(p.n_ukur).toLocaleString('id-ID')} kejadian`:''}${p.arti?` \u00b7 <a href="#" class="pola-arti" data-arti="${encodeURIComponent(p.arti)}" style="color:var(--gold)">apa ini?</a>`:''}
       </div>
-      <div style="font-size:11.5px;margin-top:5px">${ukur}</div>
-      ${p.arti?`<p class="muted" style="font-size:11px;margin-top:7px;line-height:1.6">${p.arti}</p>`:''}
     </div>`;
   }).join('');
   return `<section class="panel" style="margin-top:10px">
     <p class="eyebrow">Pola Chart</p>
-    <p class="muted" style="font-size:11.5px;line-height:1.6;margin:4px 0 11px">
-      Pola klasik yang sedang berlaku pada bar terakhir, beserta <b>fasenya</b>.
-      <b>TERBENTUK</b> = bentuknya lengkap tapi belum menembus level kuncinya;
-      <b>TEMBUS</b> = sudah menembus. Pembedaan ini penting: sebagian besar
-      bentuk yang terlihat seperti pola tidak pernah dikonfirmasi.</p>
     ${baris}
-    <p class="muted" style="font-size:10.5px;margin-top:4px;line-height:1.6">
-      Angka keunggulan diukur jalan-maju di seluruh IDX selama dua tahun,
-      dihitung <b>per pola</b> (bukan per hari) supaya satu pola yang bertahan
-      lama tidak terhitung berkali-kali. Rata-rata bukan janji. Edukasi, bukan
-      nasihat keuangan.</p>
+    ${infoNote('<b>TERBENTUK</b> = bentuknya lengkap tapi harga belum menembus level kuncinya. <b>TEMBUS</b> = sudah menembus. Sebagian besar bentuk tidak pernah menembus, jadi keduanya bukan hal yang sama.<br><br>Angka persen di kanan = rata-rata selisih terhadap pasar dalam 20 hari bursa sesudah pola ini muncul. Diukur jalan-maju di seluruh IDX selama dua tahun, dihitung per pola (bukan per hari). Rata-rata bukan janji.','Cara baca')}
   </section>`;
 }
+
+// "apa ini?" membuka arti pola DI TEMPAT. Dipasang sekali di tingkat
+// dokumen, bukan per baris: panel ini dirender ulang tiap ganti saham,
+// dan listener per baris akan menumpuk tanpa pernah dilepas.
+document.addEventListener('click',e=>{
+  const a=e.target.closest('.pola-arti'); if(!a)return;
+  e.preventDefault();
+  const induk=a.parentElement;
+  const ada=induk.querySelector('.arti-box');
+  if(ada){ ada.remove(); return }
+  const box=document.createElement('div');
+  box.className='arti-box';
+  box.style.cssText='font-size:11px;line-height:1.6;margin-top:5px';
+  box.textContent=decodeURIComponent(a.dataset.arti);
+  induk.appendChild(box);
+});
 
 function _buildKonsensus(d){
   const k = d.konsensus;
@@ -7264,7 +7298,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v73';
+const APP_VERSION='v75';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

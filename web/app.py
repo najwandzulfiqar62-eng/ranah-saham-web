@@ -2094,6 +2094,11 @@ def _level_sr_payload(df) -> dict:
 # dalam sepekan -- yang bukan cuma jelek dilihat, tapi menyiratkan
 # belasan kesempatan berbeda padahal itu satu keadaan yang sama.
 JEDA_SINYAL_BAR = 10
+# Horizon penilaian hasil sinyal, dalam bar. SAMA dengan horizon yang
+# dipakai seluruh pengukuran di aplikasi ini (vonis, pola, Pemulihan) --
+# kalau berbeda, angka di chart tidak sebanding dengan angka di panel
+# mana pun, dan pembaca akan membandingkan dua hal yang bukan sejenis.
+HORIZON_SINYAL = 20
 _SINYAL_CHART_TTL = int(os.getenv("SINYAL_CHART_TTL", "3600"))
 
 # Keunggulan terukur ATURAN YANG DIPAKAI DI CHART -- yaitu vonis yang
@@ -2143,7 +2148,7 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
     dirinya tiap 30 detik, dan menghitung ulang 170 bar tiap kali berarti
     3,2 detik CPU tiap setengah menit untuk tiap penonton.
     """
-    kunci = f"sinyalchart:v1:{(kode or '').upper()}"
+    kunci = f"sinyalchart:v2:{(kode or '').upper()}"
     hangat = _cache_get(kunci)
     if hangat is not None:
         return hangat
@@ -2164,11 +2169,42 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
             if (v in ("BELI KUAT", "JUAL KUAT") and v == lalu and v != lalu2
                     and i - terakhir[v] >= JEDA_SINYAL_BAR):
                 terakhir[v] = i
+                harga_sinyal = float(potong["Close"].iloc[-1])
+                # HASIL NYATANYA ikut dihitung, dan ini bukan hiasan.
+                #
+                # Penulis melihat chart bertuliskan "BELI Rp132" lalu
+                # "JUAL Rp109" dan menyimpulkan aplikasinya menyuruh
+                # jual rugi. Keduanya kejadian TERPISAH di tanggal
+                # berbeda, bukan satu transaksi -- tapi labelnya memang
+                # terbaca seperti perintah, dan pembaca tidak salah
+                # membacanya begitu.
+                #
+                # Menyembunyikan sinyal yang merugi bukan jawabannya:
+                # terukur cuma 40,5% berakhir naik, jadi yang merugi
+                # memang ada dan memang banyak. Yang benar adalah
+                # menuliskan APA YANG TERJADI SESUDAHNYA, sehingga
+                # segitiga itu berhenti terbaca sbg perintah dan mulai
+                # terbaca sbg rekaman -- sama seperti Audit Sinyal, yang
+                # justru menampilkan yang kalah sejujur yang menang.
+                hasil_pct = None
+                j = i + HORIZON_SINYAL
+                if j < n:
+                    try:
+                        akhir_h = float(df["Close"].iloc[j])
+                        if harga_sinyal:
+                            hasil_pct = round(
+                                (akhir_h - harga_sinyal) / harga_sinyal * 100, 2)
+                    except Exception:
+                        hasil_pct = None
                 keluar.append({
                     "t": str(df.index[i])[:10],
                     "jenis": "BELI" if v == "BELI KUAT" else "JUAL",
                     "vonis": v, "bertahan": True,
-                    "harga": round(float(potong["Close"].iloc[-1]), 2),
+                    "harga": round(harga_sinyal, 2),
+                    # None = belum genap HORIZON_SINYAL bar, jadi hasilnya
+                    # BELUM ADA -- bukan nol, dan bukan "impas".
+                    "hasil_pct": hasil_pct,
+                    "horizon_hari": HORIZON_SINYAL,
                     "unggul_pct": UNGGUL_SINYAL_CHART.get(v),
                     "n_ukur": N_SINYAL_CHART.get(v),
                 })
@@ -2177,6 +2213,61 @@ def _sinyal_chart_payload(kode: str, df, n_bar: int = 170) -> list:
         return []
     _cache_set(kunci, keluar, ttl=_SINYAL_CHART_TTL)
     return keluar
+
+
+_CHART_OVERLAY_TTL = int(os.getenv("CHART_OVERLAY_TTL", "900"))
+
+
+def _chart_overlay_payload(kode: str, df) -> dict:
+    """SEMUA lapisan gambar chart, dihitung sekali lalu di-cache.
+
+    CACAT YANG DIPERBAIKI DI SINI, dan ia cacat yang saya buat sendiri.
+    Keempat lapisan ini sempat dihitung langsung di dalam /api/ohlc, di
+    event loop, pada SETIAP panggilan. Diukur:
+
+        _pola_chart_payload        17,7 ms
+        _harmonic_chart_payload   143,5 ms   <- menelusuri kombinasi pivot
+        _level_sr_payload           5,4 ms
+        _rencana_chart_payload      4,9 ms
+        -------------------------------------
+        total                     171,6 ms  di EVENT LOOP
+
+    Dan chart memanggil /api/ohlc ulang TIAP 30 DETIK untuk menyegarkan
+    bar terakhir. Dengan dua puluh penonton bersamaan itu 3,4 detik event
+    loop tersumbat tiap setengah menit -- dan selama tersumbat, SEMUA
+    permintaan lain di seluruh aplikasi ikut menunggu, bukan cuma chart.
+    Itu persis kelas masalah yang membuat aturan "permintaan pengunjung
+    tidak boleh memicu kerja berat" ada.
+
+    Dua penjagaan sekaligus:
+      - DI-CACHE. Keempatnya dihitung dari bar HARIAN; isinya tidak
+        berubah dalam hitungan menit. Penyegaran 30 detik cuma perlu bar
+        terakhir, bukan pola yang dihitung ulang.
+      - DI WORKER THREAD (dipanggil lewat asyncio.to_thread). Saat cache
+        dingin, ongkosnya tetap ada -- yang berubah adalah ia tidak lagi
+        menahan event loop sementara dihitung.
+
+    Kunci cache BERVERSI: bentuk payload ini sudah berubah beberapa kali
+    hari ini, dan kunci tanpa versi berarti kolom diam-diam kosong
+    sesudah deploy, tanpa satu pun error.
+    """
+    kunci = f"chartovl:v2:{(kode or '').upper()}"
+    hangat = _cache_get(kunci)
+    if hangat is not None:
+        return hangat
+    pola = _pola_chart_payload(kode, df)
+    harmonic = _harmonic_chart_payload(df)
+    sr = _level_sr_payload(df)
+    out = {
+        "pola": pola, "harmonic": harmonic, "sr": sr,
+        "rencana": _rencana_chart_payload(df, pola, sr),
+        # Sinyal punya cache sendiri (TTL lebih panjang, 1 jam) karena
+        # ongkosnya jauh lebih besar lagi; dipanggil di sini supaya
+        # seluruh lapisan gambar lahir dari satu panggilan thread.
+        "sinyal": _sinyal_chart_payload(kode, df),
+    }
+    _cache_set(kunci, out, ttl=_CHART_OVERLAY_TTL)
+    return out
 
 
 def _harmonic_chart_payload(df, maks: int = 2) -> list:
@@ -2434,21 +2525,20 @@ async def ohlc(kode: str, days: int = 140):
     if df is None or len(df) < 50:
         raise HTTPException(404, "Data tidak cukup.")
 
-    # POLA CHART dideteksi pada data PENUH (butuh sampai 220 bar), bukan
-    # pada potongan yang ditampilkan -- kalau dideteksi pada potongan,
-    # pola yang membentang lebih panjang dari jendela chart tidak akan
-    # pernah ketemu, dan diamnya terbaca seperti "saham ini tidak punya
-    # pola" padahal cuma jendelanya kependekan.
-    pola = _pola_chart_payload(label, df)
-    harmonic = _harmonic_chart_payload(df)
-    # S/R dihitung dari data PENUH juga -- level yang teruji berkali-kali
-    # sering lahir di luar jendela yang kebetulan ditampilkan.
-    sr = _level_sr_payload(df)
-    rencana = _rencana_chart_payload(df, pola, sr)
-    # Di WORKER THREAD: 170 bar x 18,7 ms = 3,2 detik kalau cache dingin,
-    # dan tiga detik di event loop membekukan SELURUH server, bukan cuma
-    # chart yang memintanya.
-    sinyal = await asyncio.to_thread(_sinyal_chart_payload, label, df)
+    # Seluruh lapisan gambar dihitung SEKALI, di worker thread, lalu
+    # di-cache. Lihat _chart_overlay_payload untuk alasan panjangnya.
+    ovl = await asyncio.to_thread(_chart_overlay_payload, label, df)
+    # SALINAN, bukan rujukan. Di bawah ini koordinatnya dipangkas ke
+    # rentang candle, dan memangkas langsung akan merusak isi cache
+    # untuk permintaan berikutnya -- pemangkasan kedua memangkas yang
+    # sudah terpangkas, sehingga polanya menyusut sedikit demi sedikit
+    # tiap kali ada yang membuka chart dengan jendela lebih pendek.
+    # Tidak ada error yang muncul; polanya cuma pelan-pelan hilang.
+    pola = [dict(p) for p in (ovl.get("pola") or [])]
+    harmonic = [dict(h) for h in (ovl.get("harmonic") or [])]
+    sr = ovl.get("sr") or {}
+    rencana = ovl.get("rencana") or {}
+    sinyal = ovl.get("sinyal") or []
 
     # Jendela candle DIPERPANJANG kalau polanya mulai lebih awal. Tanpa
     # ini garis polanya terpotong di tepi kiri chart -- dan garis yang

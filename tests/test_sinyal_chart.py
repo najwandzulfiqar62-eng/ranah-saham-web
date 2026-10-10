@@ -122,16 +122,26 @@ def test_sinyal_di_cache():
     """18,7 ms per bar x 170 bar = 3,2 detik. Chart menyegarkan dirinya
     tiap 30 detik; tanpa cache itu 3,2 detik CPU tiap setengah menit
     untuk SETIAP penonton."""
+    import re
     src = inspect.getsource(app_module._sinyal_chart_payload)
     assert "_cache_get(" in src and "_cache_set(" in src
-    assert "sinyalchart:v1:" in src, "kunci cache harus berversi"
+    # Yang dikunci ADANYA versi, bukan angkanya: mengunci "v1" membuat
+    # tes gagal tepat ketika versinya dinaikkan dengan BENAR, dan tes
+    # yang menghukum perbuatan benar akan dilonggarkan orang.
+    assert re.search(r'f"sinyalchart:v\d+:', src), "kunci cache harus berversi"
 
 
 def test_sinyal_dihitung_di_worker_thread():
     """Tiga detik di event loop membekukan SELURUH server, bukan cuma
     chart yang memintanya."""
+    # Dipanggil TIDAK LANGSUNG sekarang: seluruh lapisan gambar lahir
+    # dari satu panggilan thread lewat _chart_overlay_payload, supaya
+    # 171 ms kerja Python murni tidak lagi menahan event loop tiap kali
+    # chart menyegarkan dirinya (tiap 30 detik, per penonton).
     src = inspect.getsource(app_module.ohlc)
-    assert "asyncio.to_thread(_sinyal_chart_payload" in src
+    assert "asyncio.to_thread(_chart_overlay_payload" in src
+    ovl = inspect.getsource(app_module._chart_overlay_payload)
+    assert "_sinyal_chart_payload(" in ovl
 
 
 def test_sinyal_payload_sinkron():
@@ -185,7 +195,7 @@ def test_layar_menggambar_sinyal_di_tanggalnya():
     yang tidak pernah ada."""
     js = open("web/static/app.js", encoding="utf-8").read()
     i = js.index("function _gambarSinyal(")
-    blok = js[i:i + 1200]
+    blok = js[i:js.index("function _renderPolaChips(", i)]
     assert "time:x.t" in blok, "panah tidak ditempel di tanggal sinyalnya"
     assert "arrowUp" in blok and "arrowDown" in blok
 
@@ -235,10 +245,10 @@ def test_harmonic_tidak_menentukan_sinyal_beli_jual():
 def test_harmonic_tidak_dioper_ke_pembangun_rencana():
     """Penjagaan di tingkat PEMANGGIL. Fungsi di atas bisa saja bersih
     isinya tapi menerima pola harmonic lewat argumen `pola`."""
-    src = inspect.getsource(app_module.ohlc)
-    # _rencana_chart_payload dipanggil dengan pola CHART, bukan harmonic.
+    # Keempat lapisan kini dirakit di _chart_overlay_payload, jadi di
+    # situlah pemisahannya harus diperiksa.
+    src = inspect.getsource(app_module._chart_overlay_payload)
     assert "_rencana_chart_payload(df, pola, sr)" in src
-    # dan `pola` berasal dari _pola_chart_payload, bukan dari harmonic.
     i_pola = src.index("pola = _pola_chart_payload(")
     i_harm = src.index("harmonic = _harmonic_chart_payload(")
     i_renc = src.index("_rencana_chart_payload(df, pola, sr)")
@@ -252,6 +262,7 @@ def test_harmonic_tetap_dikirim_sbg_lapisan_terpisah():
     sendiri supaya bisa digambar dan dinyalakan/dimatikan pengguna."""
     src = inspect.getsource(app_module.ohlc)
     assert '"harmonic": harmonic' in src
+    assert 'ovl.get("harmonic")' in src
     js = open("web/static/app.js", encoding="utf-8").read()
     assert "_gambarHarmonic" in js
     # Penggambar sinyal tidak menyentuh data harmonic.
