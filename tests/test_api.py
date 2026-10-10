@@ -5513,7 +5513,19 @@ def test_ringkasan_sinyal_teknikal_matches_js_thresholds():
         "score": 75, "change_1d": 4.82, "change_5d": 14.62,
     }
     r = app_module._ringkasan_sinyal_teknikal(ai_screenshot)
-    assert r == {"overall": "BELI", "beli": 4, "netral": 2, "jual": 0}
+    # Diperiksa sebagai HIMPUNAN BAGIAN, bukan kesamaan dict persis.
+    #
+    # Yang dijaga uji ini adalah KESELARASAN dengan _buildTechSummary() di
+    # JS -- yaitu keempat field itu. Field tambahan yang cuma ada di sisi
+    # server (mis. keterangan keandalan terukur, 10 Okt 2026) bukan drift:
+    # JS tidak pernah menghitungnya, jadi tidak ada yang bisa melenceng.
+    #
+    # Kesamaan persis membuat uji ini gagal setiap kali ada keterangan
+    # baru ditambahkan di server, dan uji yang gagal karena alasan yang
+    # bukan maksudnya akan dilonggarkan orang -- justru saat ia paling
+    # dibutuhkan.
+    for k, v in {"overall": "BELI", "beli": 4, "netral": 2, "jual": 0}.items():
+        assert r[k] == v, f"{k} melenceng dari _buildTechSummary() di JS"
 
     # Semua 6 indikator searah jual -> JUAL KUAT (beli=0, jual=6>=5).
     ai_jual_kuat = {
@@ -5533,7 +5545,9 @@ def test_ringkasan_sinyal_teknikal_matches_js_thresholds():
         "score": 50, "change_1d": 0.0, "change_5d": 0.0,
     }
     r3 = app_module._ringkasan_sinyal_teknikal(ai_netral)
-    assert r3 == {"overall": "CENDERUNG BELI", "beli": 1, "netral": 5, "jual": 0}
+    # Himpunan bagian, bukan kesamaan persis -- lihat catatan di atas.
+    for k, v in {"overall": "CENDERUNG BELI", "beli": 1, "netral": 5, "jual": 0}.items():
+        assert r3[k] == v, f"{k} melenceng dari _buildTechSummary() di JS"
 
 
 def test_get_ara_arb_bands_per_price_tier():

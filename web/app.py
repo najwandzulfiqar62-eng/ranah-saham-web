@@ -3644,6 +3644,18 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
                 "ai_score": ai["score"],
                 "ai_rating": ai["rating"],
                 "ringkasan_teknikal": _ringkasan_sinyal_teknikal(ai),
+                # Vonis KEMARIN, supaya aturan dua hari bisa dinilai.
+                # Edwards & Magee: tembusan baru sah kalau bertahan dua
+                # hari berturut-turut. Diukur di sini, dan ia menolong
+                # justru pada vonis yang SEDANG, bukan yang ekstrem:
+                #   BELI awal episode   n=1813  unggul +0,13%
+                #   BELI bertahan hari-2 n= 294  unggul +1,63%
+                #   BELI KUAT awal       n=1186  unggul +1,30%
+                #   BELI KUAT hari-2     n= 150  unggul +1,41%
+                # BELI yang bertahan sehari lagi setara nilainya dengan
+                # BELI KUAT. Yang ekstrem tidak bertambah baik dengan
+                # menunggu -- saat ia bertahan, geraknya sudah terjadi.
+                "ringkasan_kemarin": _ringkasan_kemarin(df),
                 "minervini_score": mv["skor"],
                 "minervini_criteria_met": mv["criteria_met"],
                 "confluence_bullish": cf["bullish"],
@@ -6312,6 +6324,29 @@ def _build_sm_payload(items: list, total: int, scope: str) -> dict:
     })
 
 
+def _ringkasan_kemarin(df) -> str | None:
+    """Vonis Ringkasan Sinyal pada bar SEBELUM yang terakhir.
+
+    Dipakai menilai aturan dua hari. Dihitung ulang dari df yang dipotong
+    satu bar -- bukan disimpan di cache, karena cache yang menyimpan vonis
+    kemarin akan basi persis pada hari yang penting (saat vonisnya berubah).
+
+    None kalau tidak bisa dihitung; pemanggilnya harus memperlakukan itu
+    sebagai "tidak tahu", BUKAN sebagai "tidak bertahan".
+    """
+    try:
+        if df is None or len(df) < 60:
+            return None
+        from core.ai_score import calculate_ai_score_from_df
+
+        ai = calculate_ai_score_from_df(df.iloc[:-1])
+        if not ai:
+            return None
+        return _ringkasan_sinyal_teknikal(ai)["overall"]
+    except Exception:
+        return None
+
+
 def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
     """Replika SERVER-SIDE dari _buildTechSummary() di web/static/index.html
     (panel "Ringkasan Sinyal Teknikal" pada halaman Analisis -- 6 indikator
@@ -6371,7 +6406,35 @@ def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
         overall = "CENDERUNG JUAL"
     else:
         overall = "NETRAL"
-    return {"overall": overall, "beli": beli, "netral": netral, "jual": jual}
+    # KEANDALAN YANG DIUKUR, bukan ditaksir dari jumlah suaranya.
+    #
+    # Diukur 10 Okt 2026 pada 173 emiten likuid, 2 tahun, 25.097 EPISODE
+    # vonis (bukan per bar -- bar berurutan dengan vonis sama itu nyaris
+    # duplikat dan hasil 20-harinya saling tumpang tindih). Dasar +0,88%
+    # per 20 hari bursa:
+    #
+    #     BELI KUAT        n=1186   unggul +1,30%
+    #     BELI             n=1813   unggul +0,13%
+    #     CENDERUNG BELI   n=6353   unggul +0,04%
+    #     NETRAL           n=4870   unggul +0,12%
+    #     CENDERUNG JUAL   n=6671   unggul -0,10%
+    #     JUAL             n=3533   unggul -0,42%
+    #     JUAL KUAT        n= 671   unggul -0,66%
+    #
+    # HANYA DUA UJUNGNYA YANG BERARTI. Empat vonis di tengah semuanya
+    # berada dalam rentang +-0,13% dari pasar -- tidak bisa dibedakan dari
+    # tidak tahu apa-apa. Tangga tujuh tingkat ini menjanjikan tujuh
+    # derajat ketelitian yang tidak dimilikinya, dan pengguna yang membaca
+    # "CENDERUNG BELI" wajar mengira ia mendapat sesuatu.
+    #
+    # Field ini TIDAK mengubah vonisnya -- yang sudah tercatat di
+    # signal_history memakai semantik lama dan tidak boleh bergeser
+    # diam-diam. Ia cuma menambah keterangan supaya layar bisa jujur.
+    kuat = overall in ("BELI KUAT", "JUAL KUAT")
+    return {"overall": overall, "beli": beli, "netral": netral, "jual": jual,
+            "terukur_berarti": kuat,
+            "unggul_terukur_pct": (1.30 if overall == "BELI KUAT"
+                                   else -0.66 if overall == "JUAL KUAT" else None)}
 
 
 # Verdict "Ringkasan Sinyal Teknikal" yang dianggap cukup meyakinkan sbg

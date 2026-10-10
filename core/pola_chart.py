@@ -159,3 +159,147 @@ def cari_ihs(kode: str, tanggal: list, tinggi: list, rendah: list,
         tembus=kini > garis,
         potensi_pct=round(tinggi_pola / garis * 100, 2),
     )
+
+
+# ---------------------------------------------------------------------------
+# FALLING WEDGE (baji turun)
+# ---------------------------------------------------------------------------
+# Dipilih sebagai pola kedua yang diuji BUKAN karena ia populer, tapi
+# karena sifatnya PALING BERBEDA dari Inverse H&S yang sudah gagal: IHS
+# soal bentuk tiga lembah, wedge soal MEREDANYA tekanan jual -- jarak
+# antara puncak dan lembah yang makin menyempit. Itu sejenis dengan panel
+# Pemulihan yang terbukti bekerja (+4,11%), jadi kalau ia pun negatif,
+# kesimpulannya jauh lebih kuat daripada menguji sembilan pola bentuk lain.
+#
+# DEFINISINYA, dan tiap syarat ada alasannya:
+#   - garis atas (lewat puncak-puncak) dan garis bawah (lewat lembah-lembah)
+#     sama-sama MENURUN  -> ini pola di dalam tren turun, bukan konsolidasi
+#   - garis atas menurun LEBIH CURAM  -> itu arti "menyempit"; tanpa syarat
+#     ini, saluran turun sejajar ikut lolos dan ia pola yang berbeda
+#   - lebarnya menyusut cukup banyak -> penyempitan yang cuma beberapa
+#     persen tidak bisa dibedakan dari derau
+#   - garisnya belum berpotongan -> sesudah berpotongan, polanya bukan
+#     wedge lagi melainkan sudah selesai
+
+MIN_PIVOT_WEDGE = 2          # minimum puncak DAN lembah di dalam jendela
+JENDELA_WEDGE = 60           # bar ke belakang yang dipertimbangkan
+MIN_PENYEMPITAN = 0.30       # lebar akhir maksimal 70% dari lebar awal
+MAKS_UMUR_WEDGE = 15         # sesudah ini, tembusnya bukan tembus wedge lagi
+
+
+def _garis(titik: list) -> tuple[float, float] | None:
+    """(kemiringan, intersep) lewat titik-titik (indeks, harga).
+
+    Kuadrat terkecil, bukan cuma dua titik pertama-terakhir: dua titik
+    membuat garisnya sangat bergantung pada pilihan pivot, dan pilihan
+    pivot adalah bagian yang paling subjektif dari analisis wedge.
+    """
+    n = len(titik)
+    if n < 2:
+        return None
+    sx = sum(p[0] for p in titik)
+    sy = sum(p[1] for p in titik)
+    sxx = sum(p[0] * p[0] for p in titik)
+    sxy = sum(p[0] * p[1] for p in titik)
+    pembagi = n * sxx - sx * sx
+    if pembagi == 0:
+        return None
+    m = (n * sxy - sx * sy) / pembagi
+    return m, (sy - m * sx) / n
+
+
+@dataclass(frozen=True)
+class Wedge:
+    kode: str
+    tanggal_mulai: str
+    tanggal_akhir: str          # tanggal PEMINDAIAN, bukan penanda pola
+    tanggal_pivot_akhir: str    # pivot terakhir yang membentuknya
+    garis_atas: float          # nilai pada bar terakhir
+    garis_bawah: float
+    kemiringan_atas: float     # % harga per bar
+    kemiringan_bawah: float
+    penyempitan_pct: float     # berapa persen lebarnya menyusut
+    n_puncak: int
+    n_lembah: int
+    harga_kini: float
+    tembus: bool               # menutup di atas garis atas?
+
+    @property
+    def setup_id(self) -> str:
+        """Penanda yang TETAP selama polanya sama.
+
+        Sempat memakai `tanggal_akhir` -- yaitu tanggal PEMINDAIAN, yang
+        berubah tiap hari. Akibatnya satu wedge yang bertahan dua minggu
+        terhitung sepuluh kejadian, dan pengukurannya melaporkan 3.808
+        wedge per tahun dari 178 saham: dua puluh satu per saham per
+        tahun, mustahil untuk pola chart.
+
+        Ini jebakan yang SAMA yang sudah ditutup di core/divergence.py
+        (10 setup sempat terhitung 80 kejadian). Ia terulang karena
+        penandanya ditulis ulang dari nol, bukan dipakai bersama.
+        """
+        return f"{self.kode}:wedge:{self.tanggal_mulai}:{self.tanggal_pivot_akhir}"
+
+
+def cari_falling_wedge(kode: str, tanggal: list, tinggi: list, rendah: list,
+                       tutup: list) -> Wedge | None:
+    """Falling wedge yang sedang berlaku pada bar terakhir, atau None."""
+    n = len(tutup)
+    if n < 80 or not (len(tanggal) == len(tinggi) == len(rendah) == n):
+        return None
+    akhir = n - 1
+    awal = max(0, akhir - JENDELA_WEDGE)
+
+    puncak = [p for p in pivot_high(tinggi)
+              if awal <= p <= akhir - JEDA_KANAN]
+    lembah = [p for p in pivot_low(rendah)
+              if awal <= p <= akhir - JEDA_KANAN]
+    if len(puncak) < MIN_PIVOT_WEDGE or len(lembah) < MIN_PIVOT_WEDGE:
+        return None
+
+    atas = _garis([(p, float(tinggi[p])) for p in puncak])
+    bawah = _garis([(p, float(rendah[p])) for p in lembah])
+    if not atas or not bawah:
+        return None
+    ma, ca = atas
+    mb, cb = bawah
+
+    # Keduanya menurun. Tanpa ini, pola naik atau mendatar ikut lolos.
+    if ma >= 0 or mb >= 0:
+        return None
+    # Menyempit: garis atas turun lebih curam. Sama curam = saluran turun
+    # sejajar, pola yang berbeda dan tidak sedang diuji di sini.
+    if ma >= mb:
+        return None
+
+    mulai = min(puncak[0], lembah[0])
+    lebar_awal = (ma * mulai + ca) - (mb * mulai + cb)
+    atas_kini = ma * akhir + ca
+    bawah_kini = mb * akhir + cb
+    lebar_kini = atas_kini - bawah_kini
+    # Sudah berpotongan = polanya selesai, bukan sedang berlangsung.
+    if lebar_awal <= 0 or lebar_kini <= 0:
+        return None
+    penyempitan = 1 - lebar_kini / lebar_awal
+    if penyempitan < MIN_PENYEMPITAN:
+        return None
+
+    # Umur dihitung dari pivot TERAKHIR yang membentuknya.
+    pivot_akhir = max(puncak[-1], lembah[-1])
+    if akhir - pivot_akhir > MAKS_UMUR_WEDGE:
+        return None
+
+    kini = float(tutup[akhir])
+    if atas_kini <= 0:
+        return None
+    return Wedge(
+        kode=(kode or "").upper(),
+        tanggal_mulai=str(tanggal[mulai]), tanggal_akhir=str(tanggal[akhir]),
+        tanggal_pivot_akhir=str(tanggal[pivot_akhir]),
+        garis_atas=round(atas_kini, 2), garis_bawah=round(bawah_kini, 2),
+        kemiringan_atas=round(ma / atas_kini * 100, 4),
+        kemiringan_bawah=round(mb / atas_kini * 100, 4),
+        penyempitan_pct=round(penyempitan * 100, 1),
+        n_puncak=len(puncak), n_lembah=len(lembah),
+        harga_kini=kini, tembus=kini > atas_kini,
+    )
