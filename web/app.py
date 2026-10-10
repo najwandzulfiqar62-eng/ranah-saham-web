@@ -2093,6 +2093,10 @@ async def _analyze_payload(kode: str):
         if hasil_hitung is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
         ai, smc, ringkasan = hasil_hitung
+        # Vonis KEMARIN dihitung di worker thread -- ia memanggil
+        # calculate_ai_score_from_df sekali lagi (7,7 ms), dan loop
+        # sinkron di event loop membekukan seluruh server.
+        _rk_analyze = await asyncio.to_thread(_ringkasan_kemarin, df)
         payload = {
             "kode": kode,
             "score": ai.get("score"), "rating": ai.get("rating"),
@@ -2116,6 +2120,15 @@ async def _analyze_payload(kode: str):
             "tp_rencana_pct": ringkasan.get("tp_rencana_pct"),
             "sl_rencana_pct": ringkasan.get("sl_rencana_pct"),
             "beli_aman": ringkasan.get("beli_aman"),
+            # Vonis Ringkasan Sinyal + vonis KEMARIN, supaya aturan dua
+            # hari bisa ditampilkan. Dihitung di sini (bukan di layar)
+            # karena layar tidak punya data kemarin, dan kalau dihitung
+            # ulang di JS ia akan melenceng dari versi Python -- persis
+            # risiko drift yang sudah dijaga uji test_api.
+            "ringkasan_sinyal": _ringkasan_sinyal_teknikal(ai),
+            "ringkasan_kemarin": _rk_analyze,
+            "dua_hari": nilai_dua_hari(
+                _ringkasan_sinyal_teknikal(ai)["overall"], _rk_analyze),
             # Konsensus analis diambil di luar _hitung() karena ia memanggil
             # jaringan (Yahoo .info, 1-2 detik) sedangkan _hitung() jalan di
             # worker thread untuk kerja CPU. Mencampurnya berarti thread itu
@@ -3745,6 +3758,9 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
                 "ai_rating": ai["rating"],
                 "ringkasan_teknikal": _ringkasan_sinyal_teknikal(ai),
                 # Vonis KEMARIN, supaya aturan dua hari bisa dinilai.
+                # DIPAKAI, bukan cuma dihitung: lihat nilai_dua_hari().
+                # Sempat terhitung tanpa ada satu pun pembacanya -- 1,4
+                # detik per pemindaian untuk field yang dibuang.
                 # Edwards & Magee: tembusan baru sah kalau bertahan dua
                 # hari berturut-turut. Diukur di sini, dan ia menolong
                 # justru pada vonis yang SEDANG, bukan yang ekstrem:
@@ -3755,7 +3771,9 @@ def _compute_confidence_items(data, shares, market_close) -> list[dict]:
                 # BELI yang bertahan sehari lagi setara nilainya dengan
                 # BELI KUAT. Yang ekstrem tidak bertambah baik dengan
                 # menunggu -- saat ia bertahan, geraknya sudah terjadi.
-                "ringkasan_kemarin": _ringkasan_kemarin(df),
+                "ringkasan_kemarin": (_rk := _ringkasan_kemarin(df)),
+                "dua_hari": nilai_dua_hari(
+                    _ringkasan_sinyal_teknikal(ai)["overall"], _rk),
                 "minervini_score": mv["skor"],
                 "minervini_criteria_met": mv["criteria_met"],
                 "confluence_bullish": cf["bullish"],
@@ -6535,6 +6553,47 @@ def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
             "terukur_berarti": kuat,
             "unggul_terukur_pct": (1.30 if overall == "BELI KUAT"
                                    else -0.66 if overall == "JUAL KUAT" else None)}
+
+
+# Keunggulan terukur tiap vonis, per 20 hari bursa, terhadap dasar +0,88%.
+# Diukur 10 Okt 2026 pada 25.097 EPISODE vonis (bukan per bar). Dipakai
+# layar supaya pengguna melihat angka yang sama dengan yang diukur, bukan
+# tafsirnya sendiri atas kata "CENDERUNG".
+UNGGUL_VONIS = {
+    "BELI KUAT": 1.30, "BELI": 0.13, "CENDERUNG BELI": 0.04, "NETRAL": 0.12,
+    "CENDERUNG JUAL": -0.10, "JUAL": -0.42, "JUAL KUAT": -0.66,
+}
+
+# BELI yang bertahan ke hari kedua setara nilainya dengan BELI KUAT.
+# Diukur: BELI awal +0,13% (n=1813) -> bertahan hari-2 +1,63% (n=294),
+# sementara BELI KUAT awal +1,30% -> hari-2 +1,41% (nyaris tak berubah).
+# Yang sudah ekstrem tidak bertambah baik dengan ditunggu; yang sedang
+# justru berubah artinya.
+UNGGUL_BERTAHAN = {"BELI": 1.63, "BELI KUAT": 1.41}
+
+
+def nilai_dua_hari(vonis: str | None, vonis_kemarin: str | None) -> dict:
+    """Aturan dua hari Edwards & Magee, dinilai dengan angka terukur.
+
+    Return selalu dict -- `bertahan` None berarti "tidak tahu" (vonis
+    kemarin gagal dihitung), BUKAN "tidak bertahan". Keduanya menuntut
+    tampilan yang berbeda: yang pertama diam, yang kedua boleh dibilang.
+    """
+    if not vonis:
+        return {"bertahan": None, "unggul_pct": None, "setara_kuat": False}
+    dasar = UNGGUL_VONIS.get(vonis)
+    if vonis_kemarin is None:
+        return {"bertahan": None, "unggul_pct": dasar, "setara_kuat": False}
+    bertahan = vonis_kemarin == vonis
+    unggul = UNGGUL_BERTAHAN.get(vonis, dasar) if bertahan else dasar
+    return {
+        "bertahan": bertahan,
+        "unggul_pct": unggul,
+        # BELI yang bertahan sudah setara BELI KUAT -- itu yang membuat
+        # aturan ini berguna, dan itu yang perlu dilihat pengguna.
+        "setara_kuat": bool(bertahan and vonis == "BELI"
+                            and unggul >= UNGGUL_VONIS["BELI KUAT"]),
+    }
 
 
 # Verdict "Ringkasan Sinyal Teknikal" yang dianggap cukup meyakinkan sbg

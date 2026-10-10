@@ -5483,6 +5483,50 @@ function _buildKonsensus(d){
   </section>`;
 }
 
+/* ---------- KEANDALAN VONIS, dari pengukuran ----------
+   Tangga tujuh tingkat itu menjanjikan tujuh derajat ketelitian yang
+   tidak dimilikinya. Diukur pada 25.097 EPISODE vonis (bukan per bar --
+   bar berurutan dengan vonis sama itu nyaris duplikat), terhadap dasar
+   +0,88% per 20 hari bursa:
+
+       BELI KUAT +1,30% | BELI +0,13% | CENDERUNG BELI +0,04%
+       NETRAL +0,12% | CENDERUNG JUAL -0,10% | JUAL -0,42% | JUAL KUAT -0,66%
+
+   Empat vonis di tengah semuanya dalam rentang +-0,13% -- tidak bisa
+   dibedakan dari tidak tahu apa-apa. Orang yang membaca "CENDERUNG BELI"
+   wajar mengira ia mendapat sesuatu, dan selama angkanya tidak
+   ditampilkan, tidak ada cara ia tahu bahwa ia tidak.
+
+   Vonisnya sendiri TIDAK diubah -- signal_history memakai semantik lama,
+   dan menggesernya membuat riwayat lama dan baru tidak sebanding tanpa
+   satu pun tanda. Yang ditambahkan cuma kejujuran tentang artinya. */
+const _UNGGUL_VONIS={'BELI KUAT':1.30,'BELI':0.13,'CENDERUNG BELI':0.04,
+  'NETRAL':0.12,'CENDERUNG JUAL':-0.10,'JUAL':-0.42,'JUAL KUAT':-0.66};
+
+function _keandalanVonis(d, overall){
+  const dh = d.dua_hari || {};
+  // Aturan dua hari lebih dulu kalau ia MENGUBAH artinya. Diukur: BELI
+  // yang bertahan ke hari kedua +1,63% -- setara BELI KUAT (+1,30%),
+  // padahal BELI hari pertama cuma +0,13%. Yang sudah ekstrem tidak
+  // bertambah baik dengan ditunggu.
+  if(dh.setara_kuat){
+    return `<div style="font-size:11.5px;margin-top:8px;color:var(--bull);line-height:1.5">
+      <b>Bertahan dua hari</b> \u2014 terukur +${fmt(dh.unggul_pct,2)}% di atas pasar,
+      setara BELI KUAT. BELI yang baru muncul sehari cuma +0,13%.</div>`;
+  }
+  const u = (dh.unggul_pct!=null) ? dh.unggul_pct : _UNGGUL_VONIS[overall];
+  if(u==null) return '';
+  const berarti = Math.abs(u) >= 0.5;
+  const warna = !berarti ? 'var(--muted)' : (u>0?'var(--bull)':'var(--bear)');
+  const inti = `terukur ${u>0?'+':''}${fmt(u,2)}% dari rata-rata pasar dalam 20 hari bursa`;
+  return `<div style="font-size:11.5px;margin-top:8px;color:${warna};line-height:1.5">
+    ${berarti
+      ? `<b>${inti}</b>${dh.bertahan===true?' \u00b7 bertahan dari kemarin':''}`
+      : `${inti} \u2014 <b>terlalu kecil untuk dijadikan dasar</b>.
+         Hanya BELI KUAT dan JUAL KUAT yang terukur berbeda nyata dari pasar.`}
+    </div>`;
+}
+
 function _buildTechSummary(d){
   let beli=0,jual=0,netral=0;
   const indikators=[];
@@ -5533,6 +5577,7 @@ function _buildTechSummary(d){
           <span style="color:var(--muted)">● ${netral} netral</span>
           <span style="color:var(--bear)">▼ ${jual} jual</span>
         </div>
+        ${_keandalanVonis(d, overall)}
       </div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px">
@@ -6397,7 +6442,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v61';
+const APP_VERSION='v62';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

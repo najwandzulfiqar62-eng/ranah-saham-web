@@ -158,3 +158,73 @@ def test_volume_sudah_jadi_salah_satu_suara():
     tinggi = _vonis(vol=1.5)
     rendah = _vonis(vol=0.3)
     assert tinggi["beli"] > rendah["beli"]
+
+
+# ---------------------------------------------------------------------------
+# Aturan dua hari yang BENAR-BENAR DIPAKAI
+# ---------------------------------------------------------------------------
+# `ringkasan_kemarin` sempat dihitung tanpa ada satu pun pembacanya --
+# 1,4 detik per pemindaian 178 emiten untuk field yang langsung dibuang.
+# Pekerjaan yang tak terpakai tidak gagal dan tidak terlihat; ia cuma
+# memperlambat. Uji di bawah ini memastikan ia punya pemakai.
+
+def test_beli_yang_bertahan_setara_BELI_KUAT():
+    """Temuan utama dari aturan dua hari Edwards & Magee, terukur:
+    BELI awal episode +0,13% (n=1813) -> bertahan hari-2 +1,63% (n=294).
+    Itu setara BELI KUAT (+1,30%), dari vonis yang sendirian nyaris tidak
+    berarti apa-apa."""
+    r = app_module.nilai_dua_hari("BELI", "BELI")
+    assert r["bertahan"] is True
+    assert r["unggul_pct"] == 1.63
+    assert r["setara_kuat"] is True
+
+
+def test_BELI_KUAT_tidak_bertambah_baik_dengan_ditunggu():
+    """Diukur: BELI KUAT awal +1,30% -> hari-2 +1,41%, nyaris tak
+    berubah. Yang sudah ekstrem tidak perlu dikonfirmasi -- saat ia
+    bertahan, geraknya sudah terjadi."""
+    r = app_module.nilai_dua_hari("BELI KUAT", "BELI KUAT")
+    assert r["setara_kuat"] is False
+    assert abs(r["unggul_pct"] - 1.41) < 0.01
+
+
+def test_vonis_yang_berganti_memakai_angka_hari_pertama():
+    r = app_module.nilai_dua_hari("BELI", "NETRAL")
+    assert r["bertahan"] is False and r["unggul_pct"] == 0.13
+
+
+def test_vonis_kemarin_tidak_diketahui_BUKAN_berarti_tidak_bertahan():
+    """None berarti "tidak tahu", dan keduanya menuntut tampilan yang
+    berbeda: yang pertama diam, yang kedua boleh dibilang."""
+    r = app_module.nilai_dua_hari("BELI", None)
+    assert r["bertahan"] is None
+    assert r["setara_kuat"] is False
+
+
+def test_vonis_tengah_tetap_tidak_berarti_walau_bertahan():
+    """Bertahan tidak menyulap vonis yang memang tidak informatif. Diukur,
+    CENDERUNG BELI cuma +0,04% -- dan dua hari berturut-turut tetap
+    +0,04%."""
+    r = app_module.nilai_dua_hari("CENDERUNG BELI", "CENDERUNG BELI")
+    assert r["setara_kuat"] is False
+    assert abs(r["unggul_pct"]) < 0.5
+
+
+def test_angka_keunggulan_tiap_vonis_sesuai_yang_diukur():
+    assert app_module.UNGGUL_VONIS["BELI KUAT"] == 1.30
+    assert app_module.UNGGUL_VONIS["JUAL KUAT"] == -0.66
+    # Empat vonis tengah, semuanya dalam rentang +-0,13%.
+    for v in ("BELI", "CENDERUNG BELI", "NETRAL", "CENDERUNG JUAL"):
+        assert abs(app_module.UNGGUL_VONIS[v]) <= 0.13, v
+
+
+def test_layar_memakai_angka_terukurnya():
+    """Mengukur lalu tidak menampilkannya sama saja dengan tidak
+    mengukur. Uji ini gagal kalau perendernya dicopot."""
+    import pathlib
+
+    js = (pathlib.Path(__file__).resolve().parent.parent
+          / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "_keandalanVonis" in js
+    assert "${_keandalanVonis(d, overall)}" in js
+    assert "terlalu kecil untuk dijadikan dasar" in js
