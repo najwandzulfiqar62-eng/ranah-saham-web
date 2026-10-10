@@ -577,6 +577,7 @@ async function analyze(kode){
         </div>
       </section>
       ${_buildTechSummary(d)}
+      ${_buildRencana(d)}
       ${_buildPolaChart(d)}
       ${_buildBeliAman(d)}
       ${_buildKonsensus(d)}
@@ -695,23 +696,122 @@ function loadSmcCharts(kode,containerId,btnId){
 /* ---------- INTERACTIVE CHART ---------- */
 let _chartTimer=null;
 
-/* ---------- MENGGAMBAR POLA DI ATAS CANDLE ---------- */
-// Seri garis yang dipasang harus DILEPAS sebelum menggambar ulang.
-// Kalau tidak, tiap ganti pola menumpuk seri baru di atas yang lama dan
-// chartnya makin penuh garis hantu -- kelas bug yang sudah pernah
-// membuat Audit Sinyal berat (instance chart bocor karena tak pernah
-// dibersihkan sebelum render ulang).
-let _polaSeri=[], _polaAktif=0, _polaData=[];
+/* ---------- MENGGAMBAR POLA & LEVEL DI ATAS CANDLE ---------- */
+// SATU penggambar untuk DUA chart (emiten dan IHSG). Sebelumnya hanya
+// chart emiten yang punya, dan menyalinnya untuk IHSG berarti dua
+// penggambar yang harus diperbaiki bersamaan tiap kali -- yang kedua
+// selalu yang terlupa.
+//
+// Keadaan tiap chart dipegang terpisah lewat `kunci`: kalau dipakai
+// bersama, membuka IHSG akan menghapus garis chart emiten yang masih
+// hidup di tab sebelah.
 const _POLA_GARIS_WARNA={naik:'#2FB57E',turun:'#E0566B',penerusan:'#C79A2A'};
-function _hapusPolaSeri(){
-  for(const sr of _polaSeri){ try{chartObj.removeSeries(sr)}catch{} }
-  _polaSeri=[];
+const _ovl={};   // kunci -> {chart, cs, seri[], garisHarga[], data[], aktif, chips}
+
+function _ovlState(kunci){
+  if(!_ovl[kunci]) _ovl[kunci]={chart:null,cs:null,seri:[],garisHarga:[],data:[],aktif:0,chips:null,sr:[]};
+  return _ovl[kunci];
 }
-function _gambarPola(idx){
-  if(!chartObj||!_polaData.length)return;
-  _hapusPolaSeri();
-  _polaAktif=Math.max(0,Math.min(idx,_polaData.length-1));
-  const p=_polaData[_polaAktif];
+// Seri & price-line WAJIB dilepas sebelum menggambar ulang. Tanpa ini,
+// tiap ganti pola menumpuk garis hantu dan chartnya makin penuh --
+// kelas bug yang sudah pernah membuat Audit Sinyal berat (instance
+// chart bocor karena tak pernah dibersihkan sebelum render ulang).
+function _ovlBersih(st){
+  for(const sr of st.seri){ try{st.chart.removeSeries(sr)}catch{} }
+  st.seri=[];
+}
+function _ovlBersihHarga(st){
+  for(const pl of st.garisHarga){ try{st.cs.removePriceLine(pl)}catch{} }
+  st.garisHarga=[];
+}
+
+/* ---- Support & resistance, DENGAN ANGKANYA ---- */
+// Dipasang sbg price-line pada seri candle: lightweight-charts lalu
+// menuliskan angkanya sendiri di sumbu harga, sehingga angka di sumbu
+// dan garis di chart mustahil berbeda. Menuliskannya sendiri sbg label
+// terpisah akan membuat keduanya bisa menyimpang saat chart di-zoom.
+function _gambarSR(kunci, sr){
+  const st=_ovlState(kunci);
+  if(!st.cs)return;
+  _ovlBersihHarga(st);
+  st.sr=sr||[];
+  for(const L of st.sr){
+    const res=L.tipe==='resistance';
+    // Judulnya memakai NAMA level, bukan cuma "R"/"S". "Dasar Mayor"
+    // dan "Support Terdekat" menjawab pertanyaan yang berbeda, dan
+    // menamai keduanya sama membuang perbedaan yang justru dicari orang.
+    // Jumlah sentuhan ikut ditulis supaya kekuatan buktinya terlihat:
+    // level satu-sentuhan TIDAK boleh terbaca sekuat yang delapan kali.
+    try{
+      st.garisHarga.push(st.cs.createPriceLine({
+        price:L.harga,
+        color:res?'rgba(224,86,107,.75)':'rgba(47,181,126,.75)',
+        // Teruji >=3 kali digambar tegas; sisanya putus-putus. Bedanya
+        // terlihat, dan itu memang informasi.
+        lineWidth:L.kuat?2:1,
+        lineStyle:L.kuat?0:2,
+        axisLabelVisible:true,
+        title:`${L.nama||(res?'Resistance':'Support')} ${L.sentuh}×`,
+      }));
+    }catch(e){ console.warn('SR gagal digambar',L,e) }
+  }
+}
+
+/* ---- Area beli & jual, dengan panah dan angkanya ---- */
+// Digambar sbg price-line (angkanya muncul sendiri di sumbu harga)
+// DITAMBAH panah di bar terakhir. Dua-duanya, bukan salah satu: garis
+// menjawab "di harga berapa", panah menjawab "ke arah mana" -- dan
+// panah tanpa garis memaksa orang menaksir ketinggiannya dari posisi
+// panah terhadap gridline terdekat.
+function _rpT(v){ return (typeof _rpRingkas==='function')?_rpRingkas(v):('Rp'+fmt(v)) }
+function _gambarRencana(kunci, rencana){
+  const st=_ovlState(kunci);
+  if(!st.cs||!rencana)return;
+  const pasang=(v,beli)=>{
+    if(!v||!v.harga)return;
+    try{
+      st.garisHarga.push(st.cs.createPriceLine({
+        price:v.harga, color:beli?'#2FB57E':'#E0566B',
+        lineWidth:2, lineStyle:0, axisLabelVisible:true,
+        // Level yang BELUM teruji ulang ditandai di judulnya. Menyebut
+        // "AREA BELI" tanpa catatan akan menjanjikan dasar yang
+        // sebenarnya baru disentuh sekali.
+        title:`${beli?'AREA BELI':'AREA JUAL'}${v.teruji===false?' (belum teruji)':''}`,
+      }));
+    }catch(e){ console.warn('rencana: garis gagal',e) }
+  };
+  pasang(rencana.beli,true);
+  pasang(rencana.jual,false);
+  if(rencana.invalidasi){
+    try{
+      st.garisHarga.push(st.cs.createPriceLine({
+        price:rencana.invalidasi, color:'#C79A2A',
+        lineWidth:1, lineStyle:3, axisLabelVisible:true, title:'BATAL',
+      }));
+    }catch(e){}
+  }
+  // Panah ditempel di bar TERAKHIR: areanya belum tentu sudah disentuh,
+  // jadi menempelkannya di masa lalu akan menyiratkan kejadian yang
+  // tidak pernah ada.
+  const tanda=[];
+  if(st.tAkhir){
+    if(rencana.beli&&rencana.beli.harga)
+      tanda.push({time:st.tAkhir,position:'belowBar',color:'#2FB57E',
+        shape:'arrowUp',text:`BELI ${_rpT(rencana.beli.harga)}`});
+    if(rencana.jual&&rencana.jual.harga)
+      tanda.push({time:st.tAkhir,position:'aboveBar',color:'#E0566B',
+        shape:'arrowDown',text:`JUAL ${_rpT(rencana.jual.harga)}`});
+  }
+  try{ st.cs.setMarkers(tanda) }catch(e){ console.warn('rencana: panah gagal',e) }
+}
+
+/* ---- Pola ---- */
+function _gambarPola(kunci, idx){
+  const st=_ovlState(kunci);
+  if(!st.chart||!st.data.length)return;
+  _ovlBersih(st);
+  st.aktif=Math.max(0,Math.min(idx,st.data.length-1));
+  const p=st.data[st.aktif];
   const w=_POLA_GARIS_WARNA[p.arah]||'#8593AC';
   for(const g of (p.garis||[])){
     if(!g.titik||g.titik.length<2)continue;
@@ -725,50 +825,95 @@ function _gambarPola(idx){
     }
     if(data.length<2)continue;
     try{
-      const sr=chartObj.addLineSeries({color:w,lineWidth:2,lineStyle:2,
-        priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
-      sr.setData(data); _polaSeri.push(sr);
+      const sr=st.chart.addLineSeries({color:w,lineWidth:2,lineStyle:2,
+        priceLineVisible:false,
+        // ANGKA garis polanya ikut muncul di sumbu harga. Itu yang
+        // membuat "neckline di Rp6.200" bisa dibaca, bukan ditaksir
+        // dari posisi garis terhadap gridline terdekat.
+        lastValueVisible:true, title:g.nama,
+        crosshairMarkerVisible:false});
+      sr.setData(data); st.seri.push(sr);
     }catch(e){ console.warn('pola: garis gagal digambar',g.nama,e) }
   }
-  // Titik berlabel ditempel sbg penanda di seri garis tak terlihat --
-  // supaya labelnya ikut bergerak saat chart digeser/zoom.
   const berlabel=(p.titik||[]).filter(q=>q.label);
   if(berlabel.length){
     try{
-      const sr=chartObj.addLineSeries({color:'rgba(0,0,0,0)',lineWidth:1,
+      const sr=st.chart.addLineSeries({color:'rgba(0,0,0,0)',lineWidth:1,
         priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
-      const seen=new Set(); const data=[];
+      const seen=new Set(); const data=[], lab=[];
       for(const q of berlabel.slice().sort((a,b)=>a.t<b.t?-1:1)){
         if(seen.has(q.t))continue; seen.add(q.t);
-        data.push({time:q.t,value:q.p});
+        data.push({time:q.t,value:q.p}); lab.push(q.label);
       }
       sr.setData(data);
       sr.setMarkers(data.map((q,i)=>({
         time:q.time, position:p.arah==='turun'?'aboveBar':'belowBar',
-        color:w, shape:'circle', text:berlabel[i]?berlabel[i].label:''})));
-      _polaSeri.push(sr);
+        color:w, shape:'circle', text:lab[i]||''})));
+      st.seri.push(sr);
     }catch(e){ console.warn('pola: penanda gagal',e) }
   }
-  _renderPolaChips();
+  _renderPolaChips(kunci);
 }
-function _renderPolaChips(){
-  const box=$('#polaChips'); if(!box)return;
-  if(!_polaData.length){ box.innerHTML=''; return }
-  box.innerHTML=`<span class="muted" style="font-size:11px;align-self:center;margin-right:2px">Pola:</span>`
-    + _polaData.map((p,i)=>{
-        const w=_POLA_GARIS_WARNA[p.arah]||'#8593AC';
-        const on=i===_polaAktif;
-        return `<button class="chip ${on?'active':''}" data-pola="${i}"
-          style="${on?`border-color:${w};color:${w}`:''}"
-          title="${p.fase==='TEMBUS'?'Sudah menembus level kuncinya':'Bentuknya lengkap, belum menembus'}">
-          ${p.nama} <span class="muted">${p.fase==='TEMBUS'?'tembus':'terbentuk'}</span></button>`;
-      }).join('')
-    + `<button class="chip ${_polaAktif<0?'active':''}" data-pola="-1">Sembunyikan</button>`;
+
+function _renderPolaChips(kunci){
+  const st=_ovlState(kunci);
+  const box=st.chips?$(st.chips):null; if(!box)return;
+  const bagian=[];
+  if(st.data.length){
+    bagian.push(`<span class="muted" style="font-size:11px;align-self:center;margin-right:2px">Pola:</span>`);
+    bagian.push(st.data.map((p,i)=>{
+      const w=_POLA_GARIS_WARNA[p.arah]||'#8593AC';
+      const on=i===st.aktif;
+      return `<button class="chip ${on?'active':''}" data-ovl="${kunci}" data-pola="${i}"
+        style="${on?`border-color:${w};color:${w}`:''}"
+        title="${p.fase==='TEMBUS'?'Sudah menembus level kuncinya':'Bentuknya lengkap, belum menembus'}">
+        ${p.nama} <span class="muted">${p.fase==='TEMBUS'?'tembus':'terbentuk'}</span></button>`;
+    }).join(''));
+    bagian.push(`<button class="chip" data-ovl="${kunci}" data-pola="-1">Sembunyikan pola</button>`);
+  }
+  // Ringkasan S/R dalam ANGKA, supaya terbaca walau garisnya tertutup
+  // candle. Level terdekat saja -- yang jauh ada di chart.
+  const res=st.sr.filter(x=>x.tipe==='resistance')[0];
+  const sup=st.sr.filter(x=>x.tipe==='support').slice(-1)[0];
+  const _rp=v=>(typeof _rpRingkas==='function'?_rpRingkas(v):'Rp'+fmt(v));
+  if(res||sup||st.sr.length){
+    const bagianSR=[];
+    // Tidak adanya support BUKAN kekosongan data, itu temuan: harga ada
+    // di bawah SEMUA level yang pernah teruji. Membiarkannya kosong
+    // membuat pembaca menyangka panelnya belum selesai memuat.
+    bagianSR.push(sup
+      ? `<span style="color:var(--bull)" title="${sup.sentuh}× teruji, terakhir ${sup.terakhir}">S ${_rp(sup.harga)}</span>`
+      : `<span class="muted" title="Harga berada di bawah semua level yang pernah teruji dalam setahun terakhir — tidak ada lantai yang terbukti di bawah sini.">tanpa support teruji</span>`);
+    bagianSR.push(res
+      ? `<span style="color:var(--bear)" title="${res.sentuh}× teruji, terakhir ${res.terakhir}">R ${_rp(res.harga)}</span>`
+      : `<span class="muted" title="Harga berada di atas semua level yang pernah teruji — tidak ada atap yang terbukti di atas sini.">tanpa resistance teruji</span>`);
+    bagian.push(`<span style="font-size:11px;align-self:center;margin-left:4px">`
+      + bagianSR.join(' <span class="muted">·</span> ') + `</span>`);
+  }
+  box.innerHTML=bagian.join('');
   box.querySelectorAll('[data-pola]').forEach(b=>b.addEventListener('click',()=>{
-    const i=Number(b.dataset.pola);
-    if(i<0){ _hapusPolaSeri(); _polaAktif=-1; _renderPolaChips(); }
-    else _gambarPola(i);
+    const i=Number(b.dataset.pola), k=b.dataset.ovl, s2=_ovlState(k);
+    if(i<0){ _ovlBersih(s2); s2.aktif=-1; _renderPolaChips(k); }
+    else _gambarPola(k,i);
   }));
+}
+
+// Dipanggil sesudah seri utama siap, SEBELUM fitContent -- supaya sumbu
+// waktunya sudah memuat seluruh rentang polanya saat chart dirapikan.
+function _pasangOverlay(kunci, chart, cs, o, chipsSel){
+  const st=_ovlState(kunci);
+  st.chart=chart; st.cs=cs; st.chips=chipsSel;
+  st.seri=[]; st.garisHarga=[]; st.aktif=0;
+  st.tAkhir=(o.candles&&o.candles.length)?o.candles[o.candles.length-1].time:null;
+  st.rencana=o.rencana||null;
+  st.data=(o.pola||[]).filter(p=>(p.garis||[]).length);
+  // URUTAN PENTING: _gambarSR membersihkan seluruh price-line lebih
+  // dulu, jadi rencana WAJIB dipasang sesudahnya -- kalau dibalik,
+  // garis BELI/JUAL ikut terhapus dan hilangnya tidak menimbulkan
+  // error apa pun.
+  _gambarSR(kunci, o.sr||[]);
+  _gambarRencana(kunci, st.rencana);
+  if(st.data.length) _gambarPola(kunci,0); else _renderPolaChips(kunci);
 }
 
 async function drawChart(kode){
@@ -787,12 +932,11 @@ async function drawChart(kode){
   const vol=chartObj.addHistogramSeries({priceScaleId:'',priceFormat:{type:'volume'}});
   vol.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});
   vol.setData(o.volume);
-  chartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma20);
-  chartObj.addLineSeries({color:'#2FB57E',lineWidth:1.5,priceLineVisible:false,lastValueVisible:false}).setData(o.ma50);
-  // Pola digambar SEBELUM fitContent supaya sumbu waktunya sudah memuat
-  // seluruh rentang polanya saat chart dirapikan.
-  _polaSeri=[]; _polaData=(o.pola||[]).filter(p=>(p.garis||[]).length);
-  if(_polaData.length) _gambarPola(0); else _renderPolaChips();
+  // Nilai MA ikut muncul di sumbu harga. Tanpa ini, "harga di bawah
+  // MA20" harus ditaksir dari posisi garis -- padahal angkanya ada.
+  chartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,priceLineVisible:false,lastValueVisible:true,title:'MA20'}).setData(o.ma20);
+  chartObj.addLineSeries({color:'#2FB57E',lineWidth:1.5,priceLineVisible:false,lastValueVisible:true,title:'MA50'}).setData(o.ma50);
+  _pasangOverlay('utama', chartObj, cs, o, '#polaChips');
   chartObj.timeScale().fitContent();
   new ResizeObserver(()=>{if(chartObj)chartObj.applyOptions({width:cont.clientWidth})}).observe(cont);
   renderPhaseRibbon(o.phases);
@@ -875,7 +1019,9 @@ async function showIhsg(){
     </div>
     ${bt&&bt.edge!=null&&bt.edge<=1?infoNote('Edge tipis/negatif: sinyal ini tidak lebih baik dari sekadar mengikuti kecenderungan pasar. Statistik historis in-sample, bukan jaminan.','Soal edge'):''}
   </section>
-  <section class="panel"><p class="eyebrow">Grafik IHSG</p><div id="ihsgChart"></div><div id="ihsgRibbon"></div></section>
+  <section class="panel"><p class="eyebrow">Grafik IHSG</p>
+    <div id="ihsgPolaChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+    <div id="ihsgChart"></div><div id="ihsgRibbon"></div></section>
   <div id="ihsgBreadth"></div>
   <section class="panel panel-quiet"><p class="eyebrow">Insight Pasar (Naratif)</p>
     <button class="btn ghost" id="ihsgInsightBtn" style="padding:9px 16px">${icon('sparkles',{size:13})} Buat insight pasar</button><div id="ihsgInsightBox"></div></section>
@@ -956,8 +1102,13 @@ async function drawIhsgChart(){
     layout:{background:{color:'transparent'},textColor:'#8593AC',fontFamily:'JetBrains Mono'},
     grid:{vertLines:{color:'rgba(199,154,42,.06)'},horzLines:{color:'rgba(199,154,42,.06)'}},
     rightPriceScale:{borderColor:'rgba(199,154,42,.16)'},timeScale:{borderColor:'rgba(199,154,42,.16)'}});
-  ihsgChartObj.addCandlestickSeries({upColor:'#2FB57E',downColor:'#E0566B',wickUpColor:'#2FB57E',wickDownColor:'#E0566B',borderVisible:false}).setData(o.candles);
-  ihsgChartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,lastValueVisible:false,priceLineVisible:false}).setData(o.ma20);
+  const icsSeri=ihsgChartObj.addCandlestickSeries({upColor:'#2FB57E',downColor:'#E0566B',wickUpColor:'#2FB57E',wickDownColor:'#E0566B',borderVisible:false});
+  icsSeri.setData(o.candles);
+  ihsgChartObj.addLineSeries({color:'#C79A2A',lineWidth:1.5,lastValueVisible:true,priceLineVisible:false,title:'MA20'}).setData(o.ma20);
+  // IHSG mendapat perlakuan yang SAMA dengan emiten -- pola chart dan
+  // level S/R berangka. Indeks bukan jenis data yang berbeda; aturan
+  // support/resistance berlaku padanya persis sama.
+  _pasangOverlay('ihsg', ihsgChartObj, icsSeri, o, '#ihsgPolaChips');
   ihsgChartObj.timeScale().fitContent();
   new ResizeObserver(()=>{if(ihsgChartObj)ihsgChartObj.applyOptions({width:cont.clientWidth})}).observe(cont);
   renderPhaseRibbon(o.phases,'ihsgRibbon');
@@ -5648,6 +5799,54 @@ function _buildBeliAman(d){
    berbeda akan berbeda -- Stockbit menyebut MTEL avg 644 dari 31
    rekomendasi, Yahoo 631 dari 15 -- dan tanpa jumlahnya, perbedaan itu
    jadi misteri yang membuat orang mengira salah satunya salah. */
+/* ---------- RENCANA DARI CHART ---------- */
+// Menjawab empat pertanyaan yang ditanyakan orang saat melihat chart:
+// beli di mana, jual di mana, kapan rencananya batal, dan sampai mana
+// kalau benar.
+//
+// TIDAK ADA ANGKA KEYAKINAN KARANGAN. Aplikasi pembanding menampilkan
+// "75% confidence" tanpa menyebut asalnya; di sini yang ditampilkan
+// adalah hasil pengukuran nyata pola itu, dan kalau polanya belum
+// diukur, tidak ada angka sama sekali. Angka keyakinan karangan adalah
+// kebohongan yang paling sulit dibantah pembaca -- ia terlihat persis
+// seperti hasil perhitungan.
+const _BIAS_WARNA={bullish:'var(--bull)',bearish:'var(--bear)',netral:'var(--gold)'};
+const _BIAS_LABEL={bullish:'CONDONG NAIK',bearish:'CONDONG TURUN',netral:'BELUM JELAS'};
+function _buildRencana(d){
+  const r=d.rencana_chart;
+  if(!r||!r.bias) return '';
+  const w=_BIAS_WARNA[r.bias]||'var(--muted)';
+  const baris=(label,isi,warna,catatan)=>`
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">
+      <div style="font-size:11.5px;color:var(--muted)">${label}${catatan?`<div style="font-size:10.5px;line-height:1.5;margin-top:2px">${catatan}</div>`:''}</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;white-space:nowrap;${warna?`color:${warna}`:''}">${isi}</div>
+    </div>`;
+  const rp=v=>v==null?'\u2013':(typeof _rpRingkas==='function'?_rpRingkas(v):'Rp'+fmt(v));
+  const jar=v=>v&&v.jarak_pct!=null?` <span class="muted" style="font-weight:400">(${v.jarak_pct>=0?'+':''}${fmt(v.jarak_pct,1)}%)</span>`:'';
+  return `<section class="panel" style="margin-top:10px">
+    <p class="eyebrow">Rencana dari Chart</p>
+    <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:4px 0 10px">
+      <span style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:800;color:${w}">${_BIAS_LABEL[r.bias]}</span>
+      ${r.pola_utama?`<span class="chip" style="font-size:10.5px">${r.pola_utama}</span>`:''}
+    </div>
+    ${baris('Area beli',
+        r.beli?rp(r.beli.harga)+jar(r.beli):'<span class="muted" style="font-weight:400;font-size:11.5px">tidak ada level teruji di bawah</span>',
+        r.beli?'var(--bull)':'', r.beli?r.beli.alasan:'Harga berada di bawah semua level yang pernah bertahan \u2014 tidak ada lantai yang terbukti.')}
+    ${baris('Area jual',
+        r.jual?rp(r.jual.harga)+jar(r.jual):'<span class="muted" style="font-weight:400;font-size:11.5px">tidak ada level teruji di atas</span>',
+        r.jual?'var(--bear)':'', r.jual?r.jual.alasan:'')}
+    ${r.konfirmasi?baris('Konfirmasi',rp(r.konfirmasi),'',r.alasan_konfirmasi):''}
+    ${baris('Rencana batal di',rp(r.invalidasi),'var(--gold)',r.alasan_invalidasi)}
+    ${(r.target||[]).length?baris('Target berikutnya',(r.target||[]).map(rp).join(' \u00b7 '),'','Level teruji berikutnya searah bias, bukan ramalan harga'):''}
+    ${r.narasi?`<p class="insight" style="font-size:12.5px;line-height:1.7;margin-top:11px">${r.narasi}</p>`:''}
+    <p class="muted" style="font-size:10.5px;margin-top:9px;line-height:1.6">
+      Semua angka di atas berasal dari level yang bisa kamu hitung sendiri di chart
+      (titik balik berulang), dari level kunci polanya, dan dari ATR. <b>Tidak ada
+      angka keyakinan</b> di panel ini \u2014 yang ada cuma hasil pengukuran, dan pola
+      yang belum diukur ditulis apa adanya. Edukasi, bukan nasihat keuangan.</p>
+  </section>`;
+}
+
 /* ---------- POLA CHART + FASENYA ---------- */
 // Menjawab "emiten ini sedang dalam pola apa", bukan "beli atau jual".
 // Bedanya penting: pola chart di aplikasi ini DIUKUR satu per satu, dan
@@ -6969,7 +7168,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v69';
+const APP_VERSION='v71';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

@@ -2062,6 +2062,64 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     }
 
 
+def _level_sr_payload(df) -> dict:
+    """Support & resistance yang berulang, untuk digambar di chart.
+
+    BUKAN pivot Fibonacci (calculate_support_resistance_deep). Level itu
+    tetap dipakai di panel rencana harian, tapi untuk digambar di chart
+    berbulan-bulan ia keliru: diukur pada BBCA, R1 dan S1 cuma berjarak
+    1,3% -- sembilan garis bertumpuk yang menutupi candle alih-alih
+    menjelaskannya. Lihat core/level_sr.py.
+
+    DIPANGGIL DARI THREAD atau dari jalur yang sudah memegang df; ia
+    tidak mengunduh apa pun.
+    """
+    try:
+        from core.level_sr import cari_level, ringkas
+    except Exception:
+        return {"level": [], "ringkas": {}}
+    try:
+        d = df.tail(320)
+        tgl = [str(x)[:10] for x in d.index]
+        lv = cari_level(tgl, d["High"].tolist(), d["Low"].tolist(),
+                        d["Close"].tolist())
+        kini = float(d["Close"].iloc[-1])
+        return {"level": [x.dict() for x in lv], "ringkas": ringkas(lv, kini)}
+    except Exception:
+        return {"level": [], "ringkas": {}}
+
+
+def _rencana_chart_payload(df, pola: list, sr: dict) -> dict:
+    """Beli di mana, jual di mana, batal kapan -- dari level & pola yang
+    SUDAH dihitung, tanpa unduhan tambahan.
+
+    Tidak memuat angka keyakinan karangan. Yang ditampilkan adalah
+    `pct_positif`/`unggul_pct` pola itu dari pengukuran nyata, dan kalau
+    polanya belum diukur, tidak ada angka sama sekali -- lihat catatan
+    di core/rencana_chart.py.
+    """
+    try:
+        from core.rencana_chart import susun
+    except Exception:
+        return {}
+    try:
+        c = df["Close"]
+        harga = float(c.iloc[-1])
+        ma20 = float(c.rolling(20).mean().iloc[-1]) if len(c) >= 20 else None
+        ma50 = float(c.rolling(50).mean().iloc[-1]) if len(c) >= 50 else None
+        atr_pct = None
+        try:
+            from core.level_sr import _atr_pct
+            atr_pct = _atr_pct(df["High"].tolist(), df["Low"].tolist(),
+                               c.tolist())
+        except Exception:
+            pass
+        return susun(harga, sr.get("level") or [], pola or [],
+                     ma20=ma20, ma50=ma50, atr_pct=atr_pct)
+    except Exception:
+        return {}
+
+
 def _pola_chart_payload(kode: str, df) -> list:
     """Pola chart yang sedang berlaku + angka terukurnya.
 
@@ -2117,7 +2175,7 @@ async def _analyze_payload(kode: str):
     # medan itu sampai TTL-nya habis -- dan gejalanya bukan error,
     # melainkan panel yang diam-diam kosong untuk sebagian pengunjung.
     # Kelas bug ini sudah tercatat di memori proyek.
-    cache_key = f"analyze:v2:{kode}"
+    cache_key = f"analyze:v4:{kode}"
     cached = _cache_get(cache_key)
 
     if cached is None:
@@ -2138,13 +2196,15 @@ async def _analyze_payload(kode: str):
                 return None
             # RINGKASAN CEPAT (badge di halaman Analisis, dipakai ulang
             # /api/insight -- lihat _compute_ringkasan_cepat)
+            pola_l = _pola_chart_payload(kode, df)
+            sr_l = _level_sr_payload(df)
             return (ai_l, build_smc_summary(df), _compute_ringkasan_cepat(df, ai_l),
-                    _pola_chart_payload(kode, df))
+                    pola_l, sr_l, _rencana_chart_payload(df, pola_l, sr_l))
 
         hasil_hitung = await asyncio.to_thread(_hitung)
         if hasil_hitung is None:
             raise HTTPException(422, f"Gagal menganalisis {kode}.")
-        ai, smc, ringkasan, pola_chart = hasil_hitung
+        ai, smc, ringkasan, pola_chart, sr_level, rencana_chart = hasil_hitung
         # Vonis KEMARIN dihitung di worker thread -- ia memanggil
         # calculate_ai_score_from_df sekali lagi (7,7 ms), dan loop
         # sinkron di event loop membekukan seluruh server.
@@ -2187,6 +2247,9 @@ async def _analyze_payload(kode: str):
             # murni di event loop menahan SELURUH server, bukan cuma
             # halaman ini.
             "pola_chart": pola_chart,
+            "sr_level": sr_level.get("level") or [],
+            "sr_ringkas": sr_level.get("ringkas") or {},
+            "rencana_chart": rencana_chart,
             # Konsensus analis diambil di luar _hitung() karena ia memanggil
             # jaringan (Yahoo .info, 1-2 detik) sedangkan _hitung() jalan di
             # worker thread untuk kerja CPU. Mencampurnya berarti thread itu
@@ -2242,6 +2305,10 @@ async def ohlc(kode: str, days: int = 140):
     # pernah ketemu, dan diamnya terbaca seperti "saham ini tidak punya
     # pola" padahal cuma jendelanya kependekan.
     pola = _pola_chart_payload(label, df)
+    # S/R dihitung dari data PENUH juga -- level yang teruji berkali-kali
+    # sering lahir di luar jendela yang kebetulan ditampilkan.
+    sr = _level_sr_payload(df)
+    rencana = _rencana_chart_payload(df, pola, sr)
 
     # Jendela candle DIPERPANJANG kalau polanya mulai lebih awal. Tanpa
     # ini garis polanya terpotong di tepi kiri chart -- dan garis yang
@@ -2320,6 +2387,8 @@ async def ohlc(kode: str, days: int = 140):
 
     return {"kode": label, "candles": candles, "volume": vol, "ma20": m20, "ma50": m50,
             "phases": detect_phases(df), "pola": pola,
+            "sr": sr.get("level") or [], "sr_ringkas": sr.get("ringkas") or {},
+            "rencana": rencana,
             "last_price": last_price, "realtime": realtime, "as_of": now_jkt.strftime("%H:%M")}
 
 

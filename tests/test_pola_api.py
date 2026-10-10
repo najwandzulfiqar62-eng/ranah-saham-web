@@ -20,8 +20,14 @@ def test_kunci_cache_analyze_berversi():
     medan itu sampai TTL-nya habis -- dan panelnya kosong hanya untuk
     sebagian pengunjung, yang jauh lebih sulit dilacak daripada kosong
     untuk semua orang."""
+    import re
     src = inspect.getsource(app_module._analyze_payload)
-    assert 'f"analyze:v2:{kode}"' in src
+    # Yang dikunci adalah ADANYA versi, bukan angkanya. Mengunci "v2"
+    # berarti tes ini gagal setiap kali payloadnya bertambah medan --
+    # yaitu gagal tepat ketika versinya dinaikkan dengan BENAR, dan tes
+    # yang menghukum perbuatan benar akan dilonggarkan orang.
+    assert re.search(r'f"analyze:v\d+:\{kode\}"', src), (
+        "kunci cache analyze harus berversi (analyze:vN:{kode})")
     assert 'f"analyze:{kode}"' not in src
 
 
