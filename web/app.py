@@ -6988,6 +6988,54 @@ _FOREIGN_FLOW_TTL = int(os.getenv("FOREIGN_FLOW_TTL", "900"))
 # daftar yang terukur tidak membedakan apa pun dari memilih acak, dan
 # daftar semacam itu lebih berbahaya daripada daftar kosong: ia terlihat
 # seperti pekerjaan yang sudah dilakukan.
+# Satu unduhan universe, DIPAKAI BERSAMA dua pemindai.
+#
+# KENAPA ADA. _build_divergence dan _build_screener_vonis sama-sama
+# memanggil async_download_many(load_tickers(), period="1y",
+# interval="1d") -- parameter identik, data identik -- dan
+# async_download_many tidak punya cache sama sekali. Tanpa pembagian ini
+# pemanas menembak Yahoo DUA KALI untuk 793 emiten tiap putaran: beban
+# dua kali lipat, waktu pemanasan dua kali lipat, nol manfaat. Itu
+# persis kelas masalah yang membuat aturan "permintaan tidak boleh
+# memicu unduhan" ada -- dan kali ini sumbernya pemanas sendiri.
+#
+# Aman dibagi: fix_yf_columns memang mengubah `.columns` di tempat, tapi
+# idempoten (panggilan kedua langsung keluar lewat penjaga MultiIndex),
+# dan tiap pemindai melanjutkan dengan .apply(...).dropna() yang
+# menghasilkan objek BARU -- tidak ada yang menulisi data pemindai lain.
+_UNDUH_UNIVERSE: tuple[float, dict] | None = None
+_UNDUH_UNIVERSE_TTL = int(os.getenv("UNDUH_UNIVERSE_TTL", "900"))
+_unduh_universe_lock = asyncio.Lock()
+
+
+async def _universe_1y() -> dict:
+    """Data harian 1 tahun untuk SELURUH universe, dibagi antar pemindai.
+
+    TTL-nya pendek dan sengaja: ini bukan penyimpanan, cuma pencegah
+    unduhan kembar dalam satu putaran pemanas. Kunci dipakai supaya dua
+    pemindai yang kebetulan berjalan bersamaan tidak sama-sama mengunduh
+    -- pemanas memanggilnya berurutan, tapi mengandalkan urutan itu
+    berarti fitur ini pecah diam-diam begitu ada yang menambah pemanggil
+    ketiga.
+    """
+    global _UNDUH_UNIVERSE
+    from core.async_yf import async_download_many
+    from core.stock_data import load_tickers
+
+    async with _unduh_universe_lock:
+        segar = (_UNDUH_UNIVERSE
+                 and (time.monotonic() - _UNDUH_UNIVERSE[0]) < _UNDUH_UNIVERSE_TTL)
+        if segar:
+            return _UNDUH_UNIVERSE[1]
+        data = await async_download_many(load_tickers(), period="1y",
+                                         interval="1d")
+        # Hasil KOSONG tidak di-memo -- Yahoo sedang menolak bukan alasan
+        # memaksa pemindai berikutnya ikut kosong selama 15 menit.
+        if data:
+            _UNDUH_UNIVERSE = (time.monotonic(), data)
+        return data
+
+
 _SCREENER_VONIS_KEY = "screener_vonis:v1"
 # Bar harian: vonisnya baru berubah saat bar baru terbentuk. Setengah jam
 # sudah jauh lebih sering daripada yang diperlukan.
@@ -7054,11 +7102,10 @@ def _pindai_vonis(tickers: list, data: dict) -> list:
 async def _build_screener_vonis() -> dict:
     """Bagian BERAT -- dipisah supaya bisa dipanggil pemanas cache DAN
     dibungkus single-flight."""
-    from core.async_yf import async_download_many
     from core.stock_data import load_tickers
 
     tickers = load_tickers()
-    data = await async_download_many(tickers, period="1y", interval="1d")
+    data = await _universe_1y()
     items = await asyncio.to_thread(_pindai_vonis, tickers, data)
     payload = _py({
         "items": items,
@@ -7179,7 +7226,6 @@ def _pindai_divergence(tickers: list, data: dict) -> list:
 async def _build_divergence() -> dict:
     """Bagian BERAT -- dipisah supaya bisa dipanggil pemanas cache DAN
     dibungkus single-flight."""
-    from core.async_yf import async_download_many
     from core.stock_data import load_tickers
 
     # SELURUH IDX, bukan 178 likuid. Diukur ulang 11 Okt 2026 pada 793
@@ -7194,7 +7240,7 @@ async def _build_divergence() -> dict:
     # hampir pasti selisih yang tidak bisa dieksekusi. Harga penutupan di
     # saham sepi tidak mencerminkan harga yang benar-benar bisa didapat.
     tickers = load_tickers()
-    data = await async_download_many(tickers, period="1y", interval="1d")
+    data = await _universe_1y()
     items = await asyncio.to_thread(_pindai_divergence, tickers, data)
     kuat = [x for x in items if x["kuat"]]
     payload = _py({

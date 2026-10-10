@@ -376,3 +376,79 @@ def test_panduan_menyebut_biaya_tidak_diikutkan():
     p = _panduan_audit()
     assert "biaya broker" in p
     assert "aksi korporasi" in p or "stock split" in p
+
+
+# ---------------------------------------------------------------------------
+# Satu unduhan universe dipakai bersama
+# ---------------------------------------------------------------------------
+
+def test_dua_pemindai_tidak_mengunduh_universe_dua_kali():
+    """BUG YANG DICEGAH: _build_divergence dan _build_screener_vonis
+    sama-sama memanggil async_download_many(load_tickers(), period="1y")
+    -- parameter identik, data identik -- dan async_download_many tidak
+    punya cache. Tanpa pembagian, pemanas menembak Yahoo DUA KALI untuk
+    793 emiten tiap putaran: beban dua kali lipat, nol manfaat. Dan kali
+    ini sumber bebannya pemanas sendiri, bukan pengunjung."""
+    for f in (app_module._build_divergence, app_module._build_screener_vonis):
+        src = inspect.getsource(f)
+        assert "_universe_1y()" in src, f.__name__
+        assert "async_download_many" not in src, f.__name__
+
+
+def test_universe_1y_memo_mencegah_unduhan_kembar(monkeypatch):
+    """Dikunci lewat PERILAKU: tes yang cuma membaca sumber kode akan
+    tetap hijau kalau memonya dilepas."""
+    import core.async_yf as ay
+    import core.stock_data as sd
+
+    panggil = []
+
+    async def _unduh(tickers, **kw):
+        panggil.append(kw)
+        return {"AAAA.JK": object()}
+
+    monkeypatch.setattr(ay, "async_download_many", _unduh)
+    monkeypatch.setattr(sd, "load_tickers", lambda *a, **k: ["AAAA.JK"])
+    monkeypatch.setattr(app_module, "_UNDUH_UNIVERSE", None)
+
+    async def _dua_kali():
+        a = await app_module._universe_1y()
+        b = await app_module._universe_1y()
+        return a, b
+
+    a, b = asyncio.run(_dua_kali())
+    assert a is b
+    assert len(panggil) == 1, f"diunduh {len(panggil)} kali, harusnya 1"
+    assert panggil[0]["period"] == "1y"
+
+
+def test_hasil_kosong_tidak_di_memo(monkeypatch):
+    """Yahoo sedang menolak bukan alasan memaksa pemindai berikutnya ikut
+    kosong selama 15 menit."""
+    import core.async_yf as ay
+    import core.stock_data as sd
+
+    n = []
+
+    async def _kosong(tickers, **kw):
+        n.append(1)
+        return {}
+
+    monkeypatch.setattr(ay, "async_download_many", _kosong)
+    monkeypatch.setattr(sd, "load_tickers", lambda *a, **k: ["AAAA.JK"])
+    monkeypatch.setattr(app_module, "_UNDUH_UNIVERSE", None)
+
+    async def _dua_kali():
+        await app_module._universe_1y()
+        await app_module._universe_1y()
+
+    asyncio.run(_dua_kali())
+    assert len(n) == 2, "hasil kosong ikut di-memo"
+
+
+def test_universe_1y_dikunci_terhadap_pemanggil_bersamaan():
+    """Pemanas memang memanggilnya berurutan, tapi mengandalkan urutan itu
+    berarti fitur ini pecah diam-diam begitu ada pemanggil ketiga."""
+    src = inspect.getsource(app_module._universe_1y)
+    assert "_unduh_universe_lock" in src
+    assert isinstance(app_module._unduh_universe_lock, asyncio.Lock)
