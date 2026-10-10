@@ -209,3 +209,60 @@ def test_rupiah_besar_ditulis_ringkas(nilai, harap):
     from web.app import _rp_ringkas
 
     assert _rp_ringkas(nilai) == harap
+
+
+# ---------------------------------------------------------------------------
+# Ukuran tiket -- keterangan, bukan sinyal
+# ---------------------------------------------------------------------------
+
+def test_transaksi_terlalu_sedikit_TIDAK_dinilai():
+    """KEJADIAN NYATA 9 Okt 2026: CASS menunjukkan Rp49,6 juta per
+    transaksi -- dari TUJUH transaksi. Itu satu perdagangan blok, bukan
+    minat institusional, dan tanpa penjaga ini ia duduk di puncak daftar
+    "institusi masuk"."""
+    from core.idx_asing import ukuran_tiket
+
+    assert ukuran_tiket({"Value": 347_241_500.0, "Frequency": 7.0}) is None
+
+
+def test_tiket_dihitung_saat_frekuensinya_cukup():
+    from core.idx_asing import ukuran_tiket
+
+    r = ukuran_tiket({"Value": 1_000_000_000.0, "Frequency": 2000.0})
+    assert r["tiket_rp"] == 500_000 and r["frekuensi"] == 2000
+
+
+@pytest.mark.parametrize("nilai,freq,label", [
+    (200_000_000.0, 1000.0, "Ramai ritel"),     # Rp200rb/transaksi
+    (2_000_000_000.0, 1000.0, "Campuran"),      # Rp2 jt
+    (9_000_000_000.0, 1000.0, "Tiket besar"),   # Rp9 jt
+])
+def test_label_sesuai_sebaran_bursa_sungguhan(nilai, freq, label):
+    """Ambangnya dari sebaran 830 emiten pada 9 Okt 2026 (persentil 50 =
+    Rp1,31 jt, persentil 90 = Rp7,71 jt) -- bukan angka bulat yang
+    kedengaran enak."""
+    from core.idx_asing import ukuran_tiket
+
+    assert ukuran_tiket({"Value": nilai, "Frequency": freq})["tiket_label"] == label
+
+
+def test_tiket_ikut_terbawa_di_peta_asing_tanpa_permintaan_tambahan():
+    from core.idx_asing import urai
+
+    peta = urai({"data": [{"StockCode": "BBCA", "Close": 9000.0,
+                           "Value": 5_000_000_000.0, "Frequency": 1000.0,
+                           "ForeignBuy": 200_000.0, "ForeignSell": 50_000.0}]})
+    assert peta["BBCA"]["tiket_rp"] == 5_000_000
+    assert peta["BBCA"]["net_rp"] == 150_000 * 9000     # kolom lama tetap utuh
+
+
+def test_tiket_tak_terhitung_tidak_merusak_baris_asingnya():
+    """Frekuensi rendah membuat tiketnya tak bisa dinilai -- itu tidak
+    boleh ikut membuang data asing yang justru sah."""
+    from core.idx_asing import urai
+
+    peta = urai({"data": [{"StockCode": "CASS", "Close": 1000.0,
+                           "Value": 347_241_500.0, "Frequency": 7.0,
+                           "ForeignBuy": 100_000.0, "ForeignSell": 0.0}]})
+    assert "CASS" in peta
+    assert "tiket_rp" not in peta["CASS"]

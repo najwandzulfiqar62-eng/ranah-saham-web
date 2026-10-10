@@ -132,8 +132,14 @@ def urai(payload: dict) -> dict:
         if not isinstance(baris, dict):
             continue
         hasil = net_asing(baris)
-        if hasil:
-            keluar[hasil["kode"]] = hasil
+        if not hasil:
+            continue
+        # Ukuran tiket menumpang payload yang SAMA -- tidak ada permintaan
+        # tambahan ke IDX untuknya.
+        tiket = ukuran_tiket(baris)
+        if tiket:
+            hasil.update(tiket)
+        keluar[hasil["kode"]] = hasil
     return keluar
 
 
@@ -220,3 +226,46 @@ async def ambil_asing(tgl: date | None = None,
             d -= timedelta(days=1)
     raise AsingError(f"tidak ada data asing dalam {maks_mundur} hari terakhir"
                      + (f" ({galat_pertama})" if galat_pertama else ""))
+
+
+# ---------------------------------------------------------------------------
+# Ukuran tiket rata-rata (perilaku ritel vs institusi)
+# ---------------------------------------------------------------------------
+# Value / Frequency = berapa rupiah rata-rata per transaksi. Tiket kecil
+# berarti banyak orang membeli sedikit-sedikit; tiket besar berarti sedikit
+# pihak membeli banyak.
+#
+# INI KOLOM KETERANGAN, BUKAN SINYAL. Berbeda dari panel divergence atau
+# jarak stop ATR, angka ini BELUM diukur meramalkan apa pun. Ia menjawab
+# "siapa yang ramai di saham ini", bukan "saham ini akan naik". Menamainya
+# "deteksi" akan menjanjikan lebih dari yang dimilikinya.
+#
+# PENJAGA FREKUENSI yang tidak bisa ditawar. Diukur 9 Okt 2026: CASS
+# menunjukkan Rp49,6 juta per transaksi -- dari TUJUH transaksi. Itu satu
+# perdagangan blok, bukan minat institusional, dan tanpa penjaga ini ia
+# akan duduk di puncak daftar "institusi masuk". Saham dengan transaksi
+# sedikit tidak punya "rata-rata" yang berarti.
+MIN_FREKUENSI = 100
+
+# Ambang dari sebaran SUNGGUHAN seluruh bursa, 9 Okt 2026 (830 emiten):
+#   persentil 25: Rp0,70 jt   persentil 50: Rp1,31 jt
+#   persentil 75: Rp3,14 jt   persentil 90: Rp7,71 jt
+TIKET_RITEL = 1_000_000
+TIKET_BESAR = 5_000_000
+
+
+def ukuran_tiket(baris: dict) -> dict | None:
+    """Rata-rata rupiah per transaksi, atau None kalau tidak bisa dinilai."""
+    nilai = float(baris.get("Value") or 0)
+    freq = float(baris.get("Frequency") or 0)
+    if freq < MIN_FREKUENSI or nilai <= 0:
+        return None
+    tiket = nilai / freq
+    if tiket < TIKET_RITEL:
+        label = "Ramai ritel"
+    elif tiket >= TIKET_BESAR:
+        label = "Tiket besar"
+    else:
+        label = "Campuran"
+    return {"tiket_rp": round(tiket), "tiket_label": label,
+            "frekuensi": int(freq)}

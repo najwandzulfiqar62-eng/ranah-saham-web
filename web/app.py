@@ -1938,6 +1938,16 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     s1 = snr["s1"]
     potensi_naik_pct = ((r1 / current_price) - 1) * 100 if current_price else 0.0
     risiko_turun_pct = (1 - (s1 / current_price)) * 100 if current_price else 0.0
+    # Stop dilantai oleh derau harian sahamnya sendiri. Lihat core/atr_stop.py
+    # untuk angka pengukurannya -- singkatnya, stop lama rata-rata 3% padahal
+    # saham median bergerak 3,6% per hari, dan 53,8% sinyal kena stop karena
+    # itu. Level teknikalnya TIDAK dibuang; ia cuma tidak boleh berada di
+    # dalam derau satu hari.
+    from core.atr_stop import sesuaikan as _sesuaikan_stop
+    _tp, _sl = _sesuaikan_stop(potensi_naik_pct, risiko_turun_pct,
+                               ai.get("atr_pct"))
+    if _sl is not None:
+        potensi_naik_pct, risiko_turun_pct = _tp, _sl
     return {
         "likuiditas": likuiditas,
         "avg_value_20": round(avg_value_20, 0),
@@ -8004,6 +8014,9 @@ _WA_BANTUAN = (
     "kebiasaannya sendiri, dipilah akumulasi vs distribusi\n"
     "• *pemulihan* — saham yang sudah jatuh 5-15% tapi tekanan jualnya "
     "mereda (divergence RSI)\n"
+    "• *pulih 40* — rugi 40% butuh naik berapa persen untuk balik modal\n"
+    "• *rights 1000 700 2 1* — harga teoretis & dilusi rights issue\n"
+    "• *dividen 2000 100* — yield, termasuk terhadap harga belimu\n"
     "• *harmonic* — saringan pola harmonic (*harmonic KODE* untuk rincian)\n"
     "• *kepemilikan* — filing ≥5% hari ini + akumulasi berulang sebulan\n"
     "• *kepemilikan KODE* — lacak pemegang besar satu emiten\n"
@@ -10537,6 +10550,97 @@ def _wa_fmt_pemulihan(payload: dict) -> str:
     return "\n".join(baris)
 
 
+def _wa_kalkulator(kunci: str, kata: list) -> str | None:
+    """Tiga kalkulator yang menjawab pertanyaan yang sering salah dihitung.
+
+    Dibuat memaafkan masukan: orang mengetik di HP, dengan titik ribuan,
+    tanda persen, dan tanda minus yang kadang ada kadang tidak. Perintah
+    yang menolak karena titik akan dibaca sebagai bot yang rusak.
+    """
+    from core.kalkulator import dividen, pemulihan, rights_issue
+
+    def _des(x, n=2):
+        """Desimal bergaya Indonesia: koma, bukan titik.
+
+        "1.667x" di Indonesia terbaca seribu enam ratus, bukan satu koma
+        enam. Titik di sini bukan sekadar kurang rapi -- ia mengubah
+        angkanya jadi seribu kali lipat di kepala pembacanya.
+        """
+        return f"{x:.{n}f}".rstrip("0").rstrip(".").replace(".", ",") or "0"
+
+    def _ang(t):
+        try:
+            return float(str(t).replace(".", "").replace(",", ".").strip("%+"))
+        except (TypeError, ValueError):
+            return None
+
+    angka = [x for x in (_ang(k) for k in kata[1:]) if x is not None]
+
+    # "pemulihan" SENGAJA bukan milik kalkulator: kata itu sudah dipakai
+    # panel daftar saham. Satu kata yang diklaim dua fitur berarti salah
+    # satunya tidak akan pernah terpanggil -- dan yang kalah adalah yang
+    # diperiksa belakangan, diam-diam. Ditangkap oleh uji, bukan oleh
+    # komentar urutan yang saya tulis untuk mencegahnya.
+    if kunci in {"pulih", "balikmodal", "balik"}:
+        if not angka:
+            return ("*Kalkulator balik modal*\n\nKetik `pulih 40` \u2014 "
+                    "berapa persen harus naik untuk balik modal dari rugi 40%.")
+        p = pemulihan(angka[0])
+        if not p:
+            return ("_Rugi harus di antara 0 dan 100 persen._\n\nRugi 100% "
+                    "berarti modalnya habis; tidak ada kenaikan berhingga yang "
+                    "memulihkannya.")
+        return (f"*Balik modal dari rugi {_des(p['rugi_pct'])}%*\n\n"
+                f"Harga harus naik *{_des(p['butuh_naik_pct'])}%* \u2014 "
+                f"{_des(p['pengali'], 3)}x dari harga sekarang.\n\n"
+                "_Angkanya tidak simetris, dan itu inti soalnya: rugi 40% butuh "
+                "naik 66,7%, bukan 40%. Selisihnya terdengar kecil di kepala dan "
+                "sangat besar di rekening._")
+
+    if kunci in {"rights", "ri", "hmetd"}:
+        if len(angka) < 4:
+            return ("*Kalkulator rights issue*\n\nKetik `rights HARGAPASAR "
+                    "HARGATEBUS LAMA BARU`\n_mis._ `rights 1000 700 2 1` "
+                    "\u2014 rasio 2:1, tebus di 700, pasar 1.000.")
+        r = rights_issue(*angka[:4])
+        if not r:
+            return "_Angkanya harus lebih besar dari nol semua._"
+        return (f"*Rights issue {r['rasio']}*\n\n"
+                f"Harga teoretis sesudahnya (TERP): *{_rp(r['terp'])}*\n"
+                f"   dari pasar {_rp(r['harga_pasar'])} "
+                f"({'+' if r['turun_ke_terp_pct'] > 0 else '-'}{_des(abs(r['turun_ke_terp_pct']))}%)\n"
+                f"Nilai haknya: {_rp(r['nilai_hak_per_saham_baru'])} per saham baru\n"
+                f"Siapkan {_rp(r['tebus_per_lot_lama'])} per 1 lot lama\n\n"
+                f"Kalau TIDAK menebus, porsimu terdilusi "
+                f"*{_des(r['dilusi_jika_tidak_tebus_pct'])}%*.\n\n"
+                "_Turunnya harga ke TERP BUKAN kerugian bagi yang menebus \u2014 "
+                "nilainya pindah ke saham barunya. Ia kerugian bagi yang tidak "
+                "menebus, dan itu yang jarang dihitung orang._")
+
+    if kunci in {"dividen", "div", "deviden"}:
+        if len(angka) < 2:
+            return ("*Kalkulator dividen*\n\nKetik `dividen HARGA DPS [LOT] "
+                    "[HARGABELI]`\n_mis._ `dividen 2000 100 5 1500`")
+        d = dividen(angka[0], angka[1],
+                    lot=angka[2] if len(angka) > 2 else None,
+                    harga_beli=angka[3] if len(angka) > 3 else None)
+        if not d:
+            return "_Harga harus di atas nol dan dividen tidak boleh negatif._"
+        baris = [f"*Dividen {_rp(d['dividen_per_saham'])}/saham*", "",
+                 f"Yield di harga {_rp(d['harga'])}: *{_des(d['yield_pct'])}%*"]
+        if d.get("yield_thd_harga_beli_pct") is not None:
+            baris.append(f"Yield di harga BELIMU {_rp(d['harga_beli'])}: "
+                         f"*{_des(d['yield_thd_harga_beli_pct'])}%*")
+        if d.get("total_rp") is not None:
+            baris.append(f"Untuk {_des(d['lot'])} lot: {_rp(d['total_rp'])}")
+        baris += ["", "_Yield yang dipajang di mana-mana adalah yield bagi "
+                  "pembeli HARI INI. Bagi yang sudah memegang, yang berarti "
+                  "adalah yield terhadap harga belinya sendiri._"]
+        return "\n".join(baris)
+
+    return None
+
+
 async def _wa_cari_anggota(kandidat: list[str]) -> tuple[dict | None, str]:
     """Cocokkan pengirim dengan akun ter-approve, mencoba SEMUA identitas yang
     dikirim wa-bot.
@@ -10713,7 +10817,9 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
                               "kepemilikan", "x15", "ihsg", "pasar", "harmonic",
                               "harmonik", "bantuan", "help", "menu",
                               "smartmoney", "sm", "bandar", "akumulasi",
-                              "pemulihan", "divergence", "divergensi"}):
+                              "pemulihan", "divergence", "divergensi",
+                              "pulih", "balikmodal", "balik", "rights", "ri", "hmetd",
+                              "dividen", "div", "deviden"}):
         return None, None
 
     user, jejak = await _wa_cari_anggota(identitas)
@@ -10751,6 +10857,13 @@ async def _wa_handle_command(jid: str, teks: str, kandidat: list[str] | None = N
             return _wa_fmt_screener(await screener()), None
         if kunci in {"smartmoney", "sm", "bandar", "akumulasi"}:
             return await _wa_smartmoney(), None
+        # Kalkulator diperiksa LEBIH DULU daripada panel `pemulihan`:
+        # "pulih" dan "pemulihan" mirip, dan yang bawa angka pasti
+        # kalkulator. Tanpa urutan ini, `pulih 40` akan menjawab daftar
+        # saham -- jawaban yang benar untuk pertanyaan yang tidak diajukan.
+        _kalk = _wa_kalkulator(kunci, kata)
+        if _kalk is not None:
+            return _kalk, None
         if kunci in {"pemulihan", "divergence", "divergensi"}:
             # Membaca endpoint-nya, yang membaca cache. Bot TIDAK pernah
             # memicu pemindaian sendiri -- pemanas cache yang menanggungnya.
