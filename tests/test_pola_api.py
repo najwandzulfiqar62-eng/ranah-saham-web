@@ -113,3 +113,39 @@ def test_keterangan_menyebut_jebakan_dua_pola_yang_sering_salah_dibaca():
     assert "NAIK" in keterangan("Inverse Head & Shoulders")
     assert "TURUN" in keterangan("Rising Wedge")
     assert "NAIK" in keterangan("Falling Wedge")
+
+
+def test_wedge_tidak_memajang_angka_dari_detektor_lama():
+    """Detektor wedge diperbaiki 11 Okt 2026 (pivot wajib berurutan),
+    dan deteksinya turun 19 -> 1 per 200 emiten. Angka lama mengukur
+    bentuk yang BERBEDA; memajangnya berarti memberi pembaca angka yang
+    ia tidak punya cara tahu sedang mengukur hal lain.
+
+    Uji ini gagal kalau ada yang mengembalikannya tanpa pengukuran
+    ulang."""
+    from core.pola_ukur import UNGGUL_POLA
+    lama = {("Falling Wedge", "TEMBUS"): 0.07,
+            ("Falling Wedge", "TERBENTUK"): -0.71,
+            ("Rising Wedge", "TEMBUS"): -0.12,
+            ("Rising Wedge", "TERBENTUK"): 1.07}
+    for k, v in lama.items():
+        if k in UNGGUL_POLA:
+            assert UNGGUL_POLA[k].get("unggul_pct") != v, (
+                f"{k} memajang angka dari detektor lama ({v})")
+
+
+def test_pola_tanpa_angka_tetap_bisa_ditampilkan():
+    """Mencabut angkanya tidak boleh mematikan polanya. "Belum diukur"
+    adalah keterangan yang sah; nol bukan."""
+    import numpy as np
+    import pandas as pd
+    rng = np.random.default_rng(11)
+    n = 260
+    h = 1000 * np.cumprod(1 + rng.normal(0.0005, 0.02, n))
+    idx = pd.bdate_range("2024-01-01", periods=n)
+    df = pd.DataFrame({"Open": h * .995, "High": h * 1.01, "Low": h * .99,
+                       "Close": h, "Volume": [1e6] * n}, index=idx)
+    for p in app_module._pola_chart_payload("UJI", df):
+        # unggul_pct boleh None, tapi nama & fase & arti wajib ada.
+        assert p["nama"] and p["fase"] and p["arti"]
+        assert p["unggul_pct"] is None or isinstance(p["unggul_pct"], (int, float))

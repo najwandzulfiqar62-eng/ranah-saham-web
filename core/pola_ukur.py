@@ -121,6 +121,19 @@ def keterangan(nama: str) -> str:
 # n < 15 SENGAJA TIDAK dimasukkan. Keunggulan dari sepuluh kejadian
 # tidak bisa dibedakan dari kebetulan, dan menampilkannya sebagai angka
 # membuatnya terbaca sama meyakinkan dengan angka dari lima ratus.
+# WEDGE SENGAJA TIDAK ADA DI TABEL INI.
+#
+# Angkanya DICABUT 11 Okt 2026, bukan diperbarui. Detektor wedge
+# diperbaiki hari itu juga: ia dulu cuma memeriksa tanda kemiringan
+# garis regresi, tanpa menuntut pivotnya benar-benar berurutan menurun.
+# Sesudah diperbaiki, deteksi turun dari 19 ke 1 per 200 emiten --
+# artinya ~95% yang diukur dulu BUKAN wedge sama sekali, dan angka
+# +0,07 / -0,71 / -0,12 / +1,07 itu mengukur bentuk yang lain.
+#
+# Dibiarkan KOSONG sampai pengukuran ulang selesai. Layar menuliskan
+# "belum diukur", dan itu jujur. Memajang angka dari detektor yang sudah
+# berganti jauh lebih buruk daripada tidak memajang angka: pembaca tidak
+# punya cara mengetahui bahwa angkanya mengukur hal yang berbeda.
 UNGGUL_POLA: dict[tuple[str, str], dict] = {
     ("Bear Flag", "TEMBUS"): {"unggul_pct": -0.92, "n": 2343, "pct_positif": 47.8},
     ("Bear Flag", "TERBENTUK"): {"unggul_pct": -0.75, "n": 4355, "pct_positif": 47.7},
@@ -131,16 +144,12 @@ UNGGUL_POLA: dict[tuple[str, str], dict] = {
     ("Double Bottom", "TERBENTUK"): {"unggul_pct": -0.75, "n": 3265, "pct_positif": 50.5},
     ("Double Top", "TEMBUS"): {"unggul_pct": -1.2, "n": 587, "pct_positif": 50.6},
     ("Double Top", "TERBENTUK"): {"unggul_pct": -0.19, "n": 2650, "pct_positif": 46.3},
-    ("Falling Wedge", "TEMBUS"): {"unggul_pct": 0.07, "n": 2440, "pct_positif": 49.4},
-    ("Falling Wedge", "TERBENTUK"): {"unggul_pct": -0.71, "n": 2609, "pct_positif": 50.0},
     ("Head & Shoulders", "TEMBUS"): {"unggul_pct": -3.36, "n": 290, "pct_positif": 52.8},
     ("Head & Shoulders", "TERBENTUK"): {"unggul_pct": -2.87, "n": 457, "pct_positif": 45.3},
     ("Inverse Head & Shoulders", "TEMBUS"): {"unggul_pct": -1.12, "n": 199, "pct_positif": 40.2},
     ("Inverse Head & Shoulders", "TERBENTUK"): {"unggul_pct": -1.63, "n": 347, "pct_positif": 51.3},
     ("Rectangle", "TEMBUS"): {"unggul_pct": -0.8, "n": 524, "pct_positif": 47.3},
     ("Rectangle", "TERBENTUK"): {"unggul_pct": -1.7, "n": 801, "pct_positif": 46.8},
-    ("Rising Wedge", "TEMBUS"): {"unggul_pct": -0.12, "n": 2157, "pct_positif": 50.9},
-    ("Rising Wedge", "TERBENTUK"): {"unggul_pct": 1.07, "n": 1995, "pct_positif": 48.2},
     ("Rounding Bottom", "TERBENTUK"): {"unggul_pct": 0.62, "n": 315, "pct_positif": 52.1},
     ("Rounding Top", "TERBENTUK"): {"unggul_pct": -1.42, "n": 289, "pct_positif": 44.3},
     ("Segitiga Menaik", "TEMBUS"): {"unggul_pct": 3.24, "n": 464, "pct_positif": 44.6},
