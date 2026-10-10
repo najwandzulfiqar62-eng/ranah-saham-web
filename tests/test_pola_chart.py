@@ -201,3 +201,139 @@ def test_modul_ini_TIDAK_dipakai_sebagai_sinyal():
     assert not pemakai, (
         f"core/pola_chart.py tersambung ke {pemakai} padahal pengukurannya "
         "menunjukkan keunggulan NEGATIF. Ukur ulang dulu sebelum memasangnya.")
+
+
+# ===========================================================================
+# BULL FLAG -- pola LANJUTAN, satu-satunya jenis yang akhirnya positif
+# ===========================================================================
+# HASIL PENGUKURAN 10 Okt 2026 (178 emiten, 2 tahun, 20 hari bursa, per
+# setup unik). Dasar: naik 45,9%, rata-rata +1,86%:
+#
+#     semua bull flag        n=4102   naik 48,2%   unggul +1,07%
+#     sudah TEMBUS           n=1337   naik 47,3%   unggul +1,92%
+#     belum tembus           n=2765   naik 48,6%   unggul +0,66%
+#     koreksi dangkal <25%   n=2101   naik 48,7%   unggul +1,21%
+#
+# SATU-SATUNYA dari tiga pola yang diuji dengan tanda positif konsisten --
+# Inverse H&S -0,68%, falling wedge +1,24% tapi win rate di bawah pasar.
+#
+# TAPI BELAH WAKTUNYA TIDAK STABIL: paruh awal unggul +0,41% (n=712),
+# paruh akhir +2,25% (n=620). Lima kali lipat bedanya. Dengan n segitu,
+# itu menunjukkan keunggulannya didorong beberapa pemenang besar, bukan
+# efek yang ajeg. Karena itu ia TIDAK dipasang sebagai panel sendiri:
+# +1,91% dengan sebaran seperti itu tidak sebanding dengan panel Pemulihan
+# (+4,11%, stabil di kedua paruh).
+
+from core.pola_chart import (MAKS_KOREKSI_TIANG, MIN_TIANG_PCT,
+                             cari_bull_flag)
+
+
+def _flag(tiang_pct=25.0, koreksi_porsi=0.3, bendera=6, awal=60,
+          dasar=100.0, kode="TEST"):
+    """Tiang naik tajam, lalu istirahat dangkal."""
+    import datetime as dt
+
+    tinggi, rendah = [], []
+
+    def isi(lo, hi, n=1):
+        rendah.extend([lo] * n)
+        tinggi.extend([hi] * n)
+
+    for i in range(awal):                       # datar sebelum tiang
+        isi(dasar * 0.995, dasar * 1.005)
+    puncak = dasar * (1 + tiang_pct / 100)
+    for i in range(10):                         # tiang
+        h = dasar + (puncak - dasar) * (i + 1) / 10
+        isi(h * 0.99, h)
+    rendah_bendera = puncak - (puncak - dasar) * koreksi_porsi
+    for i in range(bendera):                    # bendera menurun dangkal
+        h = puncak - (puncak - rendah_bendera) * (i + 1) / bendera
+        isi(h, h * 1.005)
+
+    tutup = [(t + r) / 2 for t, r in zip(tinggi, rendah)]
+    d0 = dt.date(2026, 1, 1)
+    tgl = [(d0 + dt.timedelta(days=i)).isoformat() for i in range(len(rendah))]
+    return kode, tgl, tinggi, rendah, tutup
+
+
+def test_bull_flag_terdeteksi():
+    s = cari_bull_flag(*_flag())
+    assert s is not None
+    assert s.tiang_pct >= MIN_TIANG_PCT
+
+
+def test_tiang_terlalu_pendek_ditolak():
+    """Kenaikan 5% bukan tiang -- itu gerak biasa, dan pola yang
+    memasukkannya akan "ditemukan" di mana-mana."""
+    assert cari_bull_flag(*_flag(tiang_pct=5.0)) is None
+
+
+def test_koreksi_terlalu_dalam_ditolak():
+    """Lebih dari separuh tiang termakan = itu bukan istirahat, itu
+    pembalikan. Pola yang definisinya memuat keduanya tidak memberi tahu
+    apa pun."""
+    assert cari_bull_flag(*_flag(koreksi_porsi=0.8)) is None
+    assert MAKS_KOREKSI_TIANG == 0.50
+
+
+def test_breakout_BISA_terdeteksi():
+    """CACAT NYATA versi pertama: puncak tiang disyaratkan tetap yang
+    tertinggi sampai bar terakhir, sehingga begitu harga menembusnya
+    polanya berhenti terdeteksi. "Sudah tembus" melaporkan NOL dari 5.664
+    pola -- breakout, yang justru inti pola lanjutan, tersingkir oleh
+    syarat deteksinya sendiri. Ketahuan dari angka yang mustahil, bukan
+    dari membaca kodenya."""
+    kode, tgl, hi, lo, cl = _flag(bendera=5)
+    # Satu bar menembus puncak tiang.
+    puncak = max(hi[:-5])
+    hi = hi + [puncak * 1.03]
+    lo = lo + [puncak * 1.00]
+    cl = cl + [puncak * 1.02]
+    import datetime as dt
+    tgl = tgl + [(dt.date.fromisoformat(tgl[-1]) + dt.timedelta(days=1)).isoformat()]
+    s = cari_bull_flag(kode, tgl, hi, lo, cl)
+    assert s is not None and s.tembus is True
+
+
+def test_bendera_panjang_bisa_terdeteksi():
+    """CACAT NYATA kedua: versi pertama mencoba panjang bendera dari yang
+    terpendek lalu BERHENTI di yang pertama cocok, sehingga "bendera
+    panjang" melaporkan SATU kejadian dari 5.664 -- bukan karena langka,
+    tapi karena tidak pernah sempat dilihat."""
+    s = cari_bull_flag(*_flag(bendera=14))
+    assert s is not None and s.bendera_bar >= 10
+
+
+def test_setup_id_dari_tanggal_pola_bukan_tanggal_pindai():
+    """Jebakan yang sama sudah dua kali menggelembungkan angka di proyek
+    ini: divergence (10 setup terhitung 80) dan falling wedge (3.808 pola
+    per tahun, mustahil)."""
+    a = cari_bull_flag(*_flag(bendera=6))
+    b = cari_bull_flag(*_flag(bendera=8))
+    assert a and b and a.setup_id == b.setup_id
+
+
+@pytest.mark.parametrize("args", [
+    ("X", [], [], [], []),
+    ("X", ["2026-01-01"] * 20, [1.0] * 20, [1.0] * 20, [1.0] * 20),
+])
+def test_data_terlalu_pendek(args):
+    assert cari_bull_flag(*args) is None
+
+
+def test_bull_flag_juga_TIDAK_dipasang_sebagai_sinyal():
+    """Terukur +1,91% pada breakout -- positif, dan satu-satunya dari tiga
+    pola yang begitu. Tapi belah waktunya +0,41% vs +2,25%, lima kali
+    lipat bedanya, dan panel Pemulihan yang sudah ada memberi +4,11% yang
+    stabil di kedua paruh.
+
+    Uji ini gagal kalau ia disambungkan ke jalur sinyal tanpa pengukuran
+    baru yang menunjukkan kestabilannya."""
+    import pathlib
+
+    akar = pathlib.Path(__file__).resolve().parent.parent
+    pemakai = [f.name for f in (akar / "web" / "app.py",
+                                akar / "core" / "signal_history.py",
+                                akar / "core" / "screening_pro.py")
+               if f.exists() and "pola_chart" in f.read_text(encoding="utf-8")]
+    assert not pemakai, f"core/pola_chart.py tersambung ke {pemakai}"

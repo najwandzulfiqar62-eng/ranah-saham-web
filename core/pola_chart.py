@@ -303,3 +303,132 @@ def cari_falling_wedge(kode: str, tanggal: list, tinggi: list, rendah: list,
         n_puncak=len(puncak), n_lembah=len(lembah),
         harga_kini=kini, tembus=kini > atas_kini,
     )
+
+
+# ---------------------------------------------------------------------------
+# BULL FLAG (bendera naik) -- pola LANJUTAN, bukan pembalikan
+# ---------------------------------------------------------------------------
+# Dipilih sebagai pola ketiga karena ia satu-satunya jenis yang belum
+# diuji sama sekali. Inverse H&S dan falling wedge dua-duanya pola
+# PEMBALIKAN, dan dua-duanya gagal (-0,68% dan +1,24% dengan win rate di
+# bawah pasar). Bull flag bertaruh pada hal yang berlawanan: tren yang
+# sedang berjalan akan BERLANJUT.
+#
+# Ada petunjuk bahwa arah ini lebih menjanjikan. Diukur di sesi
+# sebelumnya, "Pullback di tren naik + likuid" naik keesokan harinya
+# 43,6% dari waktu melawan dasar 37,5% -- setup terbaik dari dua belas
+# yang diuji untuk membeli di pembukaan besok. Bull flag adalah
+# pullback-dalam-tren-naik yang diformalkan: tiang, lalu istirahat
+# dangkal, lalu lanjut.
+#
+# BENTUKNYA:
+#   TIANG   : kenaikan tajam dalam waktu pendek
+#   BENDERA : istirahat yang DANGKAL dan menurun/mendatar -- kalau
+#             turunnya dalam, itu bukan istirahat melainkan pembalikan
+#   TEMBUS  : harga menutup di atas puncak benderanya
+
+MIN_TIANG_PCT = 15.0       # kenaikan minimum yang layak disebut tiang
+MAKS_TIANG_BAR = 25        # ... dan harus terjadi dalam rentang ini
+MIN_BENDERA_BAR = 3
+MAKS_BENDERA_BAR = 20
+# Koreksi maksimum selama bendera, sebagai porsi tinggi tiangnya. Lebih
+# dari separuh tiang termakan = itu bukan istirahat, itu pembalikan.
+MAKS_KOREKSI_TIANG = 0.50
+
+
+@dataclass(frozen=True)
+class BullFlag:
+    kode: str
+    tanggal_tiang_mulai: str
+    tanggal_tiang_puncak: str
+    harga_tiang_mulai: float
+    harga_tiang_puncak: float
+    tiang_pct: float
+    bendera_bar: int
+    koreksi_pct: float          # dari puncak tiang, negatif
+    koreksi_thd_tiang: float    # porsi tinggi tiang yang termakan
+    puncak_bendera: float
+    harga_kini: float
+    tembus: bool
+
+    @property
+    def setup_id(self) -> str:
+        """Penanda dari TANGGAL POLANYA, bukan tanggal pemindaian.
+
+        Jebakan yang sama sudah dua kali menggelembungkan angka di proyek
+        ini -- divergence (10 setup terhitung 80) dan falling wedge (3.808
+        pola per tahun, mustahil). Keduanya terjadi karena penandanya
+        ditulis ulang dari nol di tiap modul.
+        """
+        return (f"{self.kode}:flag:{self.tanggal_tiang_mulai}:"
+                f"{self.tanggal_tiang_puncak}")
+
+
+def cari_bull_flag(kode: str, tanggal: list, tinggi: list, rendah: list,
+                   tutup: list) -> BullFlag | None:
+    """Bull flag yang sedang berlaku pada bar terakhir, atau None."""
+    n = len(tutup)
+    if n < 60 or not (len(tanggal) == len(tinggi) == len(rendah) == n):
+        return None
+    akhir = n - 1
+
+    # Puncak tiang = tinggi TERTINGGI dalam jendela di mana benderanya
+    # mungkin berada. Dicari dengan argmax, BUKAN dengan mencoba tiap
+    # panjang bendera lalu berhenti di yang pertama cocok.
+    #
+    # DUA CACAT yang ditutup di sini, keduanya rancangan saya sendiri dan
+    # keduanya ketahuan dari angka yang mustahil saat mengukur:
+    #
+    # 1. Versi pertama mensyaratkan puncak tiang tetap yang TERTINGGI
+    #    sampai bar terakhir. Akibatnya begitu harga menembusnya, polanya
+    #    berhenti terdeteksi -- dan "sudah tembus" melaporkan NOL kejadian
+    #    dari 5.664 pola. Breakout, yang justru inti pola lanjutan,
+    #    tersingkir oleh syarat deteksinya sendiri.
+    #
+    # 2. Versi pertama mencoba panjang bendera dari yang terpendek lalu
+    #    BERHENTI di yang pertama cocok. Akibatnya "bendera panjang"
+    #    melaporkan SATU kejadian dari 5.664 -- bukan karena bendera
+    #    panjang itu langka, tapi karena ia tidak pernah sempat dilihat.
+    jendela_awal = max(0, akhir - MAKS_BENDERA_BAR)
+    jendela_akhir = akhir - MIN_BENDERA_BAR
+    if jendela_akhir <= jendela_awal:
+        return None
+    i_puncak = max(range(jendela_awal, jendela_akhir + 1),
+                   key=lambda j: float(tinggi[j]))
+    lama_bendera = akhir - i_puncak
+
+    # Dasar tiang: titik terendah dalam MAKS_TIANG_BAR bar sebelum puncak.
+    tiang_awal = max(0, i_puncak - MAKS_TIANG_BAR)
+    if i_puncak - tiang_awal < 2:
+        return None
+    i_dasar = min(range(tiang_awal, i_puncak), key=lambda j: float(rendah[j]))
+    h_dasar, h_puncak = float(rendah[i_dasar]), float(tinggi[i_puncak])
+    if h_dasar <= 0:
+        return None
+    tiang = (h_puncak / h_dasar - 1) * 100
+    if tiang < MIN_TIANG_PCT:
+        return None
+
+    bendera_rendah = min(float(x) for x in rendah[i_puncak + 1:akhir + 1])
+    koreksi = (bendera_rendah / h_puncak - 1) * 100       # negatif
+    tinggi_tiang = h_puncak - h_dasar
+    if tinggi_tiang <= 0:
+        return None
+    porsi = (h_puncak - bendera_rendah) / tinggi_tiang
+    # Istirahat yang dangkal. Lebih dari separuh tiang termakan = itu
+    # pembalikan, bukan bendera -- dan pola yang definisinya memuat
+    # keduanya tidak memberi tahu apa pun.
+    if porsi > MAKS_KOREKSI_TIANG:
+        return None
+
+    kini = float(tutup[akhir])
+    return BullFlag(
+        kode=(kode or "").upper(),
+        tanggal_tiang_mulai=str(tanggal[i_dasar]),
+        tanggal_tiang_puncak=str(tanggal[i_puncak]),
+        harga_tiang_mulai=h_dasar, harga_tiang_puncak=h_puncak,
+        tiang_pct=round(tiang, 2), bendera_bar=lama_bendera,
+        koreksi_pct=round(koreksi, 2), koreksi_thd_tiang=round(porsi, 3),
+        puncak_bendera=round(h_puncak, 2), harga_kini=kini,
+        tembus=kini > h_puncak,
+    )
