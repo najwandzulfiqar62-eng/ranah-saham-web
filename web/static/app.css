@@ -824,6 +824,17 @@
 .watch-btn.on{background:rgba(199,154,42,.14);border-color:var(--gold);color:var(--gold);font-weight:600}
 /* ---- bandingkan side-by-side ---- */
 .cmp-wrap{overflow-x:auto}
+/* Rel chip di atas chart. Di HP ia MENGGULIR MENDATAR, tidak membungkus
+   ke tiga baris -- tiga baris chip mendorong chart-nya turun sampai
+   hampir keluar layar (tangkapan layar penulis). Scrollbar disembunyikan
+   supaya tidak menambah tinggi. */
+.chip-rail{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
+@media(max-width:640px){
+  .chip-rail{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    scrollbar-width:none;padding-bottom:2px}
+  .chip-rail::-webkit-scrollbar{display:none}
+  .chip-rail>*{flex:none}
+}
 .cmp-table{min-width:100%}
 .cmp-table th,.cmp-table td{text-align:center;padding:10px 12px;white-space:nowrap}
 .cmp-table .cmp-label{text-align:left;color:var(--muted);font-size:13px;font-weight:500}

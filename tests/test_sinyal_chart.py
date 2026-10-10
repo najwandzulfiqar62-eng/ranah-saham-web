@@ -328,7 +328,9 @@ def test_sr_dibatasi_dua_per_sisi_secara_bawaan():
     js = _js()
     i = js.index("function _gambarSR(")
     blok = js[i:js.index("/* ---- Area beli", i)]
-    assert "slice(0,2)" in blok and "slice(-2)" in blok
+    # Jumlahnya kini bergantung lebar layar (_n), jadi yang dikunci
+    # ADANYA pembatasan per sisi -- bukan angkanya.
+    assert "slice(0,_n)" in blok and "slice(-_n)" in blok
     assert "st.srPenuh" in blok, "harus ada jalan untuk menampilkan semuanya"
 
 
@@ -396,7 +398,7 @@ def test_penanda_sinyal_tidak_lagi_mengulang_harga():
     js = _js()
     i = js.index("function _gambarSinyal(")
     blok = js[i:js.index("/* ---- Pola ----", i)]
-    assert "text:`${x.jenis}${ekor}`" in blok
+    assert "${x.jenis}${ekor}" in blok
     assert "_rpT(x.harga)" not in blok
 
 
@@ -448,3 +450,94 @@ def test_penghitungan_latar_tidak_dijadwalkan_berulang():
     src = inspect.getsource(app_module._sinyal_chart_latar)
     assert "_SINYAL_SEDANG_DIHITUNG" in src
     assert "finally:" in src, "penjaga harus dilepas walau gagal"
+
+
+# ---------------------------------------------------------------------------
+# Layar HP
+# ---------------------------------------------------------------------------
+
+def test_layar_sempit_memendekkan_label_sumbu():
+    """GEJALA (tangkapan layar penulis di HP): label sumbu harga
+    ("BELI · Support Terdekat 4×", "Atap bendera", "Puncak Mayor 1×")
+    memakan sekitar 60% lebar layar, candle-nya tersisa sepertiga, dan
+    dua label bertumpuk di harga yang sama. Chart yang candle-nya tidak
+    terlihat bukan chart."""
+    js = _js()
+    assert "function _sempit()" in js
+    i = js.index("function _gambarSR(")
+    blok = js[i:js.index("/* ---- Area beli", i)]
+    assert "_sempit()" in blok, "judul garis tidak menyesuaikan lebar layar"
+    assert "'▲BELI'" in blok and "'▼JUAL'" in blok, (
+        "penanda rencana harus tetap ada di HP, cuma dipendekkan")
+
+
+def test_layar_sempit_mengurangi_jumlah_garis():
+    js = _js()
+    i = js.index("function _gambarSR(")
+    blok = js[i:js.index("/* ---- Area beli", i)]
+    assert "_sempit() ? 1 : 2" in blok
+
+
+def test_label_titik_pola_disembunyikan_di_HP():
+    """"PUNCAK TIANG" dan "KAKI TIANG" menutupi candle di layar sempit.
+    Titiknya tetap digambar -- yang hilang cuma tulisannya."""
+    js = _js()
+    assert "text:_sempit()?''" in js
+
+
+def test_chip_menggulir_bukan_membungkus_di_HP():
+    """Tiga baris chip mendorong chart-nya turun sampai hampir keluar
+    layar."""
+    css = open("web/static/app.css", encoding="utf-8").read()
+    assert ".chip-rail" in css
+    assert "flex-wrap:nowrap" in css and "overflow-x:auto" in css
+    js = _js()
+    assert 'id="polaChips" class="chip-rail"' in js
+    assert 'id="ihsgPolaChips" class="chip-rail"' in js
+
+
+def test_memutar_HP_menggambar_ulang_labelnya():
+    """Tanpa ini, memutar HP ke lanskap meninggalkan label pendek di
+    layar lebar -- dan sebaliknya."""
+    js = _js()
+    # ResizeObserver dipakai beberapa chart; yang dicari milik chart
+    # utama, yaitu yang menjaga ambang _sempit().
+    i = js.index("let _lebarLalu=cont.clientWidth;")
+    blok = js[i:i + 900]
+    assert "sempitLalu!==sempitKini" in blok
+    assert "_gambarSR(" in blok and "_renderPolaChips(" in blok
+
+
+def test_kolom_kosong_menyebut_sebabnya():
+    """"tidak ada" tanpa keterangan terbaca seperti data gagal dimuat,
+    padahal ia keputusan -- dan penulis memang membacanya begitu
+    ("kok belinya ga ada?")."""
+    js = _js()
+    assert "function _kosongBeralasan(" in js
+    assert "alasan_tanpa_beli" in js and "alasan_tanpa_jual" in js
+    from core.rencana_chart import susun
+    lv = lambda h, t, n: {"harga": h, "tipe": t, "sentuh": n,
+                          "terakhir": "2026-09-01", "pertama": "2026-05-01",
+                          "kuat": n >= 3, "nama": "L"}
+    tren = {"arah": "turun", "garis_kini": 1050, "tembus": False,
+            "n_puncak": 5, "n_lembah": 4, "alasan": "x"}
+    r = susun(1000, [lv(950, "support", 4)], [], tren=tren)
+    assert r["beli"] is None
+    assert r["alasan_tanpa_beli"] and "tren turun" in r["alasan_tanpa_beli"]
+
+
+def test_ketiadaan_pola_dikatakan_bukan_disembunyikan():
+    """Baris chip DULU lenyap begitu saja saat tidak ada pola, dan
+    penulis membacanya sebagai "polanya hilang" (IHSG, sesudah detektor
+    wedge diperbaiki dan label palsunya berhenti muncul)."""
+    js = _js()
+    assert "Tidak ada pola klasik" in js
+
+
+def test_tren_dow_terlihat_di_panel():
+    """Vonis suara dan tren Dow bisa BERBEDA, dan ketika beli/jual
+    dihapus karena trennya, pembaca harus bisa melihat alasannya di
+    layar yang sama."""
+    js = _js()
+    assert "function _chipTren(" in js
+    assert "_TREN_LABEL" in js

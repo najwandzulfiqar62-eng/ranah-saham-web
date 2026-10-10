@@ -134,8 +134,17 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
     # terisi. Bukunya tegas: jangan beli melawan tren sampai garisnya
     # ditembus ke atas. Memberi satu angka beli di tren turun berarti
     # mengundang orang menangkap pisau jatuh.
+    alasan_tanpa_beli = alasan_tanpa_jual = None
     if t_sah and t_arah == "turun":
         beli = None
+        # SEBABNYA WAJIB IKUT. Tanpa ini layar cuma menulis "tidak ada"
+        # dan pembaca menyangka datanya gagal dimuat -- padahal ini
+        # keputusan, dan keputusan yang tidak dijelaskan terbaca sebagai
+        # kerusakan.
+        alasan_tanpa_beli = (
+            "tren turun menurut Dow (puncak dan lembah sama-sama "
+            f"menurun). Garis tren di {_rp(t_garis)} — tunggu harga "
+            "menembusnya ke ATAS sebelum mencari titik beli.")
 
     # AREA JUAL = TEMPAT TEKANAN BELI TERBUKTI MELEMAH, bukan sekadar
     # atap terdekat.
@@ -183,6 +192,10 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
             # berarti mengarang titik keluar hanya supaya kolomnya
             # terisi.
             jual = None
+            alasan_tanpa_jual = (
+                "tren masih naik dan belum ada atap yang terbukti "
+                "menolak harga minimal tiga kali — yang di atas baru "
+                "target, bukan tempat keluar.")
     elif puncak:
         jual = {"harga": puncak["harga"], "alasan": _alasan(puncak, "Resistance"),
                 "teruji": (puncak.get("sentuh") or 0) > 1,
@@ -255,6 +268,8 @@ def susun(harga: float, level: list, pola: list, ma20=None, ma50=None,
         "invalidasi": invalidasi, "alasan_invalidasi": alasan_inval,
         "target": target,
         "pola_utama": (pola_utama or {}).get("nama"),
+        "alasan_tanpa_beli": alasan_tanpa_beli,
+        "alasan_tanpa_jual": alasan_tanpa_jual,
         "tren": t_arah, "tren_garis": t_garis, "tren_tembus": bool(t.get("tembus")),
         "tren_alasan": t.get("alasan"),
         "narasi": _narasi(harga, bias, pola_utama, jual, s1, s2, ma20, ma50),

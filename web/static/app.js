@@ -546,7 +546,7 @@ async function analyze(kode){
   <div class="analysis-layout">
     <div class="analysis-main">
       <section class="panel chart-panel"><p class="eyebrow">Grafik Interaktif</p>
-        <div id="polaChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+        <div id="polaChips" class="chip-rail"></div>
         <div id="chart"></div>
         <div id="phaseRibbon"></div>
         <div class="chart-meta"><span><span class="ma-dot" style="background:#C79A2A"></span>MA20 · <span class="ma-dot" style="background:#2FB57E"></span>MA50</span><span>Seret untuk zoom/geser</span></div></section>
@@ -736,6 +736,19 @@ function _ovlBersihHarga(st){
 // Dicocokkan dengan toleransi kecil, bukan kesamaan persis: level dan
 // rencana melewati pembulatan yang berbeda, dan `===` pada pecahan akan
 // gagal diam-diam.
+// LAYAR SEMPIT ditangani berbeda, dan ini bukan kemewahan.
+//
+// Tangkapan layar penulis di HP: label sumbu harga ("BELI · Support
+// Terdekat 4×", "Atap bendera", "Puncak Mayor 1×") memakan sekitar 60%
+// lebar layar, sehingga candle-nya tersisa sepertiga dan dua label
+// bertumpuk di harga yang sama. Chart yang candle-nya tidak terlihat
+// bukan chart.
+//
+// Di layar sempit: judul garis dipendekkan jadi kode, jumlah garis
+// dikurangi, dan label titik pola disembunyikan. Isinya tidak berubah
+// -- yang berubah panjang tulisannya.
+function _sempit(){ return (window.innerWidth||1024) < 640 }
+
 function _dekatHarga(a,b){
   return a!=null&&b!=null&&Math.abs(a-b)<=Math.max(0.01,Math.abs(b)*0.0005);
 }
@@ -770,8 +783,12 @@ function _gambarSR(kunci, sr){
   // begitu "Semua level" ditekan. Yang berubah cuma berapa yang tampil
   // sekaligus -- dan dua terdekat per sisi memang yang menentukan
   // keputusan minggu ini.
-  const _atas=st.sr.filter(x=>x.tipe==='resistance').slice(0,2);
-  const _bawah=st.sr.filter(x=>x.tipe==='support').slice(-2);
+  // Di HP cuma SATU per sisi (plus beli/jual yang selalu ikut di bawah):
+  // empat garis + BATAL + MA20 + MA50 sudah tujuh label di layar selebar
+  // 360 piksel.
+  const _n = _sempit() ? 1 : 2;
+  const _atas=st.sr.filter(x=>x.tipe==='resistance').slice(0,_n);
+  const _bawah=st.sr.filter(x=>x.tipe==='support').slice(-_n);
   let tampil = st.srPenuh ? st.sr : _atas.concat(_bawah);
   // AREA BELI & JUAL SELALU IKUT, berapa pun batasnya.
   //
@@ -820,7 +837,11 @@ function _gambarSR(kunci, sr){
         // dengan "Support Terdekat" -- dua garis bertumpuk di satu
         // harga, yang membuat chart terlihat sesak dan membuat penulis
         // menyangka area beli & jualnya berdempetan.
-        title:`${_tandaRencana(st,L.harga)}${L.nama||(res?'Resistance':'Support')} ${L.sentuh}×`,
+        title: _sempit()
+          // Di HP: penanda rencana + kode pendek saja. "BELI · Support
+          // Terdekat 4×" jadi "▲BELI", "Puncak Mayor 1×" jadi "R 1×".
+          ? `${(_peranRencana(st,L.harga)==='beli')?'▲BELI':(_peranRencana(st,L.harga)==='jual')?'▼JUAL':(res?'R':'S')} ${L.sentuh}×`
+          : `${_tandaRencana(st,L.harga)}${L.nama||(res?'Resistance':'Support')} ${L.sentuh}×`,
       }));
     }catch(e){ console.warn('SR gagal digambar',L,e) }
   }
@@ -884,7 +905,7 @@ function _gambarHarmonic(kunci, idx){
       priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
     sr.setData(data);
     sr.setMarkers(data.map((q,i)=>({time:q.time,position:'inBar',color:w,
-      shape:'circle',text:lab[i]})));
+      shape:'circle',text:_sempit()?'':lab[i]})));
     st.harmSeri.push(sr);
   }catch(e){ console.warn('harmonic: garis gagal',e) }
   if(h.prz){
@@ -952,7 +973,9 @@ function _gambarSinyal(kunci, sinyal){
     return {time:x.t, position:beli?'belowBar':'aboveBar',
             color:beli?'#2FB57E':'#E0566B',
             shape:beli?'arrowUp':'arrowDown',
-            text:`${x.jenis}${ekor}`};
+            // Di HP cuma tanda benar/salahnya; panahnya sudah
+            // menunjukkan beli atau jual.
+            text:_sempit()?ekor.trim():`${x.jenis}${ekor}`};
   });
   try{ st.cs.setMarkers(tanda) }catch(e){ console.warn('sinyal: panah gagal',e) }
 }
@@ -1000,7 +1023,10 @@ function _gambarPola(kunci, idx){
       sr.setData(data);
       sr.setMarkers(data.map((q,i)=>({
         time:q.time, position:p.arah==='turun'?'aboveBar':'belowBar',
-        color:w, shape:'circle', text:lab[i]||''})));
+        // Di HP titiknya tetap digambar tapi TANPA tulisan: "PUNCAK
+        // TIANG" dan "KAKI TIANG" menutupi candle di layar sempit.
+        // Bentuknya tetap terbaca dari posisi titiknya.
+        color:w, shape:'circle', text:_sempit()?'':(lab[i]||'')})));
       st.seri.push(sr);
     }catch(e){ console.warn('pola: penanda gagal',e) }
   }
@@ -1011,6 +1037,14 @@ function _renderPolaChips(kunci){
   const st=_ovlState(kunci);
   const box=st.chips?$(st.chips):null; if(!box)return;
   const bagian=[];
+  // Kalau tidak ada pola, baris ini DULU lenyap begitu saja -- dan
+  // penulis membacanya sebagai "polanya hilang" (IHSG, sesudah detektor
+  // wedge diperbaiki dan label palsunya berhenti muncul). Ketiadaan pola
+  // itu temuan, bukan kekosongan; ia harus dikatakan.
+  if(!st.data.length){
+    bagian.push(`<span class="muted" style="font-size:11px;align-self:center"
+      title="Pola chart klasik memang jarang muncul. Tidak adanya pola bukan tanda data gagal dimuat.">Tidak ada pola klasik</span>`);
+  }
   if(st.data.length){
     bagian.push(`<span class="muted" style="font-size:11px;align-self:center;margin-right:2px">Pola:</span>`);
     bagian.push(st.data.map((p,i)=>{
@@ -1168,7 +1202,22 @@ async function drawChart(kode){
   chartObj.addLineSeries({color:'#2FB57E',lineWidth:1.5,priceLineVisible:false,lastValueVisible:true,title:'MA50'}).setData(o.ma50);
   _pasangOverlay('utama', chartObj, cs, o, '#polaChips');
   chartObj.timeScale().fitContent();
-  new ResizeObserver(()=>{if(chartObj)chartObj.applyOptions({width:cont.clientWidth})}).observe(cont);
+  // Lebar berubah (putar HP, buka sidebar) -> ambang _sempit() bisa
+  // ikut berubah, dan labelnya harus menyesuaikan. Tanpa ini, memutar
+  // HP ke lanskap meninggalkan label pendek di layar lebar.
+  let _lebarLalu=cont.clientWidth;
+  new ResizeObserver(()=>{
+    if(!chartObj)return;
+    chartObj.applyOptions({width:cont.clientWidth});
+    const sempitLalu=_lebarLalu<640, sempitKini=cont.clientWidth<640;
+    _lebarLalu=cont.clientWidth;
+    if(sempitLalu!==sempitKini){
+      const st=_ovlState('utama');
+      if(st.sr&&st.sr.length){ _gambarSR('utama',st.sr); _gambarRencana('utama',st.rencana); }
+      if(st.sinyal) _gambarSinyal('utama',st.sinyal);
+      _renderPolaChips('utama');
+    }
+  }).observe(cont);
   renderPhaseRibbon(o.phases);
   _updateChartLive(o);
   // ---- auto-refresh bar terakhir tiap 30 dtk memakai harga live ----
@@ -1250,7 +1299,7 @@ async function showIhsg(){
     ${bt&&bt.edge!=null&&bt.edge<=1?infoNote('Edge tipis/negatif: sinyal ini tidak lebih baik dari sekadar mengikuti kecenderungan pasar. Statistik historis in-sample, bukan jaminan.','Soal edge'):''}
   </section>
   <section class="panel"><p class="eyebrow">Grafik IHSG</p>
-    <div id="ihsgPolaChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+    <div id="ihsgPolaChips" class="chip-rail"></div>
     <div id="ihsgChart"></div><div id="ihsgRibbon"></div></section>
   <div id="ihsgBreadth"></div>
   <section class="panel panel-quiet"><p class="eyebrow">Insight Pasar (Naratif)</p>
@@ -6040,6 +6089,27 @@ function _buildBeliAman(d){
 // diukur, tidak ada angka sama sekali. Angka keyakinan karangan adalah
 // kebohongan yang paling sulit dibantah pembaca -- ia terlihat persis
 // seperti hasil perhitungan.
+// Kolom kosong WAJIB menyebut sebabnya. "tidak ada" tanpa keterangan
+// terbaca seperti data yang gagal dimuat, padahal ia keputusan -- dan
+// penulis memang membacanya begitu ("kok belinya ga ada?").
+function _kosongBeralasan(panjang, pendek){
+  const t=(panjang||'').replace(/"/g,'&quot;');
+  return `<span class="muted" style="font-size:11.5px;font-weight:400" title="${t}">belum ada`
+    + `<br><span style="font-size:10px">${pendek}</span></span>`;
+}
+// Tren Dow ditampilkan di samping vonis suara. Keduanya bisa BERBEDA --
+// vonis dari tujuh indikator, tren dari bentuk puncak & lembah -- dan
+// ketika beli/jual dihapus karena trennya, pembaca harus bisa melihat
+// alasannya di layar yang sama.
+const _TREN_LABEL={naik:'tren naik',turun:'tren turun',mendatar:'tren mendatar'};
+function _chipTren(r){
+  if(!r.tren) return '';
+  const w=r.tren==='naik'?'var(--bull)':r.tren==='turun'?'var(--bear)':'var(--muted)';
+  const judul=(r.tren_alasan||'')+(r.tren_garis?` \u00b7 garis tren ${fmt(r.tren_garis)}`:'')
+    +(r.tren_tembus?' \u00b7 sudah ditembus':'');
+  return `<span class="chip" style="font-size:10.5px;border-color:${w};color:${w}"
+    title="Menurut Dow: puncak & lembah yang sama-sama menaik/menurun. ${judul.replace(/"/g,'&quot;')}">${_TREN_LABEL[r.tren]}</span>`;
+}
 const _BIAS_WARNA={bullish:'var(--bull)',bearish:'var(--bear)',netral:'var(--gold)'};
 const _BIAS_LABEL={bullish:'CONDONG NAIK',bearish:'CONDONG TURUN',netral:'BELUM JELAS'};
 function _buildRencana(d){
@@ -6074,15 +6144,14 @@ function _buildRencana(d){
     <p class="eyebrow">Rencana dari Chart</p>
     <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:2px 0 10px">
       <span style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:800;color:${w}">${_BIAS_LABEL[r.bias]}</span>
+      ${_chipTren(r)}
       ${r.pola_utama?`<span class="chip" style="font-size:10.5px">${r.pola_utama}</span>`:''}
     </div>
     ${r.terlalu_sempit?`<div style="background:rgba(199,154,42,.1);border:1px solid rgba(199,154,42,.35);border-radius:8px;padding:8px 11px;margin-bottom:10px;font-size:11.5px;line-height:1.55">
       <b>Jaraknya terlalu sempit.</b> Potensi untungnya lebih kecil daripada risikonya \u2014 angka di bawah cuma batas, bukan peluang.</div>`:''}
     <div style="display:flex;gap:12px;flex-wrap:wrap">
-      ${sel3('BELI DI', r.beli?rp(r.beli.harga)+sel(r.beli):kosong, r.beli?'var(--bull)':'')}
-      ${sel3('JUAL DI', r.jual?rp(r.jual.harga)+sel(r.jual)
-          :`<span class="muted" style="font-size:11.5px;font-weight:400">belum ada<br><span style="font-size:10px">tekanan beli belum melemah</span></span>`,
-        r.jual?'var(--bear)':'')}
+      ${sel3('BELI DI', r.beli?rp(r.beli.harga)+sel(r.beli):_kosongBeralasan(r.alasan_tanpa_beli,'tren sedang turun'), r.beli?'var(--bull)':'')}
+      ${sel3('JUAL DI', r.jual?rp(r.jual.harga)+sel(r.jual):_kosongBeralasan(r.alasan_tanpa_jual,'tekanan beli belum melemah'), r.jual?'var(--bear)':'')}
       ${sel3('BATAL DI', rp(r.invalidasi)+selAbs(r.invalidasi), 'var(--gold)')}
       ${(r.target||[]).length?sel3('TARGET',(r.target||[]).slice(0,2).map(rp).join(' \u00b7 '),''):''}
     </div>
@@ -7408,7 +7477,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v80';
+const APP_VERSION='v82';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
