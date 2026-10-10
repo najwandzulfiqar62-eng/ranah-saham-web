@@ -36,13 +36,23 @@ from core.stock_data import load_tickers  # noqa: E402
 HORIZON = 20
 MIN_BAR = 120
 EKOR = 260
+# CAKUPAN DIBATASI, dan batasnya disebut di hasilnya.
+#
+# detect_harmonic memakan 117 ms per bar -- ia menelusuri kombinasi lima
+# pivot, bukan menghitung satu rumus. Universe penuh x 250 bar = enam
+# jam. Dibatasi ke 250 emiten paling likuid x 150 bar (~70 menit), dan
+# angka yang dihasilkan HANYA berlaku untuk emiten likuid. Menyebutnya
+# berlaku umum akan menjanjikan yang tidak diuji -- saham sepi punya
+# harga penutupan yang tidak mencerminkan harga yang bisa didapat.
+N_EMITEN = 250
+SCAN_BAR = 150
 KELUARAN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "hasil_ukur_harmonic.json")
 
 
 def main():
-    tk = load_tickers()
-    print(f"universe: {len(tk)}", flush=True)
+    tk = load_tickers()[:N_EMITEN]
+    print(f"universe: {len(tk)} (dibatasi, lihat catatan modul)", flush=True)
     raw = yf.download(tk, period="2y", interval="1d", progress=False,
                       auto_adjust=False, threads=True, group_by="ticker")
 
@@ -68,14 +78,16 @@ def main():
     hasil = defaultdict(list)
     t0 = time.time()
     for n_e, (kode, df) in enumerate(deret.items(), 1):
-        if n_e % 50 == 0:
-            print(f"  {n_e}/{len(deret)}  {time.time()-t0:.0f}s", flush=True)
+        if n_e % 25 == 0:
+            sisa = (time.time() - t0) / n_e * (len(deret) - n_e)
+            print(f"  {n_e}/{len(deret)}  {time.time()-t0:.0f}s "
+                  f"(sisa ~{sisa/60:.0f} mnt)", flush=True)
         c = df["Close"].tolist()
         tg = [str(x)[:10] for x in df.index]
         n = len(c)
         terlihat = set()
         jeda = defaultdict(lambda: -999)
-        for i in range(MIN_BAR, n - HORIZON):
+        for i in range(max(MIN_BAR, n - SCAN_BAR - HORIZON), n - HORIZON):
             a = max(0, i - EKOR + 1)
             try:
                 pol = detect_harmonic(df.iloc[a:i + 1], maks=2) or []
