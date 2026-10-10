@@ -163,14 +163,15 @@ def test_sinyal_di_cache():
 def test_sinyal_dihitung_di_worker_thread():
     """Tiga detik di event loop membekukan SELURUH server, bukan cuma
     chart yang memintanya."""
-    # Dipanggil TIDAK LANGSUNG sekarang: seluruh lapisan gambar lahir
-    # dari satu panggilan thread lewat _chart_overlay_payload, supaya
-    # 171 ms kerja Python murni tidak lagi menahan event loop tiap kali
-    # chart menyegarkan dirinya (tiap 30 detik, per penonton).
+    # DUA lapisan, dua perlakuan, dan keduanya di luar event loop:
+    #   - lapisan ringan (pola/harmonic/S-R/rencana, 171 ms) dihitung
+    #     di worker thread dan DITUNGGU
+    #   - lapisan sinyal (3,2 detik) dihitung di worker thread tapi
+    #     TIDAK ditunggu; ia menyusul lewat cache-nya sendiri
     src = inspect.getsource(app_module.ohlc)
     assert "asyncio.to_thread(_chart_overlay_payload" in src
-    ovl = inspect.getsource(app_module._chart_overlay_payload)
-    assert "_sinyal_chart_payload(" in ovl
+    latar = inspect.getsource(app_module._sinyal_chart_latar)
+    assert "asyncio.to_thread(_sinyal_chart_payload" in latar
 
 
 def test_sinyal_payload_sinkron():
@@ -309,3 +310,141 @@ def test_harmonic_tetap_dikirim_sbg_lapisan_terpisah():
     # Penggambar sinyal tidak menyentuh data harmonic.
     i = js.index("function _gambarSinyal(")
     assert "harm" not in js[i:i + 900].lower()
+
+
+# ---------------------------------------------------------------------------
+# Kepadatan chart: lebih sedikit tampil sekaligus, TIDAK ada yang dibuang
+# ---------------------------------------------------------------------------
+
+def _js():
+    return open("web/static/app.js", encoding="utf-8").read()
+
+
+def test_sr_dibatasi_dua_per_sisi_secara_bawaan():
+    """GEJALA: tangkapan layar penulis menunjukkan dua belas label
+    berebut ruang di sumbu harga, beberapa saling menimpa sampai
+    angkanya tidak terbaca. Chart yang labelnya tidak terbaca lebih
+    buruk daripada chart dengan lebih sedikit garis."""
+    js = _js()
+    i = js.index("function _gambarSR(")
+    blok = js[i:js.index("/* ---- Area beli", i)]
+    assert "slice(0,2)" in blok and "slice(-2)" in blok
+    assert "st.srPenuh" in blok, "harus ada jalan untuk menampilkan semuanya"
+
+
+def test_sinyal_dibatasi_empat_terakhir_secara_bawaan():
+    js = _js()
+    i = js.index("function _gambarSinyal(")
+    blok = js[i:js.index("/* ---- Pola ----", i)]
+    assert "slice(-4)" in blok
+    assert "st.sinyalPenuh" in blok
+
+
+def test_tidak_ada_yang_dibuang_hanya_disembunyikan():
+    """Permintaan penulis: "bikin lebih friendly tapi fungsi jangan di
+    hilangkan". Pembatasan hanya boleh di TAMPILAN -- datanya tetap utuh
+    dan tetap bisa dimunculkan."""
+    js = _js()
+    assert "data-srpenuh" in js and "data-sgpenuh" in js
+    assert "Semua level" in js and "Semua sinyal" in js
+    # Ringkasan tetap menghitung SELURUH sinyal, bukan yang tampil saja.
+    i = js.index("const sg=st.sinyal||[];")
+    assert "sg.filter(x=>x.hasil_pct!=null)" in js[i:i + 700]
+
+
+def test_toggle_level_memasang_ulang_garis_BATAL():
+    """CACAT YANG HAMPIR TERKIRIM. _gambarSR menghapus SELURUH price-line
+    miliknya, termasuk garis BATAL yang dipasang _gambarRencana. Tanpa
+    dipasang ulang, BATAL hilang diam-diam setiap kali tombol "Semua
+    level" ditekan -- tanpa error, dan tanpa ada yang menyadarinya
+    sampai seseorang bertanya ke mana garis stopnya."""
+    js = _js()
+    # Yang diperiksa LISTENER-nya, bukan markup chip-nya. "data-srpenuh"
+    # muncul dua kali; yang pertama cuma atribut tombol.
+    i = js.index("querySelectorAll('[data-srpenuh]')")
+    blok = js[i:js.index("querySelectorAll('[data-sgpenuh]')", i)]
+    assert "_gambarSR(" in blok
+    assert "_gambarRencana(" in blok, "BATAL tidak dipasang ulang"
+    assert "_renderPolaChips(" in blok, "tulisan tombolnya tidak akan berubah"
+
+
+def test_pilihan_kepadatan_direset_tiap_ganti_saham():
+    """Kalau terbawa, orang yang pernah menekan "Semua level" di satu
+    saham akan mendapati chart saham berikutnya penuh garis tanpa tahu
+    sebabnya."""
+    js = _js()
+    i = js.index("function _pasangOverlay(")
+    blok = js[i:i + 1200]
+    assert "st.srPenuh=false" in blok and "st.sinyalPenuh=false" in blok
+
+
+def test_xabcd_mati_secara_bawaan():
+    """Lapisan paling berat secara visual, dan keunggulannya BELUM
+    terukur. Menyalakannya secara bawaan berarti memajang garis paling
+    ramai untuk hal yang paling sedikit diketahui."""
+    js = _js()
+    i = js.index("st.harm=o.harmonic")
+    assert "_gambarHarmonic(kunci, -1)" in js[i:i + 500]
+    # ...tapi chip-nya tetap ada.
+    assert "data-harm" in js
+
+
+def test_penanda_sinyal_tidak_lagi_mengulang_harga():
+    """Posisi panah di chart sudah menunjukkan harganya; menuliskannya
+    lagi membuat tiap penanda tiga kali lebih panjang, dan ada empat di
+    layar sekaligus."""
+    js = _js()
+    i = js.index("function _gambarSinyal(")
+    blok = js[i:js.index("/* ---- Pola ----", i)]
+    assert "text:`${x.jenis}${ekor}`" in blok
+    assert "_rpT(x.harga)" not in blok
+
+
+# ---------------------------------------------------------------------------
+# Lapisan sinyal menyusul, tidak menahan
+# ---------------------------------------------------------------------------
+
+def test_sinyal_tidak_menahan_pembukaan_chart():
+    """UKURAN NYATA: pemindaian sinyal 18,7 ms x 170 bar = 3,2 detik
+    kerja Python MURNI. Memindahkannya ke worker thread saja tidak
+    cukup -- Python tidak menjalankan kerja CPU secara paralel (GIL),
+    jadi sepuluh orang yang membuka chart saham berbeda bersamaan tetap
+    berarti 32 detik berurutan.
+
+    Diukur sesudah diperbaiki: pembukaan pertama 1,0-1,6 detik (dari
+    3,5-4 detik), pembukaan berikutnya 73-102 ms."""
+    src = inspect.getsource(app_module.ohlc)
+    assert "_jalankan_latar(_sinyal_chart_latar" in src
+    # Dan ia TIDAK ditunggu -- kalau di-await, tidak ada yang berubah.
+    assert "await _sinyal_chart_latar" not in src
+
+
+def test_sinyal_kosong_TIDAK_ikut_tercache_di_overlay():
+    """CACAT YANG DICEGAH: kalau daftar sinyal kosong ikut tersimpan di
+    cache overlay, ia terkunci selama TTL overlay (15 menit) -- sehingga
+    segitiganya tidak pernah muncul walau penghitungannya selesai dua
+    detik kemudian. Tanpa error apa pun."""
+    ovl = inspect.getsource(app_module._chart_overlay_payload)
+    assert '"sinyal"' not in ovl, "sinyal tidak boleh disimpan di overlay"
+    src = inspect.getsource(app_module.ohlc)
+    assert 'sinyal = _cache_get(f"sinyalchart:' in src
+
+
+def test_tugas_latar_dipegang_rujukannya():
+    """asyncio hanya memegang rujukan LEMAH ke tugas yang berjalan.
+    Tugas yang tidak dipegang siapa pun bisa dibuang pemulung memori di
+    tengah jalan -- dan gejalanya paling jahat: tidak selalu terjadi,
+    dan ketika terjadi tidak ada error, sinyalnya cuma kadang tidak
+    pernah muncul."""
+    src = inspect.getsource(app_module._jalankan_latar)
+    assert "_TUGAS_LATAR.add" in src
+    assert "add_done_callback" in src, "rujukan harus dilepas saat selesai"
+
+
+def test_penghitungan_latar_tidak_dijadwalkan_berulang():
+    """Chart menyegarkan dirinya tiap 30 detik. Tanpa penjaga, pembukaan
+    yang sama menjadwalkan penghitungan 3 detik berkali-kali sebelum
+    yang pertama sempat selesai."""
+    src = inspect.getsource(app_module._sinyal_chart_latar)
+    assert "_SINYAL_SEDANG_DIHITUNG" in src
+    assert "finally:" in src, "penjaga harus dilepas walau gagal"

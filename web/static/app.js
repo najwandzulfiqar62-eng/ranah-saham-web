@@ -745,7 +745,22 @@ function _gambarSR(kunci, sr){
   if(!st.cs)return;
   _ovlBersihHarga(st);
   st.sr=sr||[];
-  for(const L of st.sr){
+  // HANYA 2 TERDEKAT PER SISI secara bawaan.
+  //
+  // Dihitung dari tangkapan layar penulis: delapan garis S/R + BATAL +
+  // PRZ + MA20 + MA50 = dua belas label berebut ruang di sumbu harga,
+  // beberapa saling menimpa sampai angkanya tidak terbaca. Chart yang
+  // labelnya tidak terbaca lebih buruk daripada chart dengan lebih
+  // sedikit garis.
+  //
+  // Tidak ada yang DIBUANG: level jauh tetap ada di data dan muncul
+  // begitu "Semua level" ditekan. Yang berubah cuma berapa yang tampil
+  // sekaligus -- dan dua terdekat per sisi memang yang menentukan
+  // keputusan minggu ini.
+  const _atas=st.sr.filter(x=>x.tipe==='resistance').slice(0,2);
+  const _bawah=st.sr.filter(x=>x.tipe==='support').slice(-2);
+  const tampil = st.srPenuh ? st.sr : _atas.concat(_bawah);
+  for(const L of tampil){
     const res=L.tipe==='resistance';
     // Judulnya memakai NAMA level, bukan cuma "R"/"S". "Dasar Mayor"
     // dan "Support Terdekat" menjawab pertanyaan yang berbeda, dan
@@ -858,7 +873,14 @@ function _gambarHarmonic(kunci, idx){
 function _gambarSinyal(kunci, sinyal){
   const st=_ovlState(kunci);
   if(!st.cs)return;
-  const list=(sinyal||[]);
+  const semua=(sinyal||[]);
+  // EMPAT TERAKHIR SAJA secara bawaan. Dihitung dari tangkapan layar
+  // penulis: sembilan penanda berteks panjang saling menimpa sampai
+  // tidak terbaca, dan sinyal dari enam bulan lalu tidak menolong
+  // keputusan hari ini. Sisanya tetap terhitung di ringkasan
+  // "x sinyal · y/z arahnya benar", dan tampil utuh lewat tombol
+  // "Semua sinyal" -- tidak ada yang dibuang, cuma tidak sekaligus.
+  const list = st.sinyalPenuh ? semua : semua.slice(-4);
   if(!list.length){ try{st.cs.setMarkers([])}catch(e){} return }
   // LABELNYA REKAMAN, BUKAN PERINTAH.
   //
@@ -876,20 +898,23 @@ function _gambarSinyal(kunci, sinyal){
   const tanda=list.map(x=>{
     const beli=x.jenis==='BELI';
     let ekor='';
-    if(x.hasil_pct==null){
-      ekor=' · blm genap';          // belum cukup umur untuk dinilai
-    }else{
+    if(x.hasil_pct!=null){
       // BENAR untuk sinyal beli = harga NAIK; untuk sinyal jual =
       // harga TURUN. Tanpa pembedaan ini, "+1,4%" pada sinyal jual
       // akan terbaca seolah sinyalnya berhasil.
       const benar = beli ? x.hasil_pct>0 : x.hasil_pct<0;
-      const n = (x.hasil_pct>=0?'+':'')+fmt(x.hasil_pct,1)+'%';
-      ekor = ` ${benar?'✓':'✗'} ${n}`;
+      // Dibulatkan ke bilangan bulat: satu angka di belakang koma tidak
+      // mengubah keputusan siapa pun, tapi memanjangkan tiap penanda --
+      // dan ada empat di layar sekaligus.
+      ekor = ` ${benar?'✓':'✗'}${x.hasil_pct>=0?'+':''}${Math.round(x.hasil_pct)}%`;
     }
+    // Harganya TIDAK ditulis lagi: posisi panah di chart sudah
+    // menunjukkannya, dan "BELI Rp860 ✓ +13,4%" tiga kali lebih panjang
+    // daripada yang perlu dibaca sekilas.
     return {time:x.t, position:beli?'belowBar':'aboveBar',
             color:beli?'#2FB57E':'#E0566B',
             shape:beli?'arrowUp':'arrowDown',
-            text:`${x.jenis} ${_rpT(x.harga)}${ekor}`};
+            text:`${x.jenis}${ekor}`};
   });
   try{ st.cs.setMarkers(tanda) }catch(e){ console.warn('sinyal: panah gagal',e) }
 }
@@ -960,7 +985,20 @@ function _renderPolaChips(kunci){
     }).join(''));
     bagian.push(`<button class="chip" data-ovl="${kunci}" data-pola="-1">Sembunyikan pola</button>`);
   }
+  // Tombol kepadatan. Tidak menambah informasi apa pun -- cuma
+  // mengatur berapa banyak yang tampil sekaligus.
+  const nLevel=(st.sr||[]).length;
+  if(nLevel>4){
+    bagian.push(`<button class="chip ${st.srPenuh?'active':''}" data-srpenuh="1"
+      title="Menampilkan seluruh level support &amp; resistance, termasuk yang jauh dari harga sekarang">
+      ${st.srPenuh?'Level penting saja':`Semua level (${nLevel})`}</button>`);
+  }
   const sg=st.sinyal||[];
+  if(sg.length>4){
+    bagian.push(`<button class="chip ${st.sinyalPenuh?'active':''}" data-sgpenuh="1"
+      title="Menampilkan seluruh sinyal, termasuk yang sudah lama">
+      ${st.sinyalPenuh?'Sinyal terbaru saja':`Semua sinyal (${sg.length})`}</button>`);
+  }
   if(sg.length){
     const h=sg.filter(x=>x.hasil_pct!=null);
     const benar=h.filter(x=>x.jenis==='BELI'?x.hasil_pct>0:x.hasil_pct<0).length;
@@ -1006,6 +1044,22 @@ ${ras}">
       + bagianSR.join(' <span class="muted">·</span> ') + `</span>`);
   }
   box.innerHTML=bagian.join('');
+  box.querySelectorAll('[data-srpenuh]').forEach(b=>b.addEventListener('click',()=>{
+    const s2=_ovlState(kunci);
+    s2.srPenuh=!s2.srPenuh;
+    _gambarSR(kunci, s2.sr);
+    // _gambarSR menghapus SELURUH price-line miliknya, termasuk garis
+    // BATAL yang dipasang _gambarRencana. Tanpa dipasang ulang di sini,
+    // BATAL hilang diam-diam tiap kali tombol ini ditekan.
+    _gambarRencana(kunci, s2.rencana);
+    _renderPolaChips(kunci);   // kalau tidak, tulisan tombolnya tak berubah
+  }));
+  box.querySelectorAll('[data-sgpenuh]').forEach(b=>b.addEventListener('click',()=>{
+    const s2=_ovlState(kunci);
+    s2.sinyalPenuh=!s2.sinyalPenuh;
+    _gambarSinyal(kunci, s2.sinyal);
+    _renderPolaChips(kunci);
+  }));
   box.querySelectorAll('[data-harm]').forEach(b=>b.addEventListener('click',()=>{
     _gambarHarmonic(kunci, Number(b.dataset.harm));
   }));
@@ -1022,6 +1076,10 @@ function _pasangOverlay(kunci, chart, cs, o, chipsSel){
   const st=_ovlState(kunci);
   st.chart=chart; st.cs=cs; st.chips=chipsSel;
   st.seri=[]; st.garisHarga=[]; st.aktif=0;
+  // Pilihan kepadatan DIKEMBALIKAN ke bawaan tiap ganti saham. Kalau
+  // terbawa, orang yang pernah menekan "Semua level" di satu saham akan
+  // mendapati chart saham berikutnya penuh garis tanpa tahu sebabnya.
+  st.srPenuh=false; st.sinyalPenuh=false;
   st.tAkhir=(o.candles&&o.candles.length)?o.candles[o.candles.length-1].time:null;
   st.rencana=o.rencana||null;
   st.data=(o.pola||[]).filter(p=>(p.garis||[]).length);
@@ -1034,7 +1092,11 @@ function _pasangOverlay(kunci, chart, cs, o, chipsSel){
   st.sinyal=o.sinyal||[];
   _gambarSinyal(kunci, st.sinyal);
   st.harm=o.harmonic||[]; st.harmSeri=[]; st.harmGaris=[];
-  _gambarHarmonic(kunci, st.harm.length?0:-1);
+  // XABCD MATI secara bawaan. Ia lapisan paling berat secara visual --
+  // garis putus-putus melintang seluruh chart plus satu garis PRZ --
+  // dan keunggulannya pun belum terukur. Chip-nya tetap ada, satu
+  // ketukan, jadi tidak ada yang hilang.
+  _gambarHarmonic(kunci, -1);
   if(st.data.length) _gambarPola(kunci,0); else _renderPolaChips(kunci);
 }
 
@@ -7300,7 +7362,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v77';
+const APP_VERSION='v78';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

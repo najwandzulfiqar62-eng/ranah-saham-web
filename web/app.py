@@ -2275,13 +2275,50 @@ def _chart_overlay_payload(kode: str, df) -> dict:
     out = {
         "pola": pola, "harmonic": harmonic, "sr": sr,
         "rencana": _rencana_chart_payload(df, pola, sr),
-        # Sinyal punya cache sendiri (TTL lebih panjang, 1 jam) karena
-        # ongkosnya jauh lebih besar lagi; dipanggil di sini supaya
-        # seluruh lapisan gambar lahir dari satu panggilan thread.
-        "sinyal": _sinyal_chart_payload(kode, df),
+        # SINYAL SENGAJA TIDAK DISIMPAN DI SINI -- lihat catatan di ohlc().
+        # Kalau ia ikut tersimpan, daftar kosong pada pembukaan pertama
+        # akan ikut terkunci selama TTL overlay (15 menit), sehingga
+        # segitiganya tidak pernah muncul walau penghitungannya sudah
+        # selesai dua detik kemudian.
     }
     _cache_set(kunci, out, ttl=_CHART_OVERLAY_TTL)
     return out
+
+
+_SINYAL_SEDANG_DIHITUNG: set = set()
+# Rujukan tugas latar DIPEGANG di sini, dan itu bukan kerapian belaka:
+# asyncio hanya memegang rujukan LEMAH ke tugas yang sedang berjalan,
+# jadi tugas yang tidak dipegang siapa pun bisa dibuang pemulung memori
+# di tengah jalan. Gejalanya paling jahat -- ia tidak selalu terjadi,
+# dan ketika terjadi tidak ada error apa pun: sinyalnya cuma kadang
+# tidak pernah muncul.
+_TUGAS_LATAR: set = set()
+
+
+def _jalankan_latar(coro) -> None:
+    t = asyncio.create_task(coro)
+    _TUGAS_LATAR.add(t)
+    t.add_done_callback(_TUGAS_LATAR.discard)
+
+
+async def _sinyal_chart_latar(kode: str, df) -> None:
+    """Hitung sinyal di latar belakang, sekali per emiten.
+
+    Penjaga `_SINYAL_SEDANG_DIHITUNG` itu single-flight sederhana: chart
+    menyegarkan dirinya tiap 30 detik, dan tanpa penjaga ini pembukaan
+    yang sama akan menjadwalkan penghitungan 3 detik berulang kali
+    sebelum yang pertama sempat selesai.
+    """
+    k = (kode or "").upper()
+    if k in _SINYAL_SEDANG_DIHITUNG:
+        return
+    _SINYAL_SEDANG_DIHITUNG.add(k)
+    try:
+        await asyncio.to_thread(_sinyal_chart_payload, kode, df)
+    except Exception as e:
+        print(f"⚠️ sinyal-chart {k}: {type(e).__name__}: {e}")
+    finally:
+        _SINYAL_SEDANG_DIHITUNG.discard(k)
 
 
 def _harmonic_chart_payload(df, maks: int = 2) -> list:
@@ -2552,7 +2589,25 @@ async def ohlc(kode: str, days: int = 140):
     harmonic = [dict(h) for h in (ovl.get("harmonic") or [])]
     sr = ovl.get("sr") or {}
     rencana = ovl.get("rencana") or {}
-    sinyal = ovl.get("sinyal") or []
+
+    # SINYAL DIBACA DARI CACHE-NYA SENDIRI, bukan dari overlay.
+    #
+    # Ongkosnya 18,7 ms x 170 bar = 3,2 detik kerja Python MURNI.
+    # Memindahkannya ke worker thread saja tidak cukup: Python tidak
+    # menjalankan kerja CPU secara paralel (GIL), jadi sepuluh orang
+    # yang membuka chart saham berbeda bersamaan tetap berarti 32 detik
+    # berurutan, dan event loop ikut tersendat di sela pergantian GIL.
+    #
+    # Jadi lapisan ini MENYUSUL: chart tampil seketika tanpa segitiga,
+    # penghitungannya berjalan di latar, dan penyegaran 30 detik
+    # berikutnya sudah membawanya. Yang ditukar: segitiga terlambat
+    # setengah menit pada pembukaan PERTAMA sebuah saham. Yang didapat:
+    # tidak ada yang menunggu empat detik, dan tidak ada lonjakan CPU
+    # yang menahan pengguna lain.
+    sinyal = _cache_get(f"sinyalchart:v3:{label.upper()}")
+    if sinyal is None:
+        sinyal = []
+        _jalankan_latar(_sinyal_chart_latar(label, df))
 
     # Jendela candle DIPERPANJANG kalau polanya mulai lebih awal. Tanpa
     # ini garis polanya terpotong di tepi kiri chart -- dan garis yang
