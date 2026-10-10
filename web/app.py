@@ -1137,15 +1137,6 @@ def _forum_rate_limit(request: Request):
         pass  # Redis down -- fail open, konsisten dgn limiter global
 
 
-def _forum_is_admin(admin_code: str | None) -> bool:
-    """Kode kosong ATAU FORUM_ADMIN_SECRET belum di-set -> SELALU False
-    (fail-closed) -- SEBELUM compare_digest, supaya hmac.compare_digest
-    ("","") == True tidak pernah jadi celah kalau secret env lupa diisi."""
-    from core.config import FORUM_ADMIN_SECRET
-    if not admin_code or not FORUM_ADMIN_SECRET:
-        return False
-    return hmac.compare_digest(admin_code, FORUM_ADMIN_SECRET)
-
 
 def _forum_text(value, max_len: int, label: str) -> str:
     v = (value or "").strip()
@@ -1220,7 +1211,6 @@ async def _forum_request_body(request: Request) -> dict:
             "judul": form.get("judul"),
             "isi": form.get("isi"),
             "kategori": form.get("kategori"),
-            "admin_code": form.get("admin_code"),
             "image_data": await _forum_save_uploads(files),
             "_image_data_ready": True,
         }
@@ -1245,18 +1235,18 @@ def _forum_images_out(value) -> list[str]:
     return [v]
 
 
-def _forum_admin_flag(body: dict) -> bool:
-    """Kode kosong/whitespace -> posting biasa (bukan error). Kode ADA
-    tapi SALAH -> error eksplisit (bukan diam2 turun jadi non-admin) --
-    supaya admin sadar kalau salah ketik, bukan bingung kenapa postingnya
-    tidak dapat badge."""
-    code = (body.get("admin_code") or "").strip()
-    if not code:
-        return False
-    if not _forum_is_admin(code):
-        raise HTTPException(400, "Kode admin salah.")
-    return True
-
+# CATATAN: _forum_is_admin()/_forum_admin_flag() DIBUANG 12 Okt 2026.
+#
+# Keduanya memeriksa "admin_code" yang dikirim klien di badan permintaan,
+# dan keduanya SUDAH TIDAK PERNAH DIPANGGIL sejak gerbang akses dipasang
+# -- status admin kini diambil dari SESI (user["is_admin"]), yang tidak
+# bisa dipalsukan klien.
+#
+# Dibuang, bukan dibiarkan. Kode mati yang BERBENTUK pemeriksaan
+# keamanan lebih berbahaya daripada kode mati biasa: orang berikutnya
+# bisa menyambungkannya kembali karena mengira ia masih menjaga sesuatu,
+# padahal mekanisme sebenarnya sudah pindah. Tesnya ikut ditulis ulang
+# supaya membuktikan hal yang benar: admin_code dari klien DIABAIKAN.
 
 # Set kategori TETAP (bukan tabel dinamis) -- cukup utk skala forum ini,
 # divalidasi thd dict ini di endpoint (bukan di core/forum.py, modul data

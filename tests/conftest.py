@@ -135,11 +135,117 @@ def no_network(monkeypatch, fake_df):
     yield
 
 
+def masuk_admin(c):
+    """Masukkan sebuah TestClient sebagai admin tes.
+
+    Dipisah dari fixture `client` supaya tes yang WAJIB membuat
+    TestClient sendiri -- mis. yang butuh raise_server_exceptions=False
+    -- tidak perlu menyalin langkah masuknya. Langkah yang disalin
+    adalah langkah yang akan terlupa di salinan berikutnya.
+    """
+    from core.access import ensure_access_tables, ensure_bootstrap_admin
+    ensure_access_tables()
+    ensure_bootstrap_admin()
+    r = c.post("/api/access/login", json={
+        "login": os.environ["ACCESS_ADMIN_EMAIL"],
+        "password": os.environ["ACCESS_ADMIN_PASSWORD"],
+    })
+    assert r.status_code == 200, (
+        f"gagal masuk ({r.status_code}): {r.text[:200]}")
+    return c
+
+
 @pytest.fixture
 def client():
+    """TestClient yang SUDAH MASUK sebagai admin tes.
+
+    KENAPA BERUBAH. Fixture ini dulu cuma `TestClient(app)` -- tanpa
+    login sama sekali. Sesudah gerbang akses dipasang, SELURUH endpoint
+    ber-gerbang membalas 401, dan 90 tes di test_forum.py & test_api.py
+    gagal: 24 "401 Unauthorized", 17 "KeyError: 'id'" (respons 401 tidak
+    punya medan itu), sisanya 401 di tempat 200/400/404 diharapkan.
+
+    Sembilan puluh tes yang gagal karena GERBANG, bukan karena kode yang
+    diujinya, adalah sembilan puluh tes yang berhenti menjaga apa pun --
+    dan mereka sudah berbulan-bulan jadi "baseline" yang dilewati begitu
+    saja. Itu lebih buruk daripada tidak punya tes: ia membuat regresi
+    di forum dan API tidak terlihat.
+
+    Akun & cookie non-secure-nya sudah disiapkan di kepala berkas ini
+    (ACCESS_ADMIN_EMAIL/PASSWORD/ACCESS_COOKIE_SECURE); yang hilang cuma
+    langkah masuknya.
+    """
+    from core.access import ensure_access_tables, ensure_bootstrap_admin
     from web.app import app
 
-    return TestClient(app)
+    # Admin bootstrap dibuat di _lifespan, dan _lifespan TIDAK berjalan
+    # kalau TestClient dipakai tanpa `with` -- itu sebabnya login
+    # membalas 403 "password tidak tepat": akunnya memang belum ada.
+    #
+    # Dipanggil LANGSUNG, bukan dengan menjalankan lifespan: lifespan
+    # ikut menyalakan enam loop latar (pemanas cache, siaran WhatsApp,
+    # pemindai sinyal) yang akan menembak jaringan sungguhan dan membuat
+    # tes lambat sekaligus tak menentu.
+    ensure_access_tables()
+    ensure_bootstrap_admin()
+
+    c = TestClient(app)
+    r = c.post("/api/access/login", json={
+        "login": os.environ["ACCESS_ADMIN_EMAIL"],
+        "password": os.environ["ACCESS_ADMIN_PASSWORD"],
+    })
+    # TIDAK didiamkan kalau gagal. Fixture yang diam-diam gagal masuk
+    # akan membuat seluruh tes gagal dengan 401 lagi, dan sebabnya
+    # kembali tersembunyi -- persis keadaan yang baru saja diperbaiki.
+    assert r.status_code == 200, (
+        f"fixture client gagal masuk ({r.status_code}): {r.text[:200]}")
+    return c
+
+
+@pytest.fixture
+def client_biasa():
+    """TestClient yang masuk sebagai pengguna BIASA (bukan admin).
+
+    Dipakai menguji OTORISASI. Sebelum gerbang akses ada, tes forum
+    menguji hal itu lewat "kode admin" di badan permintaan; sekarang
+    servernya memakai `user["is_admin"]` dari SESI dan mengabaikan klaim
+    klien sepenuhnya -- lebih aman, tapi berarti tes lamanya tidak bisa
+    lagi menguji apa pun dengan cara itu.
+
+    Invariannya tetap sama dan tetap layak dijaga: yang bukan admin
+    TIDAK boleh menghapus utas atau balasan orang lain. Yang berubah
+    cuma cara membuktikannya.
+    """
+    from core.access import (create_session_for_user, ensure_access_tables,
+                             register_user)
+    from core.database import get_db
+    from web.app import app
+
+    ensure_access_tables()
+    email = "pengguna-biasa-test@example.com"
+    try:
+        # Nomor HP wajib & harus berformat Indonesia (_normalize_phone).
+        # Nomor HP & bukti grup WhatsApp keduanya WAJIB di pendaftaran
+        # sungguhan (_normalize_phone + syarat bukti). Diisi nilai tes;
+        # yang sedang diuji perilaku ENDPOINT terhadap sesi non-admin,
+        # bukan jalur pendaftarannya.
+        register_user("Pengguna Biasa", email, "password-biasa-test",
+                      proof_filename="bukti-tes.jpg",
+                      phone="081200000001")
+    except Exception:
+        pass  # sudah ada dari tes sebelumnya di sesi pytest yang sama
+    # Disetujui LANGSUNG lewat basis data: jalur persetujuan sungguhan
+    # butuh admin menekan tombol, dan itu bukan yang sedang diuji di
+    # sini. Yang diuji perilaku ENDPOINT terhadap sesi non-admin.
+    with get_db() as conn:
+        conn.execute("UPDATE access_user SET status='approved', is_admin=0 "
+                     "WHERE email=?", (email,))
+        uid = conn.execute("SELECT id FROM access_user WHERE email=?",
+                           (email,)).fetchone()[0]
+
+    c = TestClient(app)
+    c.cookies.set("rs_session", create_session_for_user(uid))
+    return c
 
 
 @pytest.fixture

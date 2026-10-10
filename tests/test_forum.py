@@ -16,33 +16,43 @@ _JPEG_DATA_URL = "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
 
 
 def test_create_thread_success(client, clean_forum_db):
-    r = client.post("/api/forum/threads", json={"nama": "Budi", "judul": "Cara baca RSI?", "isi": "Tolong jelaskan RSI dong."})
+    """Identitas penulis datang dari SESI, bukan dari badan permintaan.
+
+    Nama "Budi" sengaja tetap dikirim untuk membuktikan ia DIABAIKAN --
+    itu yang membuat orang tidak bisa menyamar jadi orang lain.
+    """
+    r = client.post("/api/forum/threads", json={
+        "nama": "Budi", "judul": "Cara baca RSI?",
+        "isi": "Tolong jelaskan RSI dong."})
     assert r.status_code == 200
     data = r.json()
-    assert data["nama"] == "Budi"
+    assert data["nama"] != "Budi", "nama dari klien TIDAK boleh dipakai"
+    assert data["nama"] == "Admin Ranah Saham"
     assert data["judul"] == "Cara baca RSI?"
-    assert data["is_admin"] == 0
-
     listing = client.get("/api/forum/threads").json()
-    assert any(t["id"] == data["id"] for t in listing)
+    assert any(x["id"] == data["id"] for x in listing)
 
 
-@pytest.mark.parametrize("field", ["nama", "judul", "isi"])
+# "nama" DIKELUARKAN dari daftar ini: server tidak lagi membacanya dari
+# badan permintaan (identitas datang dari sesi), jadi nama kosong bukan
+# lagi kesalahan masukan -- ia tidak berpengaruh apa-apa. Yang masih
+# divalidasi dari klien cuma judul & isi.
+@pytest.mark.parametrize("field", ["judul", "isi"])
 def test_create_thread_missing_or_blank_field_rejected(client, clean_forum_db, field):
-    body = {"nama": "Budi", "judul": "Judul", "isi": "Isi pertanyaan."}
+    body = {"judul": "Judul", "isi": "Isi pertanyaan."}
     body[field] = "   "  # whitespace-only, harus ditolak sama dgn kosong
     r = client.post("/api/forum/threads", json=body)
     assert r.status_code == 400
 
 
 def test_create_thread_length_limits_rejected(client, clean_forum_db):
-    r = client.post("/api/forum/threads", json={"nama": "A" * 51, "judul": "Judul", "isi": "Isi"})
-    assert r.status_code == 400
-
-    r2 = client.post("/api/forum/threads", json={"nama": "Budi", "judul": "J" * 201, "isi": "Isi"})
+    """Batas panjang nama DIHAPUS dari tes ini: namanya tidak lagi
+    datang dari klien, jadi tidak ada yang bisa dilampaui. Batas judul
+    & isi tetap dijaga -- keduanya masih masukan pengguna."""
+    r2 = client.post("/api/forum/threads", json={"judul": "J" * 201, "isi": "Isi"})
     assert r2.status_code == 400
 
-    r3 = client.post("/api/forum/threads", json={"nama": "Budi", "judul": "Judul", "isi": "I" * 5001})
+    r3 = client.post("/api/forum/threads", json={"judul": "Judul", "isi": "I" * 5001})
     assert r3.status_code == 400
 
 
@@ -55,39 +65,64 @@ def test_create_thread_correct_admin_code_sets_is_admin(client, clean_forum_db):
     assert r.json()["is_admin"] == 1
 
 
-def test_create_thread_wrong_admin_code_rejected_and_nothing_inserted(client, clean_forum_db):
-    r = client.post("/api/forum/threads", json={
-        "nama": "Penipu", "judul": "Palsu", "isi": "Isi.",
-        "admin_code": "kode-salah",
-    })
-    assert r.status_code == 400
+def test_admin_code_dari_klien_DIABAIKAN(client_biasa, clean_forum_db):
+    """PINTU BELAKANG YANG DITUTUP.
 
-    listing = client.get("/api/forum/threads").json()
-    assert not any(t["judul"] == "Palsu" for t in listing), "baris TIDAK BOLEH ke-insert kalau kode admin salah"
+    Dulu badge admin bisa didapat dengan mengirim "admin_code" yang
+    benar di badan permintaan, dan tes lama menjaga agar kode SALAH
+    ditolak. Jalur itu kini mati total (_forum_admin_flag dibuang) --
+    status admin diambil dari sesi.
+
+    Jadi yang diuji sekarang lebih kuat: pengguna biasa yang mengirim
+    admin_code APA PUN, benar atau salah, tetap bukan admin.
+    """
+    for kode in ("test-secret-for-pytest-only", "salah", ""):
+        r = client_biasa.post("/api/forum/threads", json={
+            "judul": f"J-{kode or 'kosong'}", "isi": "I", "admin_code": kode})
+        assert r.status_code == 200, r.text[:200]
+        assert r.json()["is_admin"] == 0, (
+            f"admin_code={kode!r} dari klien memberi badge admin")
 
 
-def test_forum_admin_secret_unset_fails_closed(client, clean_forum_db, monkeypatch):
-    """Regresi footgun: hmac.compare_digest("","") == True -- kalau
-    FORUM_ADMIN_SECRET belum di-set, admin_code KOSONG maupun ISI APA PUN
-    harus SAMA-SAMA ditolak/tidak pernah jadi admin, TIDAK PERNAH lolos
-    diam-diam."""
-    import core.config as cfg
-    monkeypatch.setattr(cfg, "FORUM_ADMIN_SECRET", "")
+def test_status_admin_hanya_dari_sesi(client, client_biasa, clean_forum_db):
+    """Pengganti test_forum_admin_secret_unset_fails_closed.
 
-    r1 = client.post("/api/forum/threads", json={"nama": "A", "judul": "J", "isi": "I", "admin_code": ""})
-    assert r1.status_code == 200
-    assert r1.json()["is_admin"] == 0
+    Tes lamanya menjaga satu footgun nyata: hmac.compare_digest("","")
+    bernilai True, sehingga FORUM_ADMIN_SECRET yang belum diatur bisa
+    membuat kode kosong lolos. Footgun itu hilang bersama jalurnya --
+    tidak ada lagi perbandingan kode.
 
-    r2 = client.post("/api/forum/threads", json={"nama": "A", "judul": "J2", "isi": "I", "admin_code": "anything"})
-    assert r2.status_code == 400, "secret kosong + kode apa pun HARUS ditolak, bukan diam2 lolos"
+    Yang menggantikannya: badge admin HANYA mengikuti sesi, dan itu
+    dibuktikan dari dua sisi sekaligus.
+    """
+    r_admin = client.post("/api/forum/threads",
+                          json={"judul": "dari admin", "isi": "I"})
+    assert r_admin.status_code == 200
+    assert r_admin.json()["is_admin"] == 1
+
+    r_biasa = client_biasa.post("/api/forum/threads",
+                                json={"judul": "dari biasa", "isi": "I"})
+    assert r_biasa.status_code == 200
+    assert r_biasa.json()["is_admin"] == 0
 
 
 def test_create_reply_success(client, clean_forum_db):
-    thread = client.post("/api/forum/threads", json={"nama": "Budi", "judul": "Q", "isi": "I"}).json()
-    r = client.post(f"/api/forum/threads/{thread['id']}/replies", json={"nama": "Ani", "isi": "Jawabannya begini..."})
+    """Nama penulis diambil dari SESI, bukan dari badan permintaan.
+
+    Dulu tes ini mengirim {"nama": "Ani"} dan menuntut balasannya
+    bernama "Ani". Server sekarang memakai user["name"] dari sesi dan
+    MENGABAIKAN nama yang dikirim klien -- itu yang membuat orang tidak
+    bisa menyamar jadi orang lain. Nama yang dikirim sengaja dibiarkan
+    di sini justru untuk membuktikan ia diabaikan.
+    """
+    thread = client.post("/api/forum/threads",
+                         json={"judul": "Q", "isi": "I"}).json()
+    r = client.post(f"/api/forum/threads/{thread['id']}/replies",
+                    json={"nama": "Ani", "isi": "Jawabannya begini..."})
     assert r.status_code == 200
     data = r.json()
-    assert data["nama"] == "Ani"
+    assert data["nama"] != "Ani", "nama dari klien TIDAK boleh dipakai"
+    assert data["nama"] == "Admin Ranah Saham"
     assert data["thread_id"] == thread["id"]
 
 
@@ -240,15 +275,23 @@ def test_thread_detail_404_when_not_found(client, clean_forum_db):
     assert r.status_code == 404
 
 
-def test_delete_thread_requires_correct_admin_code(client, clean_forum_db):
-    thread = client.post("/api/forum/threads", json={"nama": "A", "judul": "Q", "isi": "I"}).json()
+def test_delete_thread_hanya_boleh_admin(client, client_biasa, clean_forum_db):
+    """Invarian yang SAMA dengan tes lamanya, mekanisme yang berbeda.
 
-    r_wrong = client.request("DELETE", f"/api/forum/threads/{thread['id']}", json={"admin_code": "salah"})
-    assert r_wrong.status_code == 400
-    assert client.get(f"/api/forum/threads/{thread['id']}").status_code == 200
+    Dulu: "admin_code" salah -> 400. Sekarang kode itu tidak ada lagi;
+    yang menentukan status admin adalah SESI. Jadi yang diuji: sesi
+    non-admin tidak boleh menghapus, sesi admin boleh.
+    """
+    thread = client.post("/api/forum/threads",
+                         json={"judul": "Q", "isi": "I"}).json()
 
-    r_ok = client.request("DELETE", f"/api/forum/threads/{thread['id']}", json={"admin_code": "test-secret-for-pytest-only"})
-    assert r_ok.status_code == 200
+    r_biasa = client_biasa.request("DELETE", f"/api/forum/threads/{thread['id']}")
+    assert r_biasa.status_code in (401, 403), r_biasa.status_code
+    assert client.get(f"/api/forum/threads/{thread['id']}").status_code == 200, \
+        "utas terhapus oleh yang bukan admin"
+
+    r_admin = client.request("DELETE", f"/api/forum/threads/{thread['id']}")
+    assert r_admin.status_code == 200
     assert client.get(f"/api/forum/threads/{thread['id']}").status_code == 404
 
 
@@ -271,18 +314,17 @@ def test_delete_thread_cascades_replies(client, clean_forum_db):
     assert remaining["c"] == 0, "balasan yatim TIDAK BOLEH tersisa setelah thread induknya dihapus"
 
 
-def test_delete_reply_requires_correct_admin_code(client, clean_forum_db):
-    thread = client.post("/api/forum/threads", json={"nama": "A", "judul": "Q", "isi": "I"}).json()
-    reply = client.post(f"/api/forum/threads/{thread['id']}/replies", json={"nama": "B", "isi": "r1"}).json()
+def test_delete_reply_hanya_boleh_admin(client, client_biasa, clean_forum_db):
+    thread = client.post("/api/forum/threads",
+                         json={"judul": "Q", "isi": "I"}).json()
+    reply = client.post(f"/api/forum/threads/{thread['id']}/replies",
+                        json={"isi": "r1"}).json()
 
-    r_wrong = client.request("DELETE", f"/api/forum/replies/{reply['id']}", json={"admin_code": "salah"})
-    assert r_wrong.status_code == 400
+    r_biasa = client_biasa.request("DELETE", f"/api/forum/replies/{reply['id']}")
+    assert r_biasa.status_code in (401, 403), r_biasa.status_code
 
-    r_ok = client.request("DELETE", f"/api/forum/replies/{reply['id']}", json={"admin_code": "test-secret-for-pytest-only"})
-    assert r_ok.status_code == 200
-
-    detail = client.get(f"/api/forum/threads/{thread['id']}").json()
-    assert detail["replies"] == []
+    r_admin = client.request("DELETE", f"/api/forum/replies/{reply['id']}")
+    assert r_admin.status_code == 200
 
 
 def test_delete_nonexistent_thread_404(client, clean_forum_db):
@@ -428,14 +470,17 @@ def test_upvote_nonexistent_reply_404(client, clean_forum_db):
     assert r.status_code == 404
 
 
-def test_best_answer_requires_correct_admin_code(client, clean_forum_db):
-    thread = client.post("/api/forum/threads", json={"nama": "A", "judul": "Q", "isi": "I"}).json()
-    reply = client.post(f"/api/forum/threads/{thread['id']}/replies", json={"nama": "B", "isi": "jawaban"}).json()
-    r_wrong = client.post(f"/api/forum/replies/{reply['id']}/best-answer", json={"admin_code": "salah"})
-    assert r_wrong.status_code == 400
-    r_ok = client.post(f"/api/forum/replies/{reply['id']}/best-answer", json={"admin_code": "test-secret-for-pytest-only"})
-    assert r_ok.status_code == 200
-    assert r_ok.json()["is_best_answer"] == 1
+def test_best_answer_hanya_boleh_admin(client, client_biasa, clean_forum_db):
+    thread = client.post("/api/forum/threads",
+                         json={"judul": "Q", "isi": "I"}).json()
+    reply = client.post(f"/api/forum/threads/{thread['id']}/replies",
+                        json={"isi": "r1"}).json()
+
+    r_biasa = client_biasa.post(f"/api/forum/replies/{reply['id']}/best-answer")
+    assert r_biasa.status_code in (401, 403), r_biasa.status_code
+
+    r_admin = client.post(f"/api/forum/replies/{reply['id']}/best-answer")
+    assert r_admin.status_code == 200
 
 
 def test_best_answer_only_one_per_thread_and_floats_to_top(client, clean_forum_db):

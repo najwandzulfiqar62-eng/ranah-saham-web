@@ -4074,7 +4074,11 @@ def test_unhandled_exception_returns_json_not_bare_500(clean_signal_db, monkeypa
 
     monkeypatch.setattr(sh, "get_signal_report", _boom)
 
-    test_client = TestClient(app, raise_server_exceptions=False)
+    from tests.conftest import masuk_admin
+    # Masuk dulu: endpoint-nya ber-gerbang, dan tanpa ini jawabannya 401
+    # -- yang berarti tes ini berhenti menguji handler galatnya sama
+    # sekali, cuma menguji gerbangnya.
+    test_client = masuk_admin(TestClient(app, raise_server_exceptions=False))
     r = test_client.get("/api/signals")
     assert r.status_code == 500
     data = r.json()
