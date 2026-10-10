@@ -5499,13 +5499,22 @@ def test_sm_process_df_exposes_freshness_metadata():
 
 
 def test_ringkasan_sinyal_teknikal_matches_js_thresholds():
-    """Unit test _ringkasan_sinyal_teknikal: HARUS porting persis dari
-    _buildTechSummary() di web/static/index.html (permintaan user, gerbang
-    konfirmasi Smart Money yang baru). Skenario ini PERSIS contoh dari
-    screenshot user: RSI 56.9 (netral, mendekati overbought), MACD
-    positif (beli), Volume 0.70x (netral), AI Score 75 (beli), %1H +4.82%
-    (beli), %5H +14.62% (beli) -> 4 beli, 2 netral, 0 jual -> overall
-    'BELI' (bukan 'BELI KUAT', krn beli=4 belum >=5)."""
+    """_ringkasan_sinyal_teknikal HARUS selaras dengan _buildTechSummary()
+    di web/static/app.js. Keduanya dua salinan dari satu aturan, dan kalau
+    salah satunya bergeser, layar dan server memberi vonis BERBEDA untuk
+    saham yang sama tanpa ada yang gagal.
+
+    ANGKA HARAPANNYA BERUBAH 11 Okt 2026 karena mesinnya memang diubah:
+    suara RSI DIBALIK (RSI tinggi terukur jauh lebih untung) dan suara
+    ketujuh TREN ditambahkan. Ambangnya ikut diskalakan 5/6 -> 6/7 supaya
+    keketatannya tidak berubah diam-diam.
+
+    Skenario pertama persis contoh dari screenshot penulis: RSI 56,9
+    (sekarang BELI, dulu netral), MACD positif, Volume 0,70x (netral),
+    AI Score 75 (beli), %1H +4,82% (beli), %5H +14,62% (beli), Tren tidak
+    bisa dinilai karena MA tidak disertakan (netral) -> 5 beli, 2 netral
+    -> 'BELI'.
+    """
     import web.app as app_module
 
     ai_screenshot = {
@@ -5513,41 +5522,34 @@ def test_ringkasan_sinyal_teknikal_matches_js_thresholds():
         "score": 75, "change_1d": 4.82, "change_5d": 14.62,
     }
     r = app_module._ringkasan_sinyal_teknikal(ai_screenshot)
-    # Diperiksa sebagai HIMPUNAN BAGIAN, bukan kesamaan dict persis.
-    #
-    # Yang dijaga uji ini adalah KESELARASAN dengan _buildTechSummary() di
-    # JS -- yaitu keempat field itu. Field tambahan yang cuma ada di sisi
-    # server (mis. keterangan keandalan terukur, 10 Okt 2026) bukan drift:
-    # JS tidak pernah menghitungnya, jadi tidak ada yang bisa melenceng.
-    #
-    # Kesamaan persis membuat uji ini gagal setiap kali ada keterangan
-    # baru ditambahkan di server, dan uji yang gagal karena alasan yang
-    # bukan maksudnya akan dilonggarkan orang -- justru saat ia paling
-    # dibutuhkan.
-    for k, v in {"overall": "BELI", "beli": 4, "netral": 2, "jual": 0}.items():
+    # Diperiksa sebagai HIMPUNAN BAGIAN, bukan kesamaan dict persis: field
+    # tambahan yang cuma ada di server (keterangan keandalan terukur) bukan
+    # drift -- JS tidak pernah menghitungnya, jadi tidak ada yang bisa
+    # melenceng. Uji yang gagal karena alasan yang bukan maksudnya akan
+    # dilonggarkan orang, justru saat ia paling dibutuhkan.
+    for k, v in {"overall": "BELI", "beli": 5, "netral": 2, "jual": 0}.items():
         assert r[k] == v, f"{k} melenceng dari _buildTechSummary() di JS"
 
-    # Semua 6 indikator searah jual -> JUAL KUAT (beli=0, jual=6>=5).
-    ai_jual_kuat = {
+    # RSI 75 sekarang bersuara BELI (dulu JUAL), jadi lima suara jual sisanya
+    # menghasilkan 'JUAL', bukan 'JUAL KUAT'. Itu BUKAN pelemahan -- vonis
+    # jual yang baru terukur lebih informatif (-0,95% vs -0,66%).
+    ai_jual = {
         "rsi": 75, "macd_bullish": False, "vol_ratio": 0.3,
         "score": 20, "change_1d": -2.0, "change_5d": -5.0,
     }
-    r2 = app_module._ringkasan_sinyal_teknikal(ai_jual_kuat)
-    assert r2["overall"] == "JUAL KUAT"
-    assert r2["jual"] == 6
+    r2 = app_module._ringkasan_sinyal_teknikal(ai_jual)
+    for k, v in {"overall": "JUAL", "beli": 1, "jual": 5}.items():
+        assert r2[k] == v, f"{k} melenceng dari _buildTechSummary() di JS"
 
-    # Semua netral kecuali MACD (yang binary, tidak pernah netral) -> hasil
-    # 1 beli/1 jual dari MACD sendirian, 5 netral dari yang lain -> netral==jual
-    # tergantung arah MACD; di sini MACD bullish=True -> beli=1, jual=0,
-    # netral=5 -> beli>jual -> CENDERUNG BELI.
-    ai_netral = {
-        "rsi": 55, "macd_bullish": True, "vol_ratio": 1.0,
-        "score": 50, "change_1d": 0.0, "change_5d": 0.0,
+    # Tujuh suara searah -> vonis KUAT. Tren ikut dinilai karena MA ada.
+    ai_kuat = {
+        "rsi": 75, "macd_bullish": True, "vol_ratio": 1.5, "score": 70,
+        "change_1d": 2.0, "change_5d": 5.0,
+        "price": 1200.0, "ma50": 1000.0, "ma200": 900.0,
     }
-    r3 = app_module._ringkasan_sinyal_teknikal(ai_netral)
-    # Himpunan bagian, bukan kesamaan persis -- lihat catatan di atas.
-    for k, v in {"overall": "CENDERUNG BELI", "beli": 1, "netral": 5, "jual": 0}.items():
-        assert r3[k] == v, f"{k} melenceng dari _buildTechSummary() di JS"
+    r3 = app_module._ringkasan_sinyal_teknikal(ai_kuat)
+    assert r3["overall"] == "BELI KUAT" and r3["beli"] == 7
+
 
 
 def test_get_ara_arb_bands_per_price_tier():

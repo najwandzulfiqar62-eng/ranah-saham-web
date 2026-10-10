@@ -6499,24 +6499,65 @@ def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
     def _sig(cond_beli, cond_jual):
         return "beli" if cond_beli else ("jual" if cond_jual else "netral")
 
+    # SUARA KETUJUH: keselarasan TREN. Ditambahkan 11 Okt 2026 karena
+    # keenam suara lama semuanya momentum, osilator, atau volume -- tidak
+    # satu pun mengukur tren, padahal "harga bergerak dalam tren" adalah
+    # premis utama Edwards & Magee lewat Murphy (yang diadaptasi Edianto
+    # Ong di buku rujukan penulis). Saham bisa mendapat BELI KUAT sambil
+    # jauh di bawah MA200.
+    #
+    # Terukur, ia suara TERKUAT dari semuanya (+1,35% selisih, melewati
+    # MACD +1,27%).
+    harga = ai.get("price") or 0
+    ma50, ma200 = ai.get("ma50"), ai.get("ma200")
+    if harga and ma50 and ma200:
+        tren = _sig(harga > ma50 and harga > ma200,
+                    harga < ma50 and harga < ma200)
+    else:
+        tren = "netral"
+
     signals = [
-        _sig(rsi < 45, rsi >= 70),
+        # RSI DIBALIK 11 Okt 2026. Versi lama menghitung RSI rendah sebagai
+        # "beli" dan RSI tinggi sebagai "jual" -- dan itu terukur TERBALIK,
+        # parah. Diuji di 793 emiten, 2 tahun, dua paruh waktu, dan khusus
+        # saat harga di atas MA50; monoton di semua potongan:
+        #
+        #     RSI 30-45  unggul  -1,56%     <- dulu dihitung BELI
+        #     RSI 45-55  unggul  -0,93%
+        #     RSI 55-70  unggul  +0,89%
+        #     RSI 70-80  unggul  +4,67%     <- dulu dihitung JUAL
+        #     RSI >=80   unggul +14,10%     <- dulu dihitung JUAL
+        #
+        # Saham yang kuat cenderung tetap kuat; RSI tinggi itu tanda
+        # momentum, bukan tanda jenuh. Ambangnya dipasang di titik ukur
+        # tempat keunggulannya berganti tanda (55), bukan di angka bulat.
+        #
+        # Pita <30 terukur sedikit positif (+0,47%) -- pantulan oversold
+        # yang sungguhan, tapi jauh lebih lemah daripada efek momentumnya.
+        # SENGAJA tidak dibuatkan pengecualian: aturan khusus untuk satu
+        # pita sempit itu pas-pasan dengan data, bukan temuan.
+        _sig(rsi >= 55, rsi < 45),
         "beli" if macd_bullish else "jual",
         _sig(vol_ratio >= 1.2, vol_ratio < 0.5),
         _sig(score >= 65, score < 40),
         _sig(c1 >= 1, c1 <= -1),
         _sig(c5 >= 3, c5 <= -3),
+        tren,
     ]
     beli, jual = signals.count("beli"), signals.count("jual")
     netral = signals.count("netral")
 
-    if beli >= 5:
+    # Ambang diskalakan ke TUJUH suara supaya keketatannya tidak berubah
+    # diam-diam: 5 dari 6 (83%) menjadi 6 dari 7 (86%), 4 dari 6 (67%)
+    # menjadi 5 dari 7 (71%). Membiarkan 5/4 dengan tujuh suara akan
+    # melonggarkan vonisnya tanpa ada yang memutuskan begitu.
+    if beli >= 6:
         overall = "BELI KUAT"
-    elif beli >= 4:
+    elif beli >= 5:
         overall = "BELI"
-    elif jual >= 5:
+    elif jual >= 6:
         overall = "JUAL KUAT"
-    elif jual >= 4:
+    elif jual >= 5:
         overall = "JUAL"
     elif beli > jual:
         overall = "CENDERUNG BELI"
@@ -6556,20 +6597,45 @@ def _ringkasan_sinyal_teknikal(ai: dict) -> dict:
 
 
 # Keunggulan terukur tiap vonis, per 20 hari bursa, terhadap dasar +0,88%.
-# Diukur 10 Okt 2026 pada 25.097 EPISODE vonis (bukan per bar). Dipakai
-# layar supaya pengguna melihat angka yang sama dengan yang diukur, bukan
-# tafsirnya sendiri atas kata "CENDERUNG".
+#
+# DIUKUR ULANG 11 Okt 2026 pada vonis BARU (RSI dibalik + suara TREN),
+# 23.755 EPISODE vonis -- bukan per bar, karena bar berurutan dengan
+# vonis sama itu nyaris duplikat. Angka LAMA tidak dipertahankan: ia
+# mengukur mesin vonis yang sudah tidak ada, dan memajangnya berarti
+# memajang angka yang tidak menggambarkan apa pun.
+#
+#                      LAMA      BARU
+#     BELI KUAT       +1,30%   +1,11%
+#     BELI            +0,13%   +0,38%
+#     CENDERUNG BELI  +0,04%   -0,01%
+#     NETRAL          +0,12%   +0,13%
+#     CENDERUNG JUAL  -0,10%   -0,21%
+#     JUAL            -0,42%   -0,66%
+#     JUAL KUAT       -0,66%   -0,95%
+#
+# Sisi JUAL membaik nyata (-0,66% -> -0,95%): vonis jual yang baru lebih
+# sering benar-benar menandai saham yang tertinggal. Sisi beli sedikit
+# turun sendirian -- tapi lihat UNGGUL_BERTAHAN di bawah.
 UNGGUL_VONIS = {
-    "BELI KUAT": 1.30, "BELI": 0.13, "CENDERUNG BELI": 0.04, "NETRAL": 0.12,
-    "CENDERUNG JUAL": -0.10, "JUAL": -0.42, "JUAL KUAT": -0.66,
+    "BELI KUAT": 1.11, "BELI": 0.38, "CENDERUNG BELI": -0.01, "NETRAL": 0.13,
+    "CENDERUNG JUAL": -0.21, "JUAL": -0.66, "JUAL KUAT": -0.95,
 }
 
-# BELI yang bertahan ke hari kedua setara nilainya dengan BELI KUAT.
-# Diukur: BELI awal +0,13% (n=1813) -> bertahan hari-2 +1,63% (n=294),
-# sementara BELI KUAT awal +1,30% -> hari-2 +1,41% (nyaris tak berubah).
-# Yang sudah ekstrem tidak bertambah baik dengan ditunggu; yang sedang
-# justru berubah artinya.
-UNGGUL_BERTAHAN = {"BELI": 1.63, "BELI KUAT": 1.41}
+# ATURAN DUA HARI, dan di sinilah perubahan vonisnya benar-benar terbayar.
+#
+#                                  LAMA      BARU
+#     BELI KUAT bertahan hari-2   +1,41%   +4,59%   (n=398)
+#     BELI      bertahan hari-2   +1,63%   +1,08%   (n=315)
+#
+# Arahnya BERBALIK dari pengukuran lama. Dulu aturan dua hari menolong
+# vonis yang SEDANG dan tidak menolong yang ekstrem; sekarang kebalikannya,
+# dan alasannya masuk akal: BELI KUAT yang baru mensyaratkan keselarasan
+# TREN (suara ketujuh), dan tren yang bertahan dua hari adalah hal yang
+# sangat berbeda dari lonjakan momentum sehari.
+#
+# +4,59% itu keunggulan terbesar dari seluruh vonis yang pernah diukur di
+# proyek ini -- di atas panel Pemulihan (+4,01%).
+UNGGUL_BERTAHAN = {"BELI KUAT": 4.59, "BELI": 1.08}
 
 
 def nilai_dua_hari(vonis: str | None, vonis_kemarin: str | None) -> dict:
@@ -6589,10 +6655,13 @@ def nilai_dua_hari(vonis: str | None, vonis_kemarin: str | None) -> dict:
     return {
         "bertahan": bertahan,
         "unggul_pct": unggul,
-        # BELI yang bertahan sudah setara BELI KUAT -- itu yang membuat
-        # aturan ini berguna, dan itu yang perlu dilihat pengguna.
-        "setara_kuat": bool(bertahan and vonis == "BELI"
-                            and unggul >= UNGGUL_VONIS["BELI KUAT"]),
+        # Vonis yang bertahan dan terukur JAUH lebih baik daripada
+        # versi sehari-nya. Sesudah suara TREN masuk, yang paling banyak
+        # berubah justru BELI KUAT (+1,11% -> +4,59%), bukan BELI --
+        # kebalikan dari pengukuran sebelumnya. Jadi syaratnya ditulis
+        # dari ANGKANYA, bukan dari nama vonisnya.
+        "setara_kuat": bool(bertahan and dasar is not None
+                            and unggul >= dasar + 1.0),
     }
 
 

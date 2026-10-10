@@ -5518,9 +5518,12 @@ function _buildKonsensus(d){
    mengatakan suara mana yang terukur menyesatkan, supaya pembacanya
    tidak menimbangnya sama berat. */
 const _KEANDALAN_SUARA = {
-  'RSI (14)':  {pisah:-2.18, catatan:'TERBALIK \u2014 terukur, RSI tinggi justru lebih untung'},
-  'MACD':      {pisah: 1.27, catatan:'memisahkan menang dari kalah'},
+  // RSI sudah DIBALIK 11 Okt 2026, jadi penanda "terbalik"-nya dicabut --
+  // membiarkannya berarti layar memperingatkan tentang cacat yang sudah
+  // tidak ada, dan peringatan yang salah menggerus kepercayaan pada
+  // peringatan yang benar.
   'Volume':    {pisah:-0.77, catatan:'terbalik \u2014 jangan ditimbang berat'},
+  'MACD':      {pisah: 1.27, catatan:'memisahkan menang dari kalah'},
   'AI Score':  {pisah: 0.24, catatan:'nyaris tidak memisahkan'},
   '%1 Hari':   {pisah: 0.54, catatan:'memisahkan, lemah'},
   '%5 Hari':   {pisah: 0.72, catatan:'memisahkan'},
@@ -5555,8 +5558,11 @@ function _tagKeandalan(label){
    Vonisnya sendiri TIDAK diubah -- signal_history memakai semantik lama,
    dan menggesernya membuat riwayat lama dan baru tidak sebanding tanpa
    satu pun tanda. Yang ditambahkan cuma kejujuran tentang artinya. */
-const _UNGGUL_VONIS={'BELI KUAT':1.30,'BELI':0.13,'CENDERUNG BELI':0.04,
-  'NETRAL':0.12,'CENDERUNG JUAL':-0.10,'JUAL':-0.42,'JUAL KUAT':-0.66};
+// Diukur ulang 11 Okt 2026 pada vonis BARU (RSI dibalik + suara TREN),
+// 23.755 episode. Angka lama dicabut, bukan disimpan sebagai cadangan:
+// ia mengukur mesin vonis yang sudah tidak ada.
+const _UNGGUL_VONIS={'BELI KUAT':1.11,'BELI':0.38,'CENDERUNG BELI':-0.01,
+  'NETRAL':0.13,'CENDERUNG JUAL':-0.21,'JUAL':-0.66,'JUAL KUAT':-0.95};
 
 function _keandalanVonis(d, overall){
   const dh = d.dua_hari || {};
@@ -5567,7 +5573,8 @@ function _keandalanVonis(d, overall){
   if(dh.setara_kuat){
     return `<div style="font-size:11.5px;margin-top:8px;color:var(--bull);line-height:1.5">
       <b>Bertahan dua hari</b> \u2014 terukur +${fmt(dh.unggul_pct,2)}% di atas pasar,
-      setara BELI KUAT. BELI yang baru muncul sehari cuma +0,13%.</div>`;
+      jauh di atas versi sehari-nya (+${fmt(_UNGGUL_VONIS[overall]||0,2)}%).
+      Tren yang bertahan dua hari berbeda dari lonjakan sehari.</div>`;
   }
   const u = (dh.unggul_pct!=null) ? dh.unggul_pct : _UNGGUL_VONIS[overall];
   if(u==null) return '';
@@ -5589,10 +5596,16 @@ function _buildTechSummary(d){
     indikators.push({label,val,sig,ctx});
     sig==='beli'?beli++:sig==='jual'?jual++:netral++;
   };
-  // RSI
+  // RSI -- DIBALIK 11 Okt 2026, lihat _ringkasan_sinyal_teknikal() di
+  // web/app.py untuk angka pengukurannya. Ringkasnya: RSI tinggi terukur
+  // JAUH lebih untung (>=80: +14,10% di atas pasar), RSI rendah justru
+  // merugi (30-45: -1,56%). Saham kuat cenderung tetap kuat.
+  // Keterangannya ikut berubah -- "Overbought, waspadai" itu nasihat yang
+  // terukur salah, dan membiarkannya berarti layar menasihati kebalikan
+  // dari apa yang diukurnya sendiri.
   const rsi=d.rsi||50;
-  let rs=rsi<45?'beli':rsi>=70?'jual':'netral';
-  let rc=rsi<30?'Oversold — potensi reversal':rsi<45?'Mendekati oversold':rsi<55?'Zona netral':rsi<70?'Mendekati overbought':'Overbought — waspadai';
+  let rs=rsi>=55?'beli':rsi<45?'jual':'netral';
+  let rc=rsi>=80?'Momentum sangat kuat':rsi>=70?'Momentum kuat':rsi>=55?'Momentum positif':rsi>=45?'Zona netral':rsi>=30?'Momentum lemah':'Sangat lemah — bisa memantul';
   _add('RSI (14)',fmt(rsi,1),rs,rc);
   // MACD
   _add('MACD',d.macd_bullish?'Positif (+)':'Negatif (−)',d.macd_bullish?'beli':'jual',d.macd_bullish?'Momentum bullish':'Momentum bearish');
@@ -5608,7 +5621,20 @@ function _buildTechSummary(d){
   // %5H
   const c5=d.change_5d||0;
   _add('%5 Hari',(c5>=0?'+':'')+fmt(c5,2)+'%',c5>=3?'beli':c5<=-3?'jual':'netral',c5>=3?'Tren mingguan naik':c5<=-3?'Tren mingguan turun':'Sideways mingguan');
-  const overall=beli>=5?'BELI KUAT':beli>=4?'BELI':jual>=5?'JUAL KUAT':jual>=4?'JUAL':beli>jual?'CENDERUNG BELI':jual>beli?'CENDERUNG JUAL':'NETRAL';
+  // TREN -- suara ketujuh, dan terukur yang TERKUAT (+1,35%, melewati
+  // MACD +1,27%). Keenam suara lama semuanya momentum/osilator/volume;
+  // tidak satu pun mengukur tren, padahal itu premis utama bukunya.
+  const _h=d.price||0, _m50=d.ma50, _m200=d.ma200;
+  const _trenSig=(_h&&_m50&&_m200)
+    ? ((_h>_m50&&_h>_m200)?'beli':((_h<_m50&&_h<_m200)?'jual':'netral'))
+    : 'netral';
+  _add('Tren (MA50/200)',
+    _trenSig==='beli'?'Di atas keduanya':_trenSig==='jual'?'Di bawah keduanya':'Campuran',
+    _trenSig,
+    _trenSig==='beli'?'Tren naik terkonfirmasi':_trenSig==='jual'?'Tren turun':'Arah belum jelas');
+  // Ambang diskalakan ke TUJUH suara (6/7 dan 5/7) supaya keketatannya
+  // tidak berubah diam-diam dari 5/6 dan 4/6.
+  const overall=beli>=6?'BELI KUAT':beli>=5?'BELI':jual>=6?'JUAL KUAT':jual>=5?'JUAL':beli>jual?'CENDERUNG BELI':jual>beli?'CENDERUNG JUAL':'NETRAL';
   const oc=beli>jual?'var(--bull)':jual>beli?'var(--bear)':'var(--gold)';
   // Cards per indikator (mobile-friendly, no wide table)
   const cards=indikators.map(i=>{
@@ -6498,7 +6524,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v63';
+const APP_VERSION='v64';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
