@@ -206,3 +206,54 @@ def test_imbal_risiko_dihitung_dan_ditandai():
     r2 = susun(1000, [lv(980, "support"), lv(970, "support"),
                       lv(1100, "resistance")], [])
     assert r2["terlalu_sempit"] is False
+
+
+# ---------------------------------------------------------------------------
+# Pemisahan jalur: harmonic TIDAK boleh ikut menentukan beli/jual
+# ---------------------------------------------------------------------------
+
+def test_harmonic_tidak_menentukan_sinyal_beli_jual():
+    """PERMINTAAN EKSPLISIT PENULIS: "buy jual nya itu bukan make
+    harmonic ya".
+
+    Harmonic boleh DIGAMBAR -- ia keterangan bentuk, dan pengguna yang
+    menilai. Tapi ia tidak boleh ikut memutuskan kapan segitiga BELI
+    atau JUAL muncul, dan keunggulannya sendiri memang belum pernah
+    diukur terpisah dari saringan Minervini yang selama ini
+    menyertainya.
+
+    Dikunci lewat sumber kodenya karena jalurnya memang soal SIAPA
+    MEMANGGIL SIAPA: begitu _sinyal_chart_payload atau
+    _rencana_chart_payload menerima data harmonic, pemisahannya hilang
+    tanpa satu pun hasil terlihat berubah di hari pertama."""
+    for f in (app_module._sinyal_chart_payload,
+              app_module._rencana_chart_payload):
+        src = inspect.getsource(f)
+        assert "harmonic" not in src.lower(), f.__name__
+
+
+def test_harmonic_tidak_dioper_ke_pembangun_rencana():
+    """Penjagaan di tingkat PEMANGGIL. Fungsi di atas bisa saja bersih
+    isinya tapi menerima pola harmonic lewat argumen `pola`."""
+    src = inspect.getsource(app_module.ohlc)
+    # _rencana_chart_payload dipanggil dengan pola CHART, bukan harmonic.
+    assert "_rencana_chart_payload(df, pola, sr)" in src
+    # dan `pola` berasal dari _pola_chart_payload, bukan dari harmonic.
+    i_pola = src.index("pola = _pola_chart_payload(")
+    i_harm = src.index("harmonic = _harmonic_chart_payload(")
+    i_renc = src.index("_rencana_chart_payload(df, pola, sr)")
+    assert i_pola < i_renc
+    assert "pola = _harmonic" not in src
+    assert i_harm != i_pola
+
+
+def test_harmonic_tetap_dikirim_sbg_lapisan_terpisah():
+    """Dipisah BUKAN berarti dibuang: ia tetap dikirim sbg medan
+    sendiri supaya bisa digambar dan dinyalakan/dimatikan pengguna."""
+    src = inspect.getsource(app_module.ohlc)
+    assert '"harmonic": harmonic' in src
+    js = open("web/static/app.js", encoding="utf-8").read()
+    assert "_gambarHarmonic" in js
+    # Penggambar sinyal tidak menyentuh data harmonic.
+    i = js.index("function _gambarSinyal(")
+    assert "harm" not in js[i:i + 900].lower()
