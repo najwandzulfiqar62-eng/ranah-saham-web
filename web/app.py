@@ -1915,6 +1915,94 @@ def _compute_grade(score: float, likuiditas: str) -> str:
     return "D"
 
 
+def _beli_aman_payload(harga: float, atr_pct, nilai_harian) -> dict | None:
+    """Tangga harga beli + saran cicil, siap dikirim ke layar.
+
+    Yang dikirim SELALU kedua angkanya -- peluang naik DAN harapan.
+    Meringkasnya jadi satu "harga rekomendasi" akan menyembunyikan
+    pertukaran yang justru harus dilihat orang: menunggu diskon menaikkan
+    win rate sepuluh poin sekaligus menurunkan harapan terus-menerus.
+    """
+    try:
+        from core.entry_aman import (DIUKUR, TAHAN_HARI, TUNGGU_HARI,
+                                     paling_aman, paling_untung, saran_cicil,
+                                     tangga_beli)
+
+        tangga = tangga_beli(harga, atr_pct, nilai_harian)
+        if not tangga:
+            return None
+        aman, untung = paling_aman(tangga), paling_untung(tangga)
+        return _py({
+            "tangga": [{
+                "diskon_pct": t.diskon_pct, "harga": t.harga,
+                "terisi_pct": t.terisi_pct, "naik_pct": t.naik_pct,
+                "harapan_pct": t.harapan_pct,
+            } for t in tangga],
+            "paling_aman": {"harga": aman.harga, "diskon_pct": aman.diskon_pct,
+                            "naik_pct": aman.naik_pct},
+            "paling_untung": {"harga": untung.harga,
+                              "diskon_pct": untung.diskon_pct,
+                              "harapan_pct": untung.harapan_pct},
+            "cicil": saran_cicil(harga, atr_pct, nilai_harian=nilai_harian),
+            "diukur": DIUKUR, "tunggu_hari": TUNGGU_HARI,
+            "tahan_hari": TAHAN_HARI,
+        })
+    except Exception:
+        return None
+
+
+# Umur cache konsensus analis. PANJANG dengan sengaja: target harga
+# analis berubah beberapa kali setahun, bukan beberapa kali sehari, dan
+# tiap pengambilannya memanggil Yahoo .info yang makan 1-2 detik.
+_KONSENSUS_TTL = int(os.getenv("KONSENSUS_TTL", str(12 * 3600)))
+
+
+def _konsensus_analis(kode: str) -> dict | None:
+    """Target harga konsensus analis, atau None kalau tidak ada.
+
+    TIDAK ADA UNTUK SEBAGIAN BESAR EMITEN, dan itu bukan kegagalan: analis
+    sekuritas hanya meliput saham besar. Diuji 11 Okt 2026 -- BBCA 24
+    analis, MTEL 15, sedangkan ASLI nol. Emiten tanpa liputan harus
+    menjawab None, bukan angka kosong yang terbaca seperti "target nol".
+
+    ANGKANYA AKAN BERBEDA dari yang dipajang aplikasi lain, dan itu wajar:
+    tiap penyedia punya panel analis sendiri. Stockbit menyebut MTEL avg
+    644 dari 31 rekomendasi; Yahoo menyebut 630,67 dari 15. Keduanya
+    bukan salah -- mereka menghitung dari kumpulan yang berbeda, dan
+    jumlah analisnya ikut ditampilkan supaya itu terlihat.
+    """
+    kunci = f"konsensus:v1:{(kode or '').upper()}"
+    simpan = _cache_get(kunci)
+    if simpan is not None:
+        return simpan or None
+    try:
+        import yfinance as yf
+
+        inf = yf.Ticker(f"{kode.upper()}.JK").info or {}
+        target = inf.get("targetMeanPrice")
+        jumlah = inf.get("numberOfAnalystOpinions")
+        if not target or not jumlah:
+            _cache_set(kunci, {}, ttl=_KONSENSUS_TTL)
+            return None
+        harga = inf.get("currentPrice") or 0
+        hasil = {
+            "target_rata2": round(float(target)),
+            "target_tertinggi": round(float(inf["targetHighPrice"]))
+            if inf.get("targetHighPrice") else None,
+            "target_terendah": round(float(inf["targetLowPrice"]))
+            if inf.get("targetLowPrice") else None,
+            "jumlah_analis": int(jumlah),
+            "rekomendasi": inf.get("recommendationKey"),
+            "potensi_pct": (round((float(target) / harga - 1) * 100, 1)
+                            if harga else None),
+            "sumber": "Yahoo Finance",
+        }
+        _cache_set(kunci, hasil, ttl=_KONSENSUS_TTL)
+        return hasil
+    except Exception:
+        return None
+
+
 def _compute_ringkasan_cepat(df, ai: dict) -> dict:
     """Hitung field Ringkasan Cepat (grade, likuiditas, gaya trading,
     bandar/A-D Line, potensi naik/risiko turun) dari df OHLCV + hasil
@@ -1969,6 +2057,8 @@ def _compute_ringkasan_cepat(df, ai: dict) -> dict:
         "tp_rencana_pct": tp_rencana_pct,
         "sl_rencana_pct": sl_rencana_pct,
         "atr_pct": ai.get("atr_pct"),
+        "beli_aman": _beli_aman_payload(current_price, ai.get("atr_pct"),
+                                        avg_value_20),
     }
 
 
@@ -6783,26 +6873,46 @@ def _pindai_divergence(tickers: list, data: dict) -> list:
             s = cari_setup(t.replace(".JK", ""), tgl, list(close.values),
                            list(_rsi_seri(close).values))
             if s:
-                keluar.append(s)
+                nilai = float((close * df["Volume"]).tail(20).mean())
+                keluar.append((s, nilai))
         except Exception:
             continue
     return [{
         "kode": x.kode, "setup_id": x.setup_id,
+        "nilai_harian": round(nilai),
+        # Ambang Rp1 miliar/hari: di bawah itu, harga penutupan tidak
+        # mencerminkan harga yang benar-benar bisa didapat, dan angka
+        # hasilnya jadi janji yang tidak bisa ditepati.
+        "likuid": nilai >= 1e9,
         "tanggal_dasar1": x.tanggal_dasar1, "tanggal_dasar2": x.tanggal_dasar2,
         "harga_dasar1": round(x.harga_dasar1), "harga_dasar2": round(x.harga_dasar2),
         "rsi_dasar1": x.rsi_dasar1, "rsi_dasar2": x.rsi_dasar2,
         "jatuh_pct": x.jatuh_pct, "gap_rsi": x.gap_rsi,
         "jarak_bar": x.jarak_bar, "umur_bar": x.umur_bar,
         "harga": round(x.harga_kini), "kuat": x.kuat,
-    } for x in urutkan(keluar)]
+    } for x, nilai in sorted(keluar, key=lambda p: (not p[0].kuat,
+                                                    not (p[1] >= 1e9),
+                                                    p[0].umur_bar))]
 
 
 async def _build_divergence() -> dict:
     """Bagian BERAT -- dipisah supaya bisa dipanggil pemanas cache DAN
     dibungkus single-flight."""
     from core.async_yf import async_download_many
+    from core.stock_data import load_tickers
 
-    tickers = [t + ".JK" for t in LIQUID_250]
+    # SELURUH IDX, bukan 178 likuid. Diukur ulang 11 Okt 2026 pada 793
+    # emiten: 222 setup KUAT (dari 59 pada universe sempit) dengan
+    # keunggulan +4,01% -- hampir sama persis dengan +4,11% yang terukur
+    # di universe sempit. Sampel empat kali lebih besar, kesimpulan yang
+    # sama: itu konfirmasi, bukan sekadar angka yang lebih banyak.
+    #
+    # Saham tidak likuid IKUT, tapi DITANDAI. Terukur mereka justru lebih
+    # baik di atas kertas (62,8% naik, +10,54% vs likuid 59,4%, +6,33%) --
+    # dan justru itu sebabnya ditandai, bukan disembunyikan: selisih itu
+    # hampir pasti selisih yang tidak bisa dieksekusi. Harga penutupan di
+    # saham sepi tidak mencerminkan harga yang benar-benar bisa didapat.
+    tickers = load_tickers()
     data = await async_download_many(tickers, period="1y", interval="1d")
     items = await asyncio.to_thread(_pindai_divergence, tickers, data)
     kuat = [x for x in items if x["kuat"]]
@@ -6811,9 +6921,17 @@ async def _build_divergence() -> dict:
         "universe": len(tickers),
         # Angka harapan yang TERUKUR, ikut dikirim supaya layar & bot tidak
         # perlu menuliskannya sendiri-sendiri (dan jadi berbeda).
-        "ukuran": {"n": 59, "per_tahun": 30, "naik_pct": 62.7,
-                   "unggul_pct": 4.11, "horizon_hari": 20,
-                   "dasar_pct": 1.95, "diukur": "2026-10-10"},
+        # Diukur ulang 11 Okt 2026 di SELURUH 793 emiten (sebelumnya 178):
+        # 222 setup KUAT, naik 60,8%, unggul +4,01% atas dasar +4,11%.
+        # Sampel 4x lebih besar, kesimpulan sama -- konfirmasi, bukan
+        # sekadar angka yang lebih banyak.
+        "ukuran": {"n": 222, "per_tahun": 111, "naik_pct": 60.8,
+                   "unggul_pct": 4.01, "horizon_hari": 20,
+                   "dasar_pct": 4.11, "dasar_naik_pct": 47.7,
+                   "diukur": "2026-10-11",
+                   # Penyaring rezim SENGAJA TIDAK dipasang -- lihat
+                   # catatan di bawah.
+                   "rezim_diuji": True},
     })
     _cache_set_durable(_DIVERGENCE_CACHE_KEY, payload, ttl=_DIVERGENCE_TTL)
     return payload
@@ -6822,6 +6940,18 @@ async def _build_divergence() -> dict:
 @app.get("/api/divergence")
 async def api_divergence():
     """Saham yang sudah jatuh tapi tekanan jualnya mereda.
+
+    PENYARING REZIM SENGAJA TIDAK DIPASANG, dan ini berlawanan dengan
+    dugaan yang wajar. Diukur 11 Okt 2026:
+
+        KUAT + IHSG di ATAS MA20    n= 57   naik 49,1%   unggul +5,92%
+        KUAT + IHSG di BAWAH MA20   n=165   naik 64,8%   unggul +3,35%
+
+    Saat pasar lemah, setupnya TIGA KALI lebih banyak dan hit rate-nya
+    JAUH lebih tinggi. Masuk akal sesudah dipikir: ini pola "pulih sesudah
+    jatuh", dan jatuh memang terjadi saat pasar lemah. Memasang penyaring
+    "hanya saat IHSG di atas MA20" akan membuang justru keranjang yang
+    lebih sering benar.
 
     TIDAK PERNAH memindai atas permintaan pengunjung. Pemanas cache yang
     menanggungnya (lihat _warm_shared_caches); kalau cache dingin, jawabannya
