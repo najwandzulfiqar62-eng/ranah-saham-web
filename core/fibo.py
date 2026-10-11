@@ -70,11 +70,48 @@ JENDELA = 180
 # level di bawah. Sempat tersimpan sbg 38.2 -- pencariannya tidak
 # pernah cocok, dan layar diam-diam menulis "belum diukur" untuk
 # level yang sebenarnya SUDAH diukur.
-UNGGUL_FIBO = {
-    (0.382, "naik"): {"unggul_pct": 0.67, "n": 1927, "pct_positif": 44.4},
-    (0.382, "turun"): {"unggul_pct": -1.24, "n": 1578, "pct_positif": 42.2},
-    (0.618, "naik"): {"unggul_pct": -0.28, "n": 1549, "pct_positif": 43.4},
-    (0.618, "turun"): {"unggul_pct": 0.1, "n": 954, "pct_positif": 43.2},
+# ===========================================================================
+# HASIL PENGUKURAN -- dan ia TIDAK mendukung Fibonacci sbg sinyal
+# ===========================================================================
+# Diukur 20 hari ke depan, jalan maju, per kejadian, 786 emiten,
+# dasar setanggal +3.35%. "Menyentuh" = dalam 2.0% dari levelnya.
+#
+#     23,6% naik   +0.61%   38,2% naik  -1.06%
+#     50%   naik   -0.60%   61,8% naik  -0.19%
+#     78,6% naik   +0.90%
+#     23,6% turun  -2.12%   38,2% turun -0.64%
+#     50%   turun  +1.59%
+#
+# TIDAK ADA POLA. Tandanya berganti-ganti antar-rasio tanpa urutan yang
+# masuk akal (23,6 positif, 38,2 negatif, 50 negatif, 61,8 negatif, 78,6
+# positif pada sisi naik). Itu sebaran acak, bukan struktur.
+#
+# DAN INI MEMBATALKAN TEMUAN SEBELUMNYA. Pengukuran pertama -- waktu
+# ayunannya masih diambil dari pivot TERAKHIR -- memberi 38,2% naik
+# +0,67% dan turun -1,24%, dan selisih 1,91 poin itu sempat disebut
+# salah satu yang terbesar di proyek ini. Sesudah penjangkarannya
+# diperbaiki ke ayunan DOMINAN (perbaikan yang benar, karena itu yang
+# ditarik manusia), selisihnya LENYAP. Jadi selisih itu artefak
+# penjangkaran, bukan sifat pasar. Klaim lamanya batal, dan dicatat di
+# sini supaya tidak dipungut lagi dari riwayat commit.
+#
+# AKIBATNYA untuk layar: garis Fibonacci tetap digambar sebagai ACUAN --
+# orang memang memakainya, dan ia menandai tempat yang bisa diperiksa
+# sendiri -- tapi TIDAK BOLEH disajikan sebagai sesuatu yang terukur
+# menguntungkan. Angkanya ditempel apa adanya, termasuk yang negatif.
+#
+# Rasio bersampel < 500 tidak dimasukkan. "78,6% turun +3,58%" cuma 135
+# kejadian; dari lima belas sel yang diuji sekaligus, satu yang terlihat
+# luar biasa itu yang diharapkan muncul karena kebetulan.
+UNGGUL_FIBO: dict[tuple[float, str], dict] = {
+    (0.236, "naik"): {"unggul_pct": 0.61, "n": 1459, "pct_positif": 42.5},
+    (0.236, "turun"): {"unggul_pct": -2.12, "n": 1684, "pct_positif": 38.4},
+    (0.382, "naik"): {"unggul_pct": -1.06, "n": 1828, "pct_positif": 41.0},
+    (0.382, "turun"): {"unggul_pct": -0.64, "n": 988, "pct_positif": 40.4},
+    (0.500, "naik"): {"unggul_pct": -0.6, "n": 1517, "pct_positif": 43.0},
+    (0.500, "turun"): {"unggul_pct": 1.59, "n": 517, "pct_positif": 41.4},
+    (0.618, "naik"): {"unggul_pct": -0.19, "n": 1273, "pct_positif": 42.5},
+    (0.786, "naik"): {"unggul_pct": 0.9, "n": 534, "pct_positif": 48.5},
 }
 MIN_N_FIBO = 500
 TANGGAL_UKUR_FIBO = "2026-10-12"
@@ -164,18 +201,52 @@ def hitung(tanggal: list, tinggi: list, rendah: list, tutup: list) -> Fibo | Non
     if not puncak or not lembah:
         return None
 
-    p_akhir, l_akhir = puncak[-1], lembah[-1]
-    # ARAHNYA DARI URUTAN WAKTU, bukan dari mana yang lebih ekstrem.
-    # Inilah yang keliru di versi lama.
-    if p_akhir > l_akhir:
-        arah, i_awal, i_akhir = "naik", l_akhir, p_akhir
-        h_awal, h_akhir = float(rendah[i_awal]), float(tinggi[i_akhir])
-    else:
-        arah, i_awal, i_akhir = "turun", p_akhir, l_akhir
-        h_awal, h_akhir = float(tinggi[i_awal]), float(rendah[i_akhir])
+    # AYUNAN DOMINAN, BUKAN AYUNAN TERAKHIR.
+    #
+    # CACAT NYATA (dilaporkan penulis: "mana kok ga ada garis fibonya").
+    # Versi pertama memakai pivot high dan pivot low TERAKHIR. Di masa
+    # konsolidasi keduanya sering cuma ayunan mikro yang berdampingan,
+    # dan ayunan mikro ditolak ambang ukuran -- sehingga Fibonacci
+    # hilang justru di saham yang ayunan besarnya paling jelas:
+    #
+    #     PTRO  pivot terakhir  10,0% (1,9x ATR, ditolak)
+    #           ayunan dominan 310,1% (60,3x ATR)
+    #     ANTM  pivot terakhir   5,2% (1,6x ATR, ditolak)
+    #           ayunan dominan 102,9% (31,6x ATR)
+    #
+    # Manusia menarik Fibonacci di ayunan yang MEMBENTUK struktur
+    # sekarang, bukan di riak terakhir. Jadi: untuk tiap pivot sebagai
+    # UJUNG ayunan, dicari pasangan lawan paling ekstrem SEBELUMNYA,
+    # lalu dipilih yang terbesar di antara yang ujungnya masih baru.
+    #
+    # Ongkosnya tidak berarti: pivot dalam jendela 180 bar cuma puluhan,
+    # dan seluruh modul ini berada di dalam cache overlay chart.
+    kandidat = []
+    for ip in puncak:                      # ayunan NAIK, berujung di puncak
+        lo_sebelum = [l for l in lembah if l < ip]
+        if not lo_sebelum:
+            continue
+        il = min(lo_sebelum, key=lambda x: rendah[x])
+        kandidat.append(("naik", il, ip, float(rendah[il]), float(tinggi[ip])))
+    for il in lembah:                      # ayunan TURUN, berujung di lembah
+        hi_sebelum = [p for p in puncak if p < il]
+        if not hi_sebelum:
+            continue
+        ip = max(hi_sebelum, key=lambda x: tinggi[x])
+        kandidat.append(("turun", ip, il, float(tinggi[ip]), float(rendah[il])))
 
-    if h_awal <= 0 or h_akhir <= 0:
+    # Ujungnya harus MASIH BARU -- ayunan yang berakhir tiga bulan lalu
+    # sudah digantikan struktur yang lebih baru.
+    kandidat = [k for k in kandidat
+                if (akhir - k[2]) <= MAKS_UMUR_BAR
+                and k[3] > 0 and k[4] > 0]
+    if not kandidat:
         return None
+
+    def _besar(k):
+        return abs(k[4] - k[3]) / min(k[3], k[4])
+
+    arah, i_awal, i_akhir, h_awal, h_akhir = max(kandidat, key=_besar)
     rentang = abs(h_akhir - h_awal)
     ayunan_pct = rentang / min(h_awal, h_akhir) * 100
 
@@ -188,9 +259,7 @@ def hitung(tanggal: list, tinggi: list, rendah: list, tutup: list) -> Fibo | Non
     rasio_pakai = (RETRACEMENT if rasio_atr >= MIN_AYUNAN_ATR_PENUH
                    else RETRACEMENT_RINGKAS)
 
-    umur = akhir - i_akhir
-    if umur > MAKS_UMUR_BAR:
-        return None
+    umur = akhir - i_akhir   # sudah dijamin <= MAKS_UMUR_BAR oleh saringan
 
     level = []
     for r in rasio_pakai:

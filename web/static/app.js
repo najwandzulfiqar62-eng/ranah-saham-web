@@ -1124,7 +1124,7 @@ function _renderPolaChips(kunci){
     const w=fb.arah==='naik'?'var(--bull)':'var(--bear)';
     bagian.push(`<button class="chip ${st.fiboNyala?'active':''}" data-fibo="1"
       style="${st.fiboNyala?`border-color:${w};color:${w}`:''}"
-      title="Fibonacci dari ayunan ${fb.arah} ${fb.ayunan_pct}% (${fb.awal_tanggal} → ${fb.akhir_tanggal}), ${fb.ayunan_atr}× ATR. Jumlah garis mengikuti besar ayunan: ayunan kecil cuma dapat dua, supaya garisnya tidak lebih rapat daripada gerak sehari.">
+      title="Fibonacci dari ayunan ${fb.arah} ${fb.ayunan_pct}% (${fb.awal_tanggal} → ${fb.akhir_tanggal}), ${fb.ayunan_atr}× ATR. Jumlah garis mengikuti besar ayunan.&#10;&#10;DIUKUR di 786 emiten: tidak ada pola — tandanya berganti-ganti antar-rasio tanpa urutan. Garis ini ACUAN tempat harga pernah berbalik, BUKAN sesuatu yang terukur menguntungkan.">
       ${st.fiboNyala?'Sembunyikan Fibo':`Fibonacci (${fb.arah})`}</button>`);
   }
   const hm=st.harm||[];
@@ -7563,7 +7563,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v85';
+const APP_VERSION='v86';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

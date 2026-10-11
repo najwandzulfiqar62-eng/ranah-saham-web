@@ -47,7 +47,11 @@ def test_arah_dari_URUTAN_WAKTU_bukan_dari_yang_paling_ekstrem():
     level "61,8% dari low ke high" mengukur gerakan yang tidak pernah
     terjadi ke arah itu."""
     src = inspect.getsource(fibo.hitung)
-    assert "p_akhir > l_akhir" in src, "arah tidak ditentukan dari urutan waktu"
+    # Kandidat ayunan dibangun dari URUTAN: pasangan "naik" selalu
+    # lembah-dulu-lalu-puncak (l < ip), "turun" sebaliknya. Yang dikunci
+    # adalah adanya penyaringan posisi itu, bukan satu baris tertentu.
+    assert "l for l in lembah if l < ip" in src,         "ayunan naik tidak menuntut lembah mendahului puncak"
+    assert "p for p in puncak if p < il" in src,         "ayunan turun tidak menuntut puncak mendahului lembah"
     f_naik = fibo.hitung(*_ayun(naik=True))
     f_turun = fibo.hitung(*_ayun(naik=False))
     assert f_naik and f_naik.arah == "naik"
@@ -68,20 +72,31 @@ def test_retracement_ayunan_turun_ada_DI_ATAS_ujung_ayunan():
     assert ret and all(x["harga"] > f.akhir_harga for x in ret)
 
 
-def test_arah_terukur_BERLAWANAN_jadi_tidak_boleh_digabung():
-    """TEMUAN UTAMA. 38,2% pada ayunan naik +0,67%, pada ayunan turun
-    -1,24% -- dan gabungannya +0,04%, yaitu nol.
+def test_fibonacci_TIDAK_diklaim_punya_keunggulan():
+    """TEMUAN YANG MEMBATALKAN TEMUAN SEBELUMNYA.
 
-    Memperbaiki arahnya bukan kosmetik: ia selisih antara sinyal
-    (1,91 poin) dan derau."""
+    Pengukuran pertama -- waktu ayunannya masih diambil dari pivot
+    TERAKHIR -- memberi 38,2% naik +0,67% dan turun -1,24%, dan selisih
+    1,91 poin itu sempat disebut salah satu yang terbesar di proyek ini.
+
+    Sesudah penjangkarannya diperbaiki ke ayunan DOMINAN (perbaikan yang
+    benar: itu yang ditarik manusia, dan tanpanya Fibonacci hilang di
+    saham yang ayunan besarnya paling jelas), selisih itu LENYAP --
+    kedua arah kini negatif, dan tandanya berganti-ganti antar-rasio
+    tanpa urutan yang masuk akal.
+
+    Jadi selisihnya artefak penjangkaran, bukan sifat pasar. Uji ini
+    menjaga agar tidak ada yang menyajikan Fibonacci sbg sesuatu yang
+    terukur menguntungkan hanya karena satu sel kebetulan positif.
+    """
     m = _ukur()
-    naik = m["Fibo 38.2% ayunan naik"]["unggul_pct"]
-    turun = m["Fibo 38.2% ayunan turun"]["unggul_pct"]
-    gab = m["Fibo 38.2% (gabungan arah)"]["unggul_pct"]
-    assert naik > 0 > turun, (naik, turun)
-    assert abs(gab) < min(abs(naik), abs(turun)), (
-        "gabungan arah seharusnya mendekati nol; kalau tidak, dasar "
-        "pemisahan arahnya perlu ditinjau ulang")
+    nilai = [r["unggul_pct"] for r in m.values()
+             if "gabungan" not in r["aturan"] and r["n"] >= fibo.MIN_N_FIBO]
+    assert nilai, "tidak ada sel bersampel memadai"
+    # Tandanya campur aduk -- itu yang membuktikan tidak ada struktur.
+    assert any(v > 0 for v in nilai) and any(v < 0 for v in nilai), nilai
+    # Dan rata-ratanya tidak positif berarti.
+    assert sum(nilai) / len(nilai) < 0.5, sum(nilai) / len(nilai)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +134,10 @@ def test_kunci_tabel_memakai_rasio_pecahan():
     for (r, arah) in fibo.UNGGUL_FIBO:
         assert 0 < r < 1, r
         assert arah in ("naik", "turun")
-    assert fibo.unggul(0.382, "naik") is not None
+    # Tabelnya BOLEH kosong -- ia memang dikosongkan sesudah
+    # penjangkaran ayunan diganti, sampai pengukuran ulang selesai.
+    # Yang dilarang bukan kosong, melainkan BERISI ANGKA LAMA.
+    assert fibo.unggul(0.382, "naik") in (None,) or         fibo.UNGGUL_FIBO[(0.382, "naik")]["unggul_pct"] != 0.67,         "angka dari penjangkaran lama muncul kembali tanpa pengukuran ulang"
 
 
 def test_level_membawa_angkanya_atau_None():
@@ -151,3 +169,19 @@ def test_tidak_mengintip_masa_depan():
 def test_data_cacat_tidak_meledak():
     assert fibo.hitung([], [], [], []) is None
     assert fibo.hitung(["2025-01-01"], [1.0], [1.0], [1.0]) is None
+
+
+def test_angka_lama_tidak_boleh_kembali_tanpa_diukur_ulang():
+    """Penjangkaran ayunan diganti dari "pivot terakhir" ke "ayunan
+    dominan" -- aturan yang BERBEDA, pada saham yang sebagian besar
+    berbeda pula (dulu 37% emiten dapat level, sekarang hampir
+    semuanya).
+
+    Memajang angka lama di atas aturan baru persis kesalahan yang sudah
+    terjadi pada wedge: pembaca tidak punya cara tahu bahwa angka di
+    depannya mengukur hal yang lain."""
+    lama = {(0.382, "naik"): 0.67, (0.382, "turun"): -1.24,
+            (0.618, "naik"): -0.28, (0.618, "turun"): 0.10}
+    for k, v in lama.items():
+        if k in fibo.UNGGUL_FIBO:
+            assert fibo.UNGGUL_FIBO[k].get("unggul_pct") != v, k
