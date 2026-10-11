@@ -149,3 +149,64 @@ def test_pola_tanpa_angka_tetap_bisa_ditampilkan():
         # unggul_pct boleh None, tapi nama & fase & arti wajib ada.
         assert p["nama"] and p["fase"] and p["arti"]
         assert p["unggul_pct"] is None or isinstance(p["unggul_pct"], (int, float))
+
+
+# ---------------------------------------------------------------------------
+# Uji kestabilan dua periode
+# ---------------------------------------------------------------------------
+
+def test_tiap_pola_berangka_punya_status_kestabilan():
+    """Satu angka dari satu periode tidak cukup membedakan temuan dari
+    kebetulan -- enam kali hari ini hal yang kelihatan meyakinkan tidak
+    bertahan saat metodenya diperbaiki. Tiap baris berangka karena itu
+    membawa status dari uji 2 tahun vs 5 tahun."""
+    from core.pola_ukur import UNGGUL_POLA
+    sah = {"stabil", "goyah", "sepihak", "arah_saja"}
+    for k, v in UNGGUL_POLA.items():
+        assert v.get("status") in sah, (k, v.get("status"))
+
+
+def test_status_stabil_berarti_tandanya_benar_benar_sama():
+    from core.pola_ukur import UNGGUL_POLA
+    for k, v in UNGGUL_POLA.items():
+        if v.get("status") != "stabil":
+            continue
+        assert v["unggul_5y"] is not None, k
+        assert (v["unggul_pct"] > 0) == (v["unggul_5y"] > 0), k
+
+
+def test_status_goyah_TIDAK_disembunyikan():
+    """Pola yang tandanya berbalik antar-periode dipajang DENGAN
+    peringatan, bukan dibuang. Pembaca berhak tahu bahwa aplikasinya
+    sendiri belum yakin -- menyembunyikannya berarti memutuskan untuknya
+    secara diam-diam."""
+    from core.pola_ukur import UNGGUL_POLA
+    goyah = [k for k, v in UNGGUL_POLA.items() if v.get("status") == "goyah"]
+    assert goyah, "tidak ada yang goyah; apakah ujinya masih berjalan?"
+    for k in goyah:
+        assert UNGGUL_POLA[k]["unggul_pct"] is not None, k
+    js = open("web/static/app.js", encoding="utf-8").read()
+    assert "'goyah'" in js and "BERBALIK antar-periode" in js
+
+
+def test_arah_saja_tidak_memajang_angka():
+    """Sampel di bawah ambang: arahnya boleh disebut (tandanya sama di
+    dua periode), besarnya TIDAK. Wedge ada di golongan ini -- bahkan 5
+    tahun cuma memberi n=86."""
+    from core.pola_ukur import UNGGUL_POLA
+    for k, v in UNGGUL_POLA.items():
+        if v.get("status") != "arah_saja":
+            continue
+        assert v["unggul_pct"] is None, f"{k} memajang angka dari sampel kecil"
+        assert v.get("arah_terukur") in ("naik", "turun"), k
+
+
+def test_wedge_akhirnya_bicara_arahnya():
+    """Detektor wedge sudah benar sejak pivotnya wajib berurutan, tapi
+    kejadiannya jadi sangat jarang. Dengan 5 tahun ia akhirnya cukup
+    untuk menyatakan ARAH, walau belum cukup untuk angka."""
+    from core.pola_ukur import UNGGUL_POLA
+    rw = UNGGUL_POLA.get(("Rising Wedge", "TEMBUS"))
+    assert rw is not None, "Rising Wedge tembus hilang dari tabel"
+    assert rw.get("arah_terukur") == "turun", (
+        "rising wedge itu pola BEARISH; arah terukurnya harus turun")

@@ -6270,9 +6270,21 @@ function _buildPolaChart(d){
   const baris=pol.map(p=>{
     const w=_POLA_WARNA[p.arah]||'var(--muted)';
     const tembus=p.fase==='TEMBUS';
-    const ukur = p.unggul_pct==null
-      ? '<span class="muted" style="font-size:11px">belum diukur</span>'
-      : `<b style="color:${p.unggul_pct>0?'var(--bull)':'var(--bear)'};font-size:13px">${p.unggul_pct>0?'+':''}${fmt(p.unggul_pct,2)}%</b>`;
+    // Status dari uji DUA PERIODE. Pola yang tandanya berbalik
+    // antar-periode tidak boleh tampil sama meyakinkan dengan yang
+    // bertahan -- justru angka besar dari satu periode yang paling
+    // mudah kebetulan.
+    let ukur;
+    if(p.status==='arah_saja'){
+      ukur = `<span style="font-size:11.5px;color:${p.arah_terukur==='naik'?'var(--bull)':'var(--bear)'}"
+        title="Tandanya sama di 2 dan 5 tahun, tapi kejadiannya terlalu jarang (n=${p.n_ukur}) untuk diberi angka.">arah ${p.arah_terukur} · sampel kecil</span>`;
+    }else if(p.unggul_pct==null){
+      ukur = '<span class="muted" style="font-size:11px">belum diukur</span>';
+    }else{
+      const goyah = p.status==='goyah';
+      ukur = `<b style="color:${goyah?'var(--muted)':(p.unggul_pct>0?'var(--bull)':'var(--bear)')};font-size:13px"
+        title="${goyah?`Tandanya BERBALIK antar-periode (2 thn ${fmt(p.unggul_pct,2)}%, 5 thn ${fmt(p.unggul_5y,2)}%). Belum bisa dipercaya.`:`Tandanya sama di 2 dan 5 tahun (5 thn ${fmt(p.unggul_5y,2)}%).`}">${p.unggul_pct>0?'+':''}${fmt(p.unggul_pct,2)}%${goyah?' ⚠':''}</b>`;
+    }
     const lvl=(typeof _rpRingkas==='function')?_rpRingkas(p.level_kunci):('Rp'+fmt(p.level_kunci));
     return `<div style="border-left:3px solid ${w};padding:7px 0 7px 10px;margin-bottom:7px">
       <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
@@ -7568,7 +7580,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v87';
+const APP_VERSION='v88';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

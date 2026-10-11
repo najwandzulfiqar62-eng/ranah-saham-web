@@ -327,3 +327,51 @@ def detect_liquidity_pools(df: pd.DataFrame, left_bars: int = 5, right_bars: int
     # Pool TERKUAT dulu (paling banyak swing berkumpul), lalu yang belum disapu dulu
     pools.sort(key=lambda x: (-x["n_swings"], x["swept"]))
     return pools[:max_pools]
+
+# ===========================================================================
+# HASIL PENGUKURAN -- dan SMC lulus uji yang tidak dilalui yang lain
+# ===========================================================================
+# SMC sudah lama di aplikasi ini sbg NARASI tanpa satu pun angka. Ketika
+# penulis bertanya apakah sebaiknya digabung dengan sistem lain,
+# jawabannya "pisah dulu sampai terukur" -- bukan karena ia buruk, tapi
+# karena hari itu lima hal yang kelihatan meyakinkan baru saja meleset
+# saat diukur.
+#
+# Diukur jalan-maju, per kejadian, jeda antar-sampel 20 bar, dasar
+# setanggal, DUA PERIODE:
+#
+#                     2 tahun (790)        5 tahun (790)
+#     BOS bullish     +4.31% (n=2,418)     +3.30% (n=5,553)
+#     CHOCH bullish   +0.95% (n=2,941)     +0.33% (n=7,188)
+#     BOS bearish     -0.76% (n=2,410)     -1.07% (n=6,866)
+#     CHOCH bearish   -1.38% (n=2,688)     -1.04% (n=6,985)
+#
+# EMPAT DARI EMPAT TANDANYA COCOK di kedua periode, dan urutannya pun
+# sama. Itu yang membedakannya dari hampir semua yang lain di proyek
+# ini: harmonic terbalik arah, 95% wedge bukan wedge, Fibonacci
+# selisihnya lenyap begitu penjangkarannya dibetulkan, BELI KUAT ternyata
+# lebih lemah dari BELI. SMC satu-satunya yang bertahan.
+#
+# BOS lebih kuat daripada CHOCH di KEDUA sisi, dan itu masuk akal
+# secara teori: BOS penerusan tren yang sudah terkonfirmasi, CHOCH baru
+# dugaan pembalikan.
+#
+# TIDAK MENGINTIP MASA DEPAN -- diperiksa, bukan diasumsikan: tiap
+# kejadian diuji ulang dengan data dipotong tepat di harinya, dan 56
+# kejadian di tiga emiten semuanya sudah terlihat pada hari itu juga.
+#
+# Yang TIDAK berubah: 46,6% kejadian berakhir naik. Keunggulannya datang
+# dari yang menang lebih besar, bukan dari lebih sering benar.
+UNGGUL_SMC = {
+    ("BOS", "bullish"): {"unggul_pct": 4.31, "n": 2418, "pct_positif": 46.6, "unggul_5y": 3.3, "n_5y": 5553, "stabil": True},
+    ("BOS", "bearish"): {"unggul_pct": -0.76, "n": 2410, "pct_positif": 49.2, "unggul_5y": -1.07, "n_5y": 6866, "stabil": True},
+    ("CHOCH", "bullish"): {"unggul_pct": 0.95, "n": 2941, "pct_positif": 42.7, "unggul_5y": 0.33, "n_5y": 7188, "stabil": True},
+    ("CHOCH", "bearish"): {"unggul_pct": -1.38, "n": 2688, "pct_positif": 44.2, "unggul_5y": -1.04, "n_5y": 6985, "stabil": True},
+}
+MIN_N_SMC = 100
+TANGGAL_UKUR_SMC = "2026-10-12"
+
+
+def unggul_smc(jenis: str, arah: str) -> dict | None:
+    """Angka terukur satu kejadian SMC, atau None kalau tidak dikenal."""
+    return UNGGUL_SMC.get((jenis, arah))

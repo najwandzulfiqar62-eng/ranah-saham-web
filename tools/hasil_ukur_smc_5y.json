@@ -1,0 +1,64 @@
+{
+ "horizon_hari": 20,
+ "periode": "5y",
+ "n_emiten": 790,
+ "dasar_pct": 1.72,
+ "aturan": [
+  {
+   "aturan": "BOS bullish",
+   "n": 5553,
+   "unggul_pct": 3.3,
+   "return_pct": 5.77,
+   "pct_positif": 44.1
+  },
+  {
+   "aturan": "semua bullish",
+   "n": 11438,
+   "unggul_pct": 1.36,
+   "return_pct": 3.56,
+   "pct_positif": 41.5
+  },
+  {
+   "aturan": "BOS (gabungan arah)",
+   "n": 12307,
+   "unggul_pct": 0.9,
+   "return_pct": 2.77,
+   "pct_positif": 44.4
+  },
+  {
+   "aturan": "CHOCH bullish",
+   "n": 7188,
+   "unggul_pct": 0.33,
+   "return_pct": 2.38,
+   "pct_positif": 39.9
+  },
+  {
+   "aturan": "CHOCH (gabungan arah)",
+   "n": 11722,
+   "unggul_pct": -0.37,
+   "return_pct": 1.43,
+   "pct_positif": 42.1
+  },
+  {
+   "aturan": "CHOCH bearish",
+   "n": 6985,
+   "unggul_pct": -1.04,
+   "return_pct": 0.44,
+   "pct_positif": 44.7
+  },
+  {
+   "aturan": "semua bearish",
+   "n": 12486,
+   "unggul_pct": -1.05,
+   "return_pct": 0.33,
+   "pct_positif": 44.3
+  },
+  {
+   "aturan": "BOS bearish",
+   "n": 6866,
+   "unggul_pct": -1.07,
+   "return_pct": 0.35,
+   "pct_positif": 44.7
+  }
+ ]
+}

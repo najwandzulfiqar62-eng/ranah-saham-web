@@ -33,6 +33,12 @@ import yfinance as yf  # noqa: E402
 from core.pola_katalog import deteksi  # noqa: E402
 from core.stock_data import load_tickers  # noqa: E402
 
+# Periode & berkas keluaran bisa diatur lewat env, supaya pengukuran
+# periode PANJANG bisa dijalankan tanpa menimpa hasil yang sedang
+# dipakai. Dua periode dipakai bersama sebagai UJI KESTABILAN: pola yang
+# tandanya berbalik antar-periode tidak layak dipercaya, berapa pun
+# besar angkanya di salah satu periode.
+PERIODE = os.getenv("UKUR_PERIODE", "2y")
 HORIZON = 20          # hari bursa, sama dengan horizon vonis & Pemulihan
 EKOR = 220            # bar yang dikirim ke deteksi
 # 220, bukan 200: Inverse H&S boleh membentang MAKS_JARAK_BAHU x 2 = 120
@@ -41,7 +47,7 @@ EKOR = 220            # bar yang dikirim ke deteksi
 # polanya berhenti terdeteksi -- diam-diam, tanpa error.
 MIN_BAR = 160
 KELUARAN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "hasil_ukur_pola.json")
+                        os.getenv("UKUR_KELUARAN", "hasil_ukur_pola.json"))
 
 
 def main():
@@ -49,7 +55,7 @@ def main():
     print(f"universe: {len(tk)} emiten", flush=True)
 
     t0 = time.time()
-    raw = yf.download(tk, period="2y", interval="1d", progress=False,
+    raw = yf.download(tk, period=PERIODE, interval="1d", progress=False,
                       auto_adjust=False, threads=True, group_by="ticker")
     print(f"unduh: {time.time() - t0:.0f}s", flush=True)
 
@@ -147,7 +153,7 @@ def main():
     ringkas.sort(key=lambda r: (r["nama"], r["fase"]))
 
     dasar_rata = sum(dasar.values()) / len(dasar)
-    out = {"horizon_hari": HORIZON, "n_emiten": len(deret),
+    out = {"horizon_hari": HORIZON, "periode": PERIODE, "n_emiten": len(deret),
            "dasar_pct": round(dasar_rata, 2), "pola": ringkas}
     with open(KELUARAN, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)

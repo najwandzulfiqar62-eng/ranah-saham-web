@@ -101,3 +101,64 @@ def test_layar_menampilkan_peringatan_tumpang_tindih():
     blok = js[i:js.index("/* ---------- RENCANA DARI CHART", i)]
     assert "keterangan_tumpang" in blok
     assert "infoNote(" not in blok, "peringatan tidak boleh disembunyikan"
+
+
+# ---------------------------------------------------------------------------
+# SMC: satu-satunya yang lulus uji dua periode
+# ---------------------------------------------------------------------------
+
+def test_smc_angkanya_stabil_di_dua_periode():
+    """SMC diukur di 2 tahun DAN 5 tahun, dan keempat tandanya cocok.
+    Itu yang membedakannya dari hampir semua yang lain di proyek ini:
+    harmonic terbalik arah, 95% wedge bukan wedge, selisih Fibonacci
+    lenyap saat penjangkarannya dibetulkan, BELI KUAT ternyata lebih
+    lemah dari BELI.
+
+    Uji ini gagal kalau pengukuran ulang suatu hari membuat salah satu
+    tandanya berbalik -- dan kalau itu terjadi, lencananya tidak boleh
+    lagi menyandang kalimat 'stabil'."""
+    from core.smc import UNGGUL_SMC
+    assert len(UNGGUL_SMC) == 4
+    for k, v in UNGGUL_SMC.items():
+        assert (v["unggul_pct"] > 0) == (v["unggul_5y"] > 0), k
+        assert v["stabil"] is True, k
+
+
+def test_BOS_lebih_kuat_daripada_CHOCH_di_kedua_sisi():
+    """Masuk akal secara teori: BOS penerusan tren yang sudah
+    terkonfirmasi, CHOCH baru DUGAAN pembalikan. Terukur begitu di
+    kedua periode, dan konsistensi itu yang membuatnya dipercaya."""
+    from core.smc import UNGGUL_SMC as U
+    assert U[("BOS", "bullish")]["unggul_pct"] > U[("CHOCH", "bullish")]["unggul_pct"]
+    assert U[("CHOCH", "bearish")]["unggul_pct"] < U[("BOS", "bullish")]["unggul_pct"]
+
+
+def test_lencana_smc_membawa_angka_dan_keterangan_stabil():
+    r = lc.susun("X", smc_jenis="BOS", smc_arah="bullish")
+    x = [y for y in r["lencana"] if y["kunci"] == "smc"][0]
+    assert x["unggul_pct"] is not None
+    assert "stabil" in x["catatan"]
+    assert x["arah"] == "naik"
+
+
+def test_kejadian_smc_lama_tidak_diberi_lencana():
+    """Struktur yang pecah enam bulan lalu bukan keadaan sekarang, dan
+    lencana yang menandainya menyesatkan justru karena terlihat
+    aktual."""
+    assert app_module.SMC_LENCANA_MAKS_BAR <= 30
+    src = inspect.getsource(app_module._lencana_payload)
+    assert "SMC_LENCANA_MAKS_BAR" in src
+
+
+def test_medan_events_bukan_nama_karangan():
+    """BUG YANG DICEGAH: versi pertama membaca (smc).get("terakhir"),
+    medan yang TIDAK ADA di build_smc_summary -- lencana SMC tidak akan
+    pernah muncul, diam-diam, tanpa error."""
+    src = inspect.getsource(app_module._lencana_payload)
+    assert '.get("events")' in src
+    # Yang dilarang BENTUK PANGGILNYA, bukan katanya -- kata "terakhir"
+    # muncul di komentar yang justru menjelaskan kenapa medan itu salah,
+    # dan penjaga yang menyala karena kalimat penjelasan akan dimatikan
+    # orang. (Kesalahan yang sama sudah tiga kali terjadi hari ini.)
+    assert '.get("terakhir")' not in src
+    assert '.get("last_event")' not in src

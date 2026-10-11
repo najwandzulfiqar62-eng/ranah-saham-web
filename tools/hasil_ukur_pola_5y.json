@@ -1,0 +1,287 @@
+{
+ "horizon_hari": 20,
+ "periode": "5y",
+ "n_emiten": 790,
+ "dasar_pct": 1.72,
+ "pola": [
+  {
+   "nama": "Bear Flag",
+   "arah": "turun",
+   "fase": "TEMBUS",
+   "n": 6940,
+   "unggul_pct": -0.69,
+   "return_pct": 0.68,
+   "pct_positif": 44.9
+  },
+  {
+   "nama": "Bear Flag",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 12727,
+   "unggul_pct": -0.17,
+   "return_pct": 1.63,
+   "pct_positif": 42.6
+  },
+  {
+   "nama": "Bull Flag",
+   "arah": "naik",
+   "fase": "TEMBUS",
+   "n": 5297,
+   "unggul_pct": 3.26,
+   "return_pct": 5.79,
+   "pct_positif": 45.5
+  },
+  {
+   "nama": "Bull Flag",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 9551,
+   "unggul_pct": 0.45,
+   "return_pct": 2.69,
+   "pct_positif": 43.2
+  },
+  {
+   "nama": "Cup with Handle",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 406,
+   "unggul_pct": -1.78,
+   "return_pct": 0.46,
+   "pct_positif": 39.9
+  },
+  {
+   "nama": "Double Bottom",
+   "arah": "naik",
+   "fase": "TEMBUS",
+   "n": 1887,
+   "unggul_pct": 0.47,
+   "return_pct": 2.78,
+   "pct_positif": 40.6
+  },
+  {
+   "nama": "Double Bottom",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 9419,
+   "unggul_pct": -0.48,
+   "return_pct": 1.56,
+   "pct_positif": 42.7
+  },
+  {
+   "nama": "Double Top",
+   "arah": "turun",
+   "fase": "TEMBUS",
+   "n": 1682,
+   "unggul_pct": -0.99,
+   "return_pct": 0.79,
+   "pct_positif": 47.6
+  },
+  {
+   "nama": "Double Top",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 7740,
+   "unggul_pct": -0.21,
+   "return_pct": 1.79,
+   "pct_positif": 42.4
+  },
+  {
+   "nama": "Falling Wedge",
+   "arah": "naik",
+   "fase": "TEMBUS",
+   "n": 80,
+   "unggul_pct": 6.35,
+   "return_pct": 9.13,
+   "pct_positif": 47.5
+  },
+  {
+   "nama": "Falling Wedge",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 63,
+   "unggul_pct": 7.59,
+   "return_pct": 8.93,
+   "pct_positif": 41.3
+  },
+  {
+   "nama": "Head & Shoulders",
+   "arah": "turun",
+   "fase": "TEMBUS",
+   "n": 764,
+   "unggul_pct": -1.08,
+   "return_pct": 1.15,
+   "pct_positif": 46.7
+  },
+  {
+   "nama": "Head & Shoulders",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 1310,
+   "unggul_pct": -0.9,
+   "return_pct": 0.86,
+   "pct_positif": 43.5
+  },
+  {
+   "nama": "Inverse Head & Shoulders",
+   "arah": "naik",
+   "fase": "TEMBUS",
+   "n": 474,
+   "unggul_pct": 1.51,
+   "return_pct": 3.36,
+   "pct_positif": 39.5
+  },
+  {
+   "nama": "Inverse Head & Shoulders",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 971,
+   "unggul_pct": -0.98,
+   "return_pct": 0.93,
+   "pct_positif": 44.0
+  },
+  {
+   "nama": "Rectangle",
+   "arah": "penerusan",
+   "fase": "TEMBUS",
+   "n": 1882,
+   "unggul_pct": -0.29,
+   "return_pct": 1.63,
+   "pct_positif": 43.3
+  },
+  {
+   "nama": "Rectangle",
+   "arah": "penerusan",
+   "fase": "TERBENTUK",
+   "n": 2880,
+   "unggul_pct": -0.47,
+   "return_pct": 1.43,
+   "pct_positif": 41.6
+  },
+  {
+   "nama": "Rising Wedge",
+   "arah": "turun",
+   "fase": "TEMBUS",
+   "n": 86,
+   "unggul_pct": -5.15,
+   "return_pct": -2.16,
+   "pct_positif": 40.7
+  },
+  {
+   "nama": "Rising Wedge",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 39,
+   "unggul_pct": 7.38,
+   "return_pct": 11.14,
+   "pct_positif": 53.8
+  },
+  {
+   "nama": "Rounding Bottom",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 1139,
+   "unggul_pct": -0.03,
+   "return_pct": 2.31,
+   "pct_positif": 42.8
+  },
+  {
+   "nama": "Rounding Top",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 1073,
+   "unggul_pct": -1.57,
+   "return_pct": -0.34,
+   "pct_positif": 39.6
+  },
+  {
+   "nama": "Segitiga Menaik",
+   "arah": "naik",
+   "fase": "TEMBUS",
+   "n": 1429,
+   "unggul_pct": 1.52,
+   "return_pct": 3.46,
+   "pct_positif": 40.6
+  },
+  {
+   "nama": "Segitiga Menaik",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 3628,
+   "unggul_pct": -0.46,
+   "return_pct": 1.62,
+   "pct_positif": 42.8
+  },
+  {
+   "nama": "Segitiga Menurun",
+   "arah": "turun",
+   "fase": "TEMBUS",
+   "n": 2135,
+   "unggul_pct": -1.25,
+   "return_pct": 0.44,
+   "pct_positif": 42.7
+  },
+  {
+   "nama": "Segitiga Menurun",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 4277,
+   "unggul_pct": -0.78,
+   "return_pct": 1.34,
+   "pct_positif": 40.8
+  },
+  {
+   "nama": "Segitiga Simetris",
+   "arah": "penerusan",
+   "fase": "TEMBUS",
+   "n": 3019,
+   "unggul_pct": 0.08,
+   "return_pct": 2.23,
+   "pct_positif": 43.3
+  },
+  {
+   "nama": "Segitiga Simetris",
+   "arah": "penerusan",
+   "fase": "TERBENTUK",
+   "n": 1819,
+   "unggul_pct": -0.77,
+   "return_pct": 1.52,
+   "pct_positif": 41.8
+  },
+  {
+   "nama": "Triple Bottom",
+   "arah": "naik",
+   "fase": "TEMBUS",
+   "n": 232,
+   "unggul_pct": -0.35,
+   "return_pct": 1.65,
+   "pct_positif": 40.9
+  },
+  {
+   "nama": "Triple Bottom",
+   "arah": "naik",
+   "fase": "TERBENTUK",
+   "n": 2086,
+   "unggul_pct": -0.42,
+   "return_pct": 1.72,
+   "pct_positif": 42.2
+  },
+  {
+   "nama": "Triple Top",
+   "arah": "turun",
+   "fase": "TEMBUS",
+   "n": 162,
+   "unggul_pct": 0.16,
+   "return_pct": 3.08,
+   "pct_positif": 52.5
+  },
+  {
+   "nama": "Triple Top",
+   "arah": "turun",
+   "fase": "TERBENTUK",
+   "n": 1330,
+   "unggul_pct": -0.07,
+   "return_pct": 1.97,
+   "pct_positif": 42.2
+  }
+ ]
+}

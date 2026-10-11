@@ -2255,7 +2255,7 @@ def _chart_overlay_payload(kode: str, df) -> dict:
     hari ini, dan kunci tanpa versi berarti kolom diam-diam kosong
     sesudah deploy, tanpa satu pun error.
     """
-    kunci = f"chartovl:v5:{(kode or '').upper()}"
+    kunci = f"chartovl:v6:{(kode or '').upper()}"
     hangat = _cache_get(kunci)
     if hangat is not None:
         return hangat
@@ -2396,7 +2396,13 @@ def _harmonic_chart_payload(df, maks: int = 2) -> list:
     return keluar
 
 
-def _lencana_payload(kode: str, vonis: str | None) -> dict:
+# Umur maksimum kejadian SMC yang masih pantas diberi lencana. Sebulan
+# bursa: struktur yang pecah lebih lama dari itu sudah digantikan.
+SMC_LENCANA_MAKS_BAR = 20
+
+
+def _lencana_payload(kode: str, vonis: str | None,
+                     smc: dict | None = None, df=None) -> dict:
     """Sistem mana saja di aplikasi ini yang sedang menandai emiten ini.
 
     SELURUH sumbernya sudah dihitung di tempat lain: tiga kueri
@@ -2454,9 +2460,28 @@ def _lencana_payload(kode: str, vonis: str | None) -> dict:
     except Exception:
         pass
 
+    # Kejadian SMC TERAKHIR, dari ringkasan yang sudah dihitung
+    # build_smc_summary -- tidak menghitung ulang apa pun.
+    # Medannya `events` (terbaru lebih dulu), BUKAN "terakhir" --
+    # versi pertama membaca nama medan yang tidak ada, jadi lencana SMC
+    # tidak akan pernah muncul. Diam, tanpa error.
+    smc_jenis = smc_arah = None
+    try:
+        ev = ((smc or {}).get("events") or [None])[0]
+        if isinstance(ev, dict):
+            # HARUS BARU. Kejadian struktur dari enam bulan lalu bukan
+            # keadaan sekarang, dan lencana yang menandainya akan
+            # menyesatkan justru karena terlihat aktual.
+            umur = len(df) - 1 - int(ev.get("index", -10**9))
+            if 0 <= umur <= SMC_LENCANA_MAKS_BAR:
+                smc_jenis, smc_arah = ev.get("type"), ev.get("direction")
+    except Exception:
+        pass
+
     return susun(
         kode,
         audit_aktif=bool(audit_aktif or nr7 or mvh),
+        smc_jenis=smc_jenis, smc_arah=smc_arah,
         audit_sumber=tuple(audit_sumber),
         vonis=vonis,
         vonis_unggul=UNGGUL_VONIS.get(vonis) if vonis else None,
@@ -2546,6 +2571,12 @@ def _pola_chart_payload(kode: str, df) -> list:
             "unggul_pct": None if u is None else u.get("unggul_pct"),
             "n_ukur": None if u is None else u.get("n"),
             "pct_positif": None if u is None else u.get("pct_positif"),
+            # Status dari uji dua periode. "goyah" WAJIB sampai ke layar:
+            # pola yang tandanya berbalik antar-periode tidak boleh
+            # tampil sama meyakinkan dengan yang bertahan.
+            "status": None if u is None else u.get("status"),
+            "arah_terukur": None if u is None else u.get("arah_terukur"),
+            "unggul_5y": None if u is None else u.get("unggul_5y"),
             "arti": keterangan(p.nama),
             # Bahan gambar untuk chart (lihat /api/ohlc).
             "titik": list(p.titik or []), "garis": list(p.garis or []),
@@ -2563,7 +2594,7 @@ async def _analyze_payload(kode: str):
     # medan itu sampai TTL-nya habis -- dan gejalanya bukan error,
     # melainkan panel yang diam-diam kosong untuk sebagian pengunjung.
     # Kelas bug ini sudah tercatat di memori proyek.
-    cache_key = f"analyze:v5:{kode}"
+    cache_key = f"analyze:v7:{kode}"
     cached = _cache_get(cache_key)
 
     if cached is None:
@@ -2584,6 +2615,7 @@ async def _analyze_payload(kode: str):
                 return None
             # RINGKASAN CEPAT (badge di halaman Analisis, dipakai ulang
             # /api/insight -- lihat _compute_ringkasan_cepat)
+            smc_l = build_smc_summary(df)
             pola_l = _pola_chart_payload(kode, df)
             sr_l = _level_sr_payload(df)
             # Vonis dihitung ULANG di sini (bukan diambil dari
@@ -2593,8 +2625,8 @@ async def _analyze_payload(kode: str):
                 vonis_l = (_ringkasan_sinyal_teknikal(ai_l) or {}).get("overall")
             except Exception:
                 vonis_l = None
-            lencana_l = _lencana_payload(kode, vonis_l)
-            return (ai_l, build_smc_summary(df), _compute_ringkasan_cepat(df, ai_l),
+            lencana_l = _lencana_payload(kode, vonis_l, smc_l, df)
+            return (ai_l, smc_l, _compute_ringkasan_cepat(df, ai_l),
                     pola_l, sr_l, _rencana_chart_payload(df, pola_l, sr_l),
                     lencana_l)
 

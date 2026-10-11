@@ -82,6 +82,7 @@ def susun(kode: str, *, audit_aktif: bool = False, audit_sumber: tuple = (),
           smart_money_pola: str | None = None,
           pemulihan_kuat: bool | None = None,
           pemulihan_unggul: float | None = None,
+          smc_jenis: str | None = None, smc_arah: str | None = None,
           nr7_aktif: bool = False,
           minervini_harmonic_aktif: bool = False) -> dict:
     """Rangkai lencana dari data yang SUDAH dihitung pemanggil.
@@ -119,6 +120,23 @@ def susun(kode: str, *, audit_aktif: bool = False, audit_sumber: tuple = (),
             True, "naik", "divergence RSI sesudah jatuh",
             unggul_pct=pemulihan_unggul if pemulihan_kuat else None,
             n_ukur=222 if pemulihan_kuat else None))
+
+    if smc_jenis and smc_arah:
+        # SATU-SATUNYA lencana yang angkanya lulus uji dua periode.
+        # Semua yang lain di aplikasi ini diukur sekali; SMC diukur di
+        # 2 tahun DAN 5 tahun, dan keempat tandanya cocok.
+        try:
+            from core.smc import unggul_smc
+            u = unggul_smc(smc_jenis, smc_arah)
+        except Exception:
+            u = None
+        naik = smc_arah == "bullish"
+        out.append(Lencana(
+            "smc", f"SMC {smc_jenis}", True, "naik" if naik else "turun",
+            (f"struktur {smc_arah}"
+             + (" · stabil di 2 & 5 tahun" if (u or {}).get("stabil") else "")),
+            unggul_pct=(u or {}).get("unggul_pct"),
+            n_ukur=(u or {}).get("n")))
 
     if nr7_aktif:
         out.append(Lencana(
