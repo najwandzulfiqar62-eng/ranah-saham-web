@@ -145,9 +145,21 @@ def susun(kode: str, *, audit_aktif: bool = False, audit_sumber: tuple = (),
             "stop ketat, breakout bisa gagal"))
 
     if minervini_harmonic_aktif:
+        # "dijeda" DISEBUT, dan itu bukan basa-basi. Lencana ini muncul
+        # dari sinyal MVH yang masih terbuka, dan sejak 12 Okt 2026 teori
+        # itu BERHENTI menerbitkan sinyal baru -- syaratnya harmonic
+        # bullish, sisi yang terukur -0,12% (di bawah pasar), sementara
+        # persilangannya dengan Minervini belum pernah diukur.
+        #
+        # Tanpa kalimat ini, pembaca melihat lencana yang terlihat
+        # seaktual lencana lain dan wajar mengira teorinya masih berjalan.
+        # Yang sedang ia lihat adalah sisa sinyal lama yang masih diaudit
+        # sampai selesai.
         out.append(Lencana(
             "minervini_harmonic", "Minervini × Harmonic", True, "naik",
-            "lolos saringan tren Minervini DAN pola harmonic"))
+            "lolos saringan tren Minervini DAN pola harmonic — "
+            "teori ini DIJEDA sejak 12 Okt 2026, belum terukur; "
+            "ini sinyal lama yang masih diaudit"))
 
     # Pasangan yang benar-benar MUNCUL BERSAMA di emiten ini -- bukan
     # seluruh daftar teori, cuma yang relevan sekarang.

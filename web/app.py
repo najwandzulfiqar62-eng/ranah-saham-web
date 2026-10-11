@@ -7538,8 +7538,35 @@ async def screener_nr7(dekat: int = 98):
     })
 
 
+# Apakah MVH masih MENCATAT sinyal. Bawaan: TIDAK.
+#
+# Keputusan penulis 12 Okt 2026. Syarat MVH adalah harmonic BULLISH, dan
+# sisi bullish itu yang terukur paling lemah dari seluruh tabel harmonic
+# (-0,12%, n=414 -- di bawah pasar), sementara sisi bearish yang justru
+# positif (+0,20%, n=458) tidak dipakai teori ini.
+#
+# MVH bukan harmonic saja: ia persilangan dengan saringan tren Minervini
+# plus syarat `sepadan`, dan persilangan itu bisa saja menyelamatkannya.
+# Tapi ia BELUM TERUKUR, dan menunggu sinyal hidup menumpuk bukan jalan
+# mengukurnya -- teori lain di aplikasi ini diukur jalan-maju atas data
+# historis, bukan dengan mempertaruhkan rekomendasi sungguhan lebih dulu.
+#
+# YANG TETAP JALAN: polanya digambar di chart (dengan angkanya), Screener
+# Harmonic tetap ada, dan sinyal MVH yang SUDAH terbuka tetap diaudit
+# sampai selesai -- audit_open_signals tidak menyaring per source.
+#
+# Dinyalakan kembali dengan MVH_CATAT_AKTIF=1, dan itu sebaiknya menunggu
+# tools/ukur_mvh.py memberi angka yang bertahan di dua periode.
+MVH_CATAT_AKTIF = os.getenv("MVH_CATAT_AKTIF", "0") == "1"
+
+
 async def _record_minervini_harmonic_cycle():
     """Catat sinyal "Minervini x Harmonic" (source teori independen ke-5).
+
+    DIJEDA sejak 12 Okt 2026 -- lihat MVH_CATAT_AKTIF di atas. Fungsinya
+    sengaja dibiarkan utuh, bukan dihapus: yang diputuskan adalah berhenti
+    MENERBITKAN rekomendasi sampai persilangannya terukur, bukan bahwa
+    teorinya salah.
 
     TIDAK memindai apa pun sendiri: ia menyilangkan DUA cache yang sudah
     dihangatkan pemanas (screenerpro & saringan harmonic) atas universe yang
@@ -7554,6 +7581,9 @@ async def _record_minervini_harmonic_cycle():
     warisan, bukan keputusan terpisah -- kalau cache-nya diubah, teori ini
     ikut berubah tanpa ada yang menyentuh kodenya.
     """
+    if not MVH_CATAT_AKTIF:
+        return
+
     from core.signal_history import record_minervini_harmonic_signals
 
     mv_items = (_cache_get(SCREENERPRO_CACHE_KEY) or {}).get("items") or []

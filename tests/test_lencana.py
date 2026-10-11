@@ -162,3 +162,96 @@ def test_medan_events_bukan_nama_karangan():
     # orang. (Kesalahan yang sama sudah tiga kali terjadi hari ini.)
     assert '.get("terakhir")' not in src
     assert '.get("last_event")' not in src
+
+
+# ---------------------------------------------------------------------------
+# MVH dijeda: berhenti MENCATAT, tetap digambar
+# ---------------------------------------------------------------------------
+# Keputusan penulis 12 Okt 2026. Syarat MVH adalah harmonic BULLISH, dan
+# sisi bullish itu yang terukur paling lemah (-0,12%, n=414 -- di bawah
+# pasar), sementara sisi bearish yang justru positif (+0,20%, n=458)
+# tidak dipakai teori ini. Persilangannya dengan Minervini belum pernah
+# diukur; harness-nya tools/ukur_mvh.py.
+
+
+def test_mvh_tidak_mencatat_sinyal_secara_bawaan():
+    """Yang dijeda PENERBITAN REKOMENDASI, bukan gambarnya.
+
+    Menggambar pola di chart adalah keterangan bentuk yang bisa diperiksa
+    pembaca sendiri. Mencatat sinyal BELI adalah rekomendasi yang masuk
+    signal_history, diaudit, dan ikut membentuk win rate yang dipakai
+    menilai seluruh aplikasi. Dua hal yang beban buktinya berbeda."""
+    assert app_module.MVH_CATAT_AKTIF is False, (
+        "MVH mencatat sinyal lagi; itu butuh angka dari tools/ukur_mvh.py "
+        "yang bertahan di dua periode")
+    # Gerbangnya harus PERNYATAAN PERTAMA sesudah docstring, bukan di
+    # tengah sesudah cache dibaca dan kandidat disusun.
+    #
+    # Diperiksa lewat AST, bukan pencarian teks: kata "MVH_CATAT_AKTIF"
+    # juga muncul di DOCSTRING fungsi ini (yang menjelaskan jedanya), dan
+    # versi pertama uji ini menangkap docstring itu lalu gagal meskipun
+    # gerbangnya ada dan benar. Kesalahan yang sama sudah tujuh kali di
+    # proyek ini.
+    import ast
+    import textwrap
+    fn = ast.parse(textwrap.dedent(
+        inspect.getsource(app_module._record_minervini_harmonic_cycle))).body[0]
+    badan = [n for n in fn.body
+             if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]
+    gerbang = badan[0]
+    assert isinstance(gerbang, ast.If), (
+        "pernyataan pertama bukan gerbang; MVH bisa mengerjakan sesuatu "
+        "sebelum memeriksa apakah ia boleh")
+    assert any(isinstance(n, ast.Return) for n in ast.walk(gerbang))
+    assert "MVH_CATAT_AKTIF" in ast.dump(gerbang.test)
+
+
+def test_sinyal_mvh_yang_sudah_terbuka_tetap_diaudit():
+    """Menjeda pencatatan TIDAK boleh menelantarkan sinyal yang sudah
+    terbit. Orang yang mengikutinya berhak tahu bagaimana akhirnya, dan
+    win rate yang meninggalkan sinyal menggantung adalah win rate yang
+    memilih sendiri sampelnya.
+
+    audit_open_signals menyaring WHERE status='OPEN' TANPA filter source,
+    jadi ia memang mencakupnya -- uji ini menjaga agar filter source
+    tidak pernah ditambahkan ke sana."""
+    import core.signal_history as sh
+    src = inspect.getsource(sh.audit_open_signals)
+    assert "WHERE status = 'OPEN'" in src
+    assert "source =" not in src and "source IN" not in src
+
+
+def test_lencana_mvh_menyebut_jedanya():
+    """Lencana ini muncul dari sinyal MVH yang masih terbuka. Tanpa
+    keterangan jedanya, ia terlihat seaktual lencana lain dan pembaca
+    wajar mengira teorinya masih berjalan -- padahal yang ia lihat sisa
+    sinyal lama."""
+    r = lc.susun("X", minervini_harmonic_aktif=True)
+    x = [y for y in r["lencana"] if y["kunci"] == "minervini_harmonic"][0]
+    assert "DIJEDA" in x["catatan"]
+    assert x["unggul_pct"] is None, "jangan beri angka pada yang belum diukur"
+
+
+def test_harness_pengukur_mvh_ada_dan_mengukur_PELENGKAPNYA():
+    """Yang menentukan bukan "apakah MVH untung", melainkan apakah
+    harmonic MENAMBAH sesuatu pada Minervini.
+
+    MVH menuntut dua syarat. Diukur sendirian lalu positif, itu belum
+    berarti apa pun -- bisa jadi seluruh angkanya datang dari Minervini
+    dan harmonic cuma mengurangi jumlah sinyal tanpa menambah kualitas.
+    Pengurangan jumlah sinyal SELALU terlihat seperti penyaringan yang
+    ketat, padahal mungkin cuma membuang sinyal secara acak.
+
+    Karena itu harness-nya wajib mengukur PELENGKAPNYA juga: Minervini
+    TANPA harmonic, pada sampel yang sama."""
+    import io
+    import os
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = io.open(os.path.join(akar, "tools", "ukur_mvh.py"),
+                  encoding="utf-8").read()
+    assert "C. Minervini TANPA harmonic" in src
+    assert "B. Minervini x Harmonic bullish" in src
+    # Dan ambangnya harus yang SAMA dengan produksi, kalau tidak yang
+    # diukur bukan teori yang dijalankan.
+    assert 'os.getenv("MINERVINI_MIN_KRITERIA", "7")' in src
+    assert "MAKS_UMUR_D = 10" in src
