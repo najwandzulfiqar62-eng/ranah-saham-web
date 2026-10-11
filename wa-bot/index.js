@@ -80,7 +80,67 @@ if (!SECRET) {
   );
 }
 
+// Penyambungan ulang: BERJEDA MENANJAK, dan TIDAK BOLEH BERTUMPUK.
+//
+// Versi sebelumnya memanggil startSock() SEKETIKA, tanpa jeda dan tanpa
+// penjaga, pada tiap kejadian "close". Dua akibatnya terbaca di log server
+// 11 Okt 2026:
+//
+//   1. 408 "Timed Out" pada 'init queries' berulang tiap ~50 menit. 408
+//      itu justru yang dikirim WhatsApp saat ia sedang MEMBATASI; menyambung
+//      seketika memperburuk pembatasan yang menyebabkan putusnya.
+//
+//   2. Baileys bisa memancarkan "close" dari socket LAMA ketika socket baru
+//      sudah dibuat. Tiap startSock() memasang set handler BARU, sementara
+//      handler socket lama tidak pernah dilepas -- jadi satu pesan masuk
+//      bisa dilayani beberapa kali, dan `sock` (tingkat modul) cuma menunjuk
+//      yang TERAKHIR. Balasan keluar lewat socket yang belum tentu socket
+//      yang menerimanya.
+//
+// Nomor dua itu yang membuat japri "kadang jalan kadang tidak" tanpa
+// meninggalkan jejak: tidak ada error sama sekali, pesannya cuma keluar
+// lewat pintu yang salah. Keadaan seperti itu tidak bisa ditemukan dari
+// log, cuma dari membaca siapa yang memasang handler.
+const JEDA_SAMBUNG_MIN_MS = Number(process.env.WA_JEDA_SAMBUNG_MS || 2000);
+const JEDA_SAMBUNG_MAKS_MS = 120000;
+let sedangMulai = false;
+let gagalBerturut = 0;
+let timerSambung = null;
+
+function sambungUlang() {
+  // Satu jadwal saja. Tanpa penjaga ini, tiga kejadian "close" berturut-turut
+  // menjadwalkan tiga penyambungan yang semuanya jadi.
+  if (timerSambung || sedangMulai) return;
+  gagalBerturut += 1;
+  const jeda = Math.min(
+    JEDA_SAMBUNG_MIN_MS * Math.pow(2, gagalBerturut - 1),
+    JEDA_SAMBUNG_MAKS_MS);
+  console.warn(`[wa-bot] Menyambung ulang dalam ${Math.round(jeda / 1000)}s (putus ke-${gagalBerturut}).`);
+  timerSambung = setTimeout(() => {
+    timerSambung = null;
+    startSock().catch((e) => {
+      console.error("[wa-bot] Gagal menyambung ulang:", e);
+      sambungUlang();
+    });
+  }, jeda);
+}
+
 async function startSock() {
+  if (sedangMulai) {
+    console.warn("[wa-bot] startSock dipanggil saat penyambungan sedang jalan -- diabaikan.");
+    return;
+  }
+  sedangMulai = true;
+  try {
+  // Socket lama dilepas SEBELUM yang baru dibuat. removeAllListeners() dulu,
+  // baru end() -- urutannya penting: end() memancarkan "close", dan kalau
+  // handler-nya masih terpasang ia akan memanggil sambungUlang() dari dalam
+  // penyambungan yang sedang berjalan.
+  if (sock) {
+    try { sock.ev.removeAllListeners(); } catch (e) { /* socket sudah mati */ }
+    try { sock.end(undefined); } catch (e) { /* idem */ }
+    sock = null;
+  }
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -106,6 +166,10 @@ async function startSock() {
     if (connection === "open") {
       isConnected = true;
       lastQrPng = null;
+      // Jeda disetel ulang HANYA di sini, bukan di "close". Sambungan yang
+      // putus-sambung tiap menit akan selamanya memakai jeda terkecil kalau
+      // hitungannya disetel ulang oleh PERCOBAAN, bukan oleh KEBERHASILAN.
+      gagalBerturut = 0;
       console.log("[wa-bot] Terhubung ke WhatsApp.");
     }
 
@@ -113,10 +177,8 @@ async function startSock() {
       isConnected = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
-      console.warn(`[wa-bot] Koneksi terputus (status ${statusCode}). ${loggedOut ? "Logged out -- perlu scan QR ulang." : "Mencoba menyambung ulang..."}`);
-      if (!loggedOut) {
-        startSock().catch((e) => console.error("[wa-bot] Gagal menyambung ulang:", e));
-      }
+      console.warn(`[wa-bot] Koneksi terputus (status ${statusCode}). ${loggedOut ? "Logged out -- perlu scan QR ulang." : "Akan menyambung ulang."}`);
+      if (!loggedOut) sambungUlang();
     }
   });
 
@@ -242,6 +304,13 @@ async function startSock() {
       }
     }
   });
+  } finally {
+    // WAJIB finally. Kalau useMultiFileAuthState atau
+    // fetchLatestBaileysVersion melempar, `sedangMulai` akan tersangkut
+    // true SELAMANYA dan bot tidak pernah menyambung lagi -- jauh lebih
+    // buruk daripada cacat yang sedang diperbaiki.
+    sedangMulai = false;
+  }
 }
 
 startSock().catch((e) => {

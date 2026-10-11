@@ -139,45 +139,53 @@ def test_penjaga_bertahan_sesudah_restart(alert):
 
 def test_peringatan_dikirim_JAPRI_bukan_ke_grup():
     """Isinya menyebut saham dan harga milik SATU orang."""
-    import io
-    import os
+    import inspect
 
-    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    app = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
-    fungsi = app.split("async def _jalankan_alert_posisi")[1][:2500]
+    import web.app as app_module
+
+    # SUMBER FUNGSINYA UTUH, bukan potongan 2500 karakter pertama.
+    # Anggaran tetap itu pecah 11 Okt 2026 begitu fungsinya bertambah
+    # panjang: baris yang dijaga terlempar ke luar potongan, dan ujinya
+    # gagal meskipun yang dijaganya masih ada dan masih benar.
+    fungsi = inspect.getsource(app_module._jalankan_alert_posisi)
     assert 'to=u["phone"]' in fungsi, "peringatan tidak dikirim japri"
 
 
 def test_hanya_anggota_yang_sudah_disetujui():
     """Bawaan list_users() adalah "pending". Mengirim peringatan posisi ke
     orang yang akunnya belum disetujui adalah kebocoran sekaligus gangguan."""
-    import io
-    import os
+    import inspect
 
-    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    app = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
-    fungsi = app.split("async def _jalankan_alert_posisi")[1][:2500]
+    import web.app as app_module
+
+    # SUMBER FUNGSINYA UTUH, bukan potongan 2500 karakter pertama.
+    # Anggaran tetap itu pecah 11 Okt 2026 begitu fungsinya bertambah
+    # panjang: baris yang dijaga terlempar ke luar potongan, dan ujinya
+    # gagal meskipun yang dijaganya masih ada dan masih benar.
+    fungsi = inspect.getsource(app_module._jalankan_alert_posisi)
     assert 'list_users, "approved"' in fungsi
 
 
 def test_peringatan_hanya_pada_jam_bursa():
     """"ERAA menyentuh stop" yang datang pukul sebelas malam tidak bisa
     ditindaklanjuti siapa pun -- ia cuma mengganggu."""
-    import io
-    import os
+    import inspect
 
-    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    app = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
-    loop = app.split("async def _wa_alert_loop")[1][:1600]
+    import web.app as app_module
+
+    loop = inspect.getsource(app_module._wa_alert_loop)
     assert "_is_bursa_trading_hours" in loop and "_is_bursa_weekend" in loop
 
 
 def test_satu_pesan_per_orang_per_putaran():
     """Lima peringatan sekaligus terbaca seperti bot rusak."""
-    import io
-    import os
+    import inspect
 
-    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    app = io.open(os.path.join(akar, "web", "app.py"), encoding="utf-8").read()
-    fungsi = app.split("async def _jalankan_alert_posisi")[1][:2500]
+    import web.app as app_module
+
+    # SUMBER FUNGSINYA UTUH, bukan potongan 2500 karakter pertama.
+    # Anggaran tetap itu pecah 11 Okt 2026 begitu fungsinya bertambah
+    # panjang: baris yang dijaga terlempar ke luar potongan, dan ujinya
+    # gagal meskipun yang dijaganya masih ada dan masih benar.
+    fungsi = inspect.getsource(app_module._jalankan_alert_posisi)
     assert "\n                break" in fungsi or "break" in fungsi

@@ -885,6 +885,61 @@ def get_active_kodes() -> list[str]:
     return [r["kode"] for r in rows]
 
 
+def sl_rencana_kode(kode: str, harga: float | None = None) -> dict | None:
+    """Harga STOP dari sinyal yang sedang BERJALAN untuk `kode`, atau None.
+
+    BUG YANG DITUTUP OLEH FUNGSI INI. Peringatan posisi WhatsApp memanggil
+    periksa_posisi(p, harga, level) -- tiga argumen. Parameter keempatnya,
+    `sl`, karenanya selalu None, dan aturan PERTAMA di dalam periksa_posisi
+    berbunyi `if sl and harga <= sl`. Jadi peringatan "harga menyentuh
+    stop" -- satu-satunya yang ditandai PENTING dan dibebaskan dari jatah
+    harian, yang catatannya sendiri menyebut "paling mendesak: uangnya
+    sedang keluar" -- TIDAK PERNAH bisa menyala di produksi.
+
+    Ujinya lulus selama ini karena uji memasok `sl` sendiri. Produksi tidak
+    pernah punya apa pun untuk dipasok: posisi portofolio tidak menyimpan
+    stop (tidak ada kolom sl di porto_transaksi), dan tidak ada satu pun
+    pemanggil yang mencarinya di tempat lain.
+
+    Di sinilah stop itu sebenarnya sudah ada: sinyal yang diaudit menyimpan
+    entry_price dan sl_pct, yaitu rencana yang dibuat aplikasi ini sendiri.
+
+    TIGA PENYARINGAN, dan ketiganya mengubah jawabannya:
+
+      1. HANYA status OPEN. PENDING_ENTRY berarti harga entry-nya belum
+         tersentuh, jadi rencananya belum berjalan -- menyebut angkanya
+         "stop" untuk rencana yang belum mulai adalah salah.
+      2. HANYA stop DI BAWAH entry. Peringatan ini untuk saham yang
+         DIPEGANG; stop sebuah sinyal JUAL berada di atas entry dan tidak
+         berlaku bagi pemegangnya.
+      3. AKSI KORPORASI DIBUANG. Entry dari sebelum split (RAJA ~1:5)
+         menghasilkan stop yang beda skala. Peringatan stop yang salah
+         skala lebih buruk daripada tidak ada peringatan sama sekali,
+         karena isinya menyuruh orang MENJUAL.
+    """
+    kode = (kode or "").upper().strip()
+    if not kode:
+        return None
+    _ensure_table()
+    with get_db() as conn:
+        r = conn.execute(
+            "SELECT entry_price, sl_pct, recorded_at FROM signal_history "
+            "WHERE kode = ? AND status = 'OPEN' "
+            "ORDER BY recorded_at DESC LIMIT 1", (kode,)).fetchone()
+    if not r:
+        return None
+    entry, sl_pct = r["entry_price"], r["sl_pct"]
+    if not (_is_finite_pos(entry) and _is_finite_pos(sl_pct)):
+        return None
+    sl = entry * (1 - sl_pct / 100.0)
+    if not _is_finite_pos(sl) or sl >= entry:
+        return None                       # sisi JUAL, atau angka tak wajar
+    if harga is not None and _is_finite_pos(harga)             and is_price_scale_anomaly(entry, harga):
+        return None                       # beda skala: split/reverse split
+    return {"sl": round(sl, 2), "entry": entry, "sl_pct": sl_pct,
+            "sejak": r["recorded_at"]}
+
+
 def _tp_sl_rencana(it: dict, is_sell: bool = False) -> tuple[float, float]:
     """(tp_pct, sl_pct) untuk satu kandidat sinyal.
 

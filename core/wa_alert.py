@@ -63,7 +63,69 @@ def ensure_alert_tables() -> None:
                      "ON wa_alert_kirim(user_id, dikirim_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_kunci "
                      "ON wa_alert_kirim(user_id, kunci)")
+        # NADI PUTARAN -- lihat catat_nadi() di bawah utk alasannya.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wa_alert_nadi (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                terakhir_at TEXT NOT NULL,
+                putaran INTEGER NOT NULL DEFAULT 0,
+                n_user INTEGER NOT NULL DEFAULT 0,
+                n_posisi INTEGER NOT NULL DEFAULT 0,
+                n_berharga INTEGER NOT NULL DEFAULT 0,
+                n_ber_sl INTEGER NOT NULL DEFAULT 0,
+                n_kirim INTEGER NOT NULL DEFAULT 0
+            )
+        """)
     _tabel_siap = True
+
+
+def catat_nadi(n_user: int, n_posisi: int, n_berharga: int,
+               n_ber_sl: int, n_kirim: int) -> None:
+    """Catat bahwa satu putaran pemeriksaan BENAR-BENAR berjalan, dan apa
+    yang dilihatnya.
+
+    KENAPA INI ADA. Tabel wa_alert_kirim cuma terisi saat ada peringatan
+    yang DIKIRIM. Jadi "tabelnya kosong" tidak bisa membedakan empat
+    keadaan yang sangat berbeda:
+
+        a. loop-nya tidak pernah jalan (mati / tidak pernah jam bursa)
+        b. jalan, tapi tidak ada anggota ber-nomor-HP
+        c. jalan, anggota ada, tapi tidak ada yang punya posisi
+        d. jalan, posisi ada, cuma memang belum ada yang layak dikirim
+
+    Hanya (d) yang berarti "sistemnya sehat, cuma sedang diam". Tiga
+    sisanya kerusakan atau kekosongan data, dan tanpa nadi ini keempatnya
+    terlihat identik dari luar: tabel yang tidak ada.
+
+    Pelajaran ini mahal: tools/cek_server.sh versi pertama MENYIMPULKAN
+    "jalur peringatan belum pernah jalan sekali pun" dari tabel yang
+    belum ada -- kesimpulan yang buktinya tidak sanggup menopang.
+    """
+    ensure_alert_tables()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO wa_alert_nadi
+                (id, terakhir_at, putaran, n_user, n_posisi, n_berharga,
+                 n_ber_sl, n_kirim)
+            VALUES (1, datetime('now'), 1, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                terakhir_at = datetime('now'),
+                putaran     = wa_alert_nadi.putaran + 1,
+                n_user      = excluded.n_user,
+                n_posisi    = excluded.n_posisi,
+                n_berharga  = excluded.n_berharga,
+                n_ber_sl    = excluded.n_ber_sl,
+                n_kirim     = wa_alert_nadi.n_kirim + excluded.n_kirim
+        """, (int(n_user), int(n_posisi), int(n_berharga),
+              int(n_ber_sl), int(n_kirim)))
+
+
+def baca_nadi() -> dict | None:
+    """Keadaan putaran terakhir, atau None kalau belum pernah jalan."""
+    ensure_alert_tables()
+    with get_db() as conn:
+        r = conn.execute("SELECT * FROM wa_alert_nadi WHERE id = 1").fetchone()
+    return dict(r) if r else None
 
 
 def _sekarang() -> datetime:
@@ -157,8 +219,15 @@ def periksa_posisi(p: dict, harga: float, level: list[dict] | None = None,
     if sl and harga <= sl:
         return {"jenis": "sl", "kode": kode,
                 "kunci": f"{kode}:sl:{round(sl)}",
+                # "rencanamu" DIGANTI 11 Okt 2026. Angka stop ini datang dari
+                # sinyal di Audit Sinyal (sl_rencana_kode), bukan dari sesuatu
+                # yang orangnya pernah setel sendiri -- posisi portofolio tidak
+                # menyimpan stop sama sekali. Menyebutnya "rencanamu" membuat
+                # pembacanya mengira ia sedang diingatkan soal keputusannya
+                # sendiri, lalu menindaklanjutinya dengan keyakinan yang tidak
+                # pernah ia berikan.
                 "teks": (f"⚠ *{kode}* menyentuh {_rp(harga)} — di bawah stop "
-                         f"rencanamu {_rp(sl)}.\n"
+                         f"rencana Audit Sinyal {_rp(sl)}.\n"
                          f"Posisi {ubah:+.1f}% dari rata-rata {_rp(avg)}.\n\n"
                          f"_Keputusan tetap di kamu. Ketik `{kode}` untuk "
                          f"kondisi teknikalnya hari ini._")}

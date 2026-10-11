@@ -335,6 +335,17 @@ async def _lifespan(_app: "FastAPI"):
         print("Akses akun: admin bootstrap siap.")
     else:
         print("PERINGATAN akses akun: ACCESS_ADMIN_EMAIL/PASSWORD belum diatur; pendaftaran tidak bisa disetujui.")
+    # Tabel peringatan dibuat SEKARANG, bukan saat peringatan pertama
+    # dikirim. Sebelum ini ensure_alert_tables() cuma terpanggil dari dalam
+    # boleh_kirim(), jadi tabelnya tidak ada sampai ada sesuatu yang layak
+    # dikirim -- dan "tabelnya tidak ada" lalu tidak bisa dibedakan dari
+    # "jalurnya rusak". Diperiksa di server 11 Okt 2026: tabelnya memang
+    # belum ada, dan tidak ada satu pun cara tahu apakah itu wajar.
+    try:
+        from core.wa_alert import ensure_alert_tables
+        ensure_alert_tables()
+    except Exception as e:
+        print(f"PERINGATAN wa-alert: tabel gagal disiapkan: {e}")
     tasks = [
         asyncio.create_task(_watchdog_event_loop()),
         asyncio.create_task(_signal_auto_loop()),
@@ -8896,7 +8907,9 @@ async def _jalankan_alert_posisi() -> int:
     """Periksa posisi SEMUA anggota, kirim yang layak. Return jumlah terkirim."""
     from core.access import list_users
     from core.portofolio import posisi_user
-    from core.wa_alert import boleh_kirim, catat_kirim, periksa_posisi
+    from core.signal_history import sl_rencana_kode
+    from core.wa_alert import (boleh_kirim, catat_kirim, catat_nadi,
+                               periksa_posisi)
     from core.whatsapp_notify import send_wa_text
 
     # "approved" EKSPLISIT: bawaan list_users() adalah "pending", dan
@@ -8905,14 +8918,21 @@ async def _jalankan_alert_posisi() -> int:
     anggota = await asyncio.to_thread(list_users, "approved")
     aktif = [u for u in (anggota or []) if u.get("phone")]
     if not aktif:
+        # Tetap dicatat. "Tidak ada anggota ber-nomor-HP" adalah JAWABAN
+        # atas pertanyaan "kenapa tidak ada peringatan", dan ia keadaan
+        # yang sama sekali berbeda dari "loop-nya mati". Pulang tanpa
+        # mencatat membuat keduanya terlihat identik dari luar.
+        await asyncio.to_thread(catat_nadi, 0, 0, 0, 0, 0)
         return 0
 
     terkirim = 0
+    n_posisi = n_berharga = n_ber_sl = 0
     for u in aktif:
         try:
             posisi = await asyncio.to_thread(posisi_user, u["id"])
             if not posisi:
                 continue
+            n_posisi += len(posisi)
             for p in posisi:
                 # Harga & level dari jalur yang SAMA dipakai `porto`, jadi
                 # peringatan tidak mungkin menyebut angka yang berbeda dari
@@ -8921,7 +8941,17 @@ async def _jalankan_alert_posisi() -> int:
                 harga = b.get("harga")
                 if not harga:
                     continue
-                pesan = periksa_posisi(p, harga, b.get("level"))
+                n_berharga += 1
+                # STOP dari sinyal yang diaudit. TANPA baris ini, aturan
+                # pertama di periksa_posisi -- "menyentuh stop", satu-satunya
+                # yang dibebaskan dari jatah harian karena paling mendesak --
+                # tidak pernah bisa menyala: `sl` tetap None selamanya, dan
+                # posisi portofolio sendiri tidak menyimpan stop.
+                r_sl = await asyncio.to_thread(sl_rencana_kode, p["kode"], harga)
+                sl = (r_sl or {}).get("sl")
+                if sl:
+                    n_ber_sl += 1
+                pesan = periksa_posisi(p, harga, b.get("level"), sl)
                 if not pesan:
                     continue
                 if not await asyncio.to_thread(boleh_kirim, u["id"],
@@ -8938,6 +8968,8 @@ async def _jalankan_alert_posisi() -> int:
         except Exception as e:
             print(f"\u26a0\ufe0f wa-alert {u.get('name')}: {type(e).__name__}: {e}")
         await asyncio.sleep(0)
+    await asyncio.to_thread(catat_nadi, len(aktif), n_posisi, n_berharga,
+                            n_ber_sl, terkirim)
     if terkirim:
         print(f"\u2139\ufe0f wa-alert: {terkirim} peringatan terkirim", flush=True)
     return terkirim
