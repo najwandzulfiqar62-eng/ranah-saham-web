@@ -410,3 +410,46 @@ def test_nadi_terisi_sesudah_putaran_sungguhan(monkeypatch, sinyal, nadi):
     assert r["n_user"] == 1 and r["n_posisi"] == 1
     assert r["n_berharga"] == 1 and r["n_ber_sl"] == 1
     assert r["n_kirim"] == 1
+
+
+# ---------------------------------------------------------------------------
+# tools/cek_sinyal.sh -- alat diagnostik kedua, dan ia pun harus diragukan
+# ---------------------------------------------------------------------------
+
+def _skrip_sinyal():
+    return io.open(os.path.join(AKAR, "tools", "cek_sinyal.sh"),
+                   encoding="utf-8").read()
+
+
+def test_cek_sinyal_tidak_menuntut_sqlite3_terpasang():
+    """sqlite3 TIDAK terpasang di server (terbukti 12 Okt 2026), dan
+    memasangnya cuma untuk membaca satu tabel adalah apt install yang
+    tidak perlu -- Python yang menjalankan aplikasinya sudah membawa
+    modul sqlite3 di pustaka bakunya."""
+    s = _skrip_sinyal()
+    kode = "\n".join(b for b in s.splitlines()
+                     if not b.strip().startswith("#"))
+    assert "sqlite3 " not in kode, "masih memanggil perintah sqlite3"
+    assert "import sqlite3" in s
+
+
+def test_cek_sinyal_membuka_basis_data_HANYA_BACA():
+    """Alat diagnostik yang dijalankan di produksi tidak boleh punya
+    kemampuan menulis sama sekali. mode=ro membuat kesalahan tulis jadi
+    galat, bukan kerusakan."""
+    assert "mode=ro" in _skrip_sinyal()
+
+
+def test_win_rate_hanya_dari_yang_SUDAH_selesai():
+    """Memasukkan OPEN membuat angkanya bergantung pada kapan kebetulan
+    dibaca: posisi yang sedang untung belum tentu berakhir untung, dan
+    angka yang berubah tiap hari tanpa ada sinyal baru bukan win rate.
+
+    EXPIRED_NO_ENTRY juga dikeluarkan -- harga entry-nya tidak pernah
+    tersentuh, jadi tidak ada posisi. Ia bukan kalah dan bukan menang."""
+    s = _skrip_sinyal()
+    i = s.index('tp = sum(')
+    blok = s[i:s.index("CATATAN", i)]
+    assert '"TP_HIT"' in blok and '"SL_HIT"' in blok
+    for terlarang in ('"OPEN"', '"EXPIRED_NO_ENTRY"', '"PENDING_ENTRY"'):
+        assert terlarang not in blok, f"{terlarang} ikut dihitung win rate"
