@@ -6392,17 +6392,21 @@ function _tagKeandalan(label){
 
 /* ---------- KEANDALAN VONIS, dari pengukuran ----------
    Tangga tujuh tingkat itu menjanjikan tujuh derajat ketelitian yang
-   tidak dimilikinya. Diukur pada 25.097 EPISODE vonis (bukan per bar --
-   bar berurutan dengan vonis sama itu nyaris duplikat), terhadap dasar
-   +0,88% per 20 hari bursa:
+   tidak dimilikinya. Diukur ulang di 786 emiten dengan dasar pembanding
+   SETANGGAL (+3,35% per 20 hari bursa) -- bukan dasar tetap:
 
-       BELI KUAT +1,30% | BELI +0,13% | CENDERUNG BELI +0,04%
-       NETRAL +0,12% | CENDERUNG JUAL -0,10% | JUAL -0,42% | JUAL KUAT -0,66%
+       BELI +0,80% | BELI KUAT +0,20% | CENDERUNG BELI -0,27%
+       NETRAL -0,35% | CENDERUNG JUAL -0,37% | JUAL -0,67% | JUAL KUAT -0,33%
 
-   Empat vonis di tengah semuanya dalam rentang +-0,13% -- tidak bisa
-   dibedakan dari tidak tahu apa-apa. Orang yang membaca "CENDERUNG BELI"
-   wajar mengira ia mendapat sesuatu, dan selama angkanya tidak
-   ditampilkan, tidak ada cara ia tahu bahwa ia tidak.
+   PERHATIKAN URUTANNYA: BELI di ATAS BELI KUAT. Vonis yang terdengar
+   lebih kuat terukur lebih lemah, dan sebabnya mekanis -- suara Volume
+   sudah terukur terbalik, jadi menuntut 6 dari 7 suara berarti menuntut
+   suara yang buruk itu ikut setuju.
+
+   Yang di tengah berdesakan di sekitar -0,3%: tidak bisa dibedakan dari
+   tidak tahu apa-apa. Orang yang membaca "CENDERUNG BELI" wajar mengira
+   ia mendapat sesuatu, dan selama angkanya tidak ditampilkan, tidak ada
+   cara ia tahu bahwa ia tidak.
 
    Vonisnya sendiri TIDAK diubah -- signal_history memakai semantik lama,
    dan menggesernya membuat riwayat lama dan baru tidak sebanding tanpa
@@ -6415,10 +6419,11 @@ const _UNGGUL_VONIS={'BELI KUAT':0.2,'BELI':0.8,'CENDERUNG BELI':-0.27,'NETRAL':
 
 function _keandalanVonis(d, overall){
   const dh = d.dua_hari || {};
-  // Aturan dua hari lebih dulu kalau ia MENGUBAH artinya. Diukur: BELI
-  // yang bertahan ke hari kedua +1,63% -- setara BELI KUAT (+1,30%),
-  // padahal BELI hari pertama cuma +0,13%. Yang sudah ekstrem tidak
-  // bertambah baik dengan ditunggu.
+  // Aturan dua hari lebih dulu kalau ia MENGUBAH artinya. Diukur di 786
+  // emiten: BELI yang bertahan ke hari kedua +2,88% (n=911), padahal
+  // BELI hari pertama cuma +0,80%. Berlaku juga di sisi jual (-0,87%
+  // vs -0,67%), dan konsistensi di kedua sisi itu yang membuatnya
+  // layak dipercaya.
   if(dh.setara_kuat){
     return `<div style="font-size:11.5px;margin-top:8px;color:var(--bull);line-height:1.5">
       <b>Bertahan dua hari</b> \u2014 terukur +${fmt(dh.unggul_pct,2)}% di atas pasar,
@@ -7563,7 +7568,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v86';
+const APP_VERSION='v87';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){
