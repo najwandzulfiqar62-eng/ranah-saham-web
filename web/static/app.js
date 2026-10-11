@@ -950,10 +950,25 @@ function _gambarFibo(kunci, nyala){
         lineWidth:1, lineStyle:ext?3:2, axisLabelVisible:true,
         // Angka terukurnya ikut di judul kalau ada. Level yang
         // belum cukup sampel tampil polos -- bukan dengan nol.
+        //
+        // "⚠" = tandanya BERBALIK antara 2 dan 5 tahun. Garis chart tidak
+        // bisa membawa tooltip, jadi penandanya harus ada di teksnya
+        // sendiri; tanpa itu angka yang goyah dan angka yang bertahan
+        // terbaca persis sama, dan di layar keduanya cuma selisih
+        // beberapa persen. Lencana yang sama dipakai panel pola.
+        // Penanda status, konvensi yang sama dengan panel pola:
+        //   ⚠ = tandanya BERBALIK antara 2 dan 5 tahun
+        //   · = cuma cukup sampel di SATU periode (belum diuji kestabilan)
+        // Garis chart tidak bisa membawa tooltip, jadi penandanya harus
+        // ada di teksnya sendiri. Tanpa itu angka yang goyah, angka yang
+        // sepihak, dan angka yang bertahan terbaca persis sama -- dan di
+        // layar ketiganya cuma selisih beberapa persen.
         title:_sempit()
           ? L.nama.replace('Fibo ','').replace('Target ','T')
+              + (L.status==='goyah'?' ⚠':L.status==='sepihak'?' ·':'')
           : L.nama + (L.unggul_pct==null?''
-              :` ${L.unggul_pct>0?'+':''}${fmt(L.unggul_pct,2)}%`),
+              :` ${L.unggul_pct>0?'+':''}${fmt(L.unggul_pct,2)}%`
+                + (L.status==='goyah'?' ⚠':L.status==='sepihak'?' ·':'')),
       }));
     }catch(e){ console.warn('fibo: garis gagal',e) }
   }
@@ -1124,7 +1139,7 @@ function _renderPolaChips(kunci){
     const w=fb.arah==='naik'?'var(--bull)':'var(--bear)';
     bagian.push(`<button class="chip ${st.fiboNyala?'active':''}" data-fibo="1"
       style="${st.fiboNyala?`border-color:${w};color:${w}`:''}"
-      title="Fibonacci dari ayunan ${fb.arah} ${fb.ayunan_pct}% (${fb.awal_tanggal} → ${fb.akhir_tanggal}), ${fb.ayunan_atr}× ATR. Jumlah garis mengikuti besar ayunan.&#10;&#10;DIUKUR di 786 emiten: tidak ada pola — tandanya berganti-ganti antar-rasio tanpa urutan. Garis ini ACUAN tempat harga pernah berbalik, BUKAN sesuatu yang terukur menguntungkan.">
+      title="Fibonacci dari ayunan ${fb.arah} ${fb.ayunan_pct}% (${fb.awal_tanggal} → ${fb.akhir_tanggal}), ${fb.ayunan_atr}× ATR. Jumlah garis mengikuti besar ayunan.&#10;&#10;DIUKUR DUA PERIODE (786 emiten/2 thn, 634/5 thn): menyentuh level Fibonacci TIDAK memberi keunggulan. Dari tujuh sel yang tandanya bertahan di kedua periode, 4 negatif dan 3 positif — campur aduk, rata-rata −0,19%. Yang positif di kedua arah pada kedua periode cuma 78,6%, tapi besarnya mengecil separuh di periode panjang: yang bertahan arahnya, bukan ukurannya.&#10;&#10;Garis ini ACUAN tempat harga pernah berbalik, BUKAN sesuatu yang terukur menguntungkan. Angka di tiap garis ditempel apa adanya, termasuk yang negatif; '⚠' berarti tandanya berbalik antar-periode.">
       ${st.fiboNyala?'Sembunyikan Fibo':`Fibonacci (${fb.arah})`}</button>`);
   }
   const hm=st.harm||[];
@@ -1372,7 +1387,8 @@ async function showIhsg(){
       <div class="cell"><div class="k">Resistance 2 / 1</div><div class="v">${fmt(d.resistance_2)} / ${fmt(d.resistance_1)}</div></div>
       <div class="cell"><div class="k">Support 1 / 2</div><div class="v">${fmt(d.support_1)} / ${fmt(d.support_2)}</div></div>
       <div class="cell"><div class="k">Volume Profile (POC)</div><div class="v">${fmt(d.poc)}</div></div>
-      <div class="cell"><div class="k">Fibonacci .382/.5/.618</div><div class="v" style="font-size:13px">${fmt(d.fib_382)} / ${fmt(d.fib_500)} / ${fmt(d.fib_618)}</div></div>
+      ${d.fib_382!=null?`<div class="cell"><div class="k" title="Dari ayunan ${d.fib_arah||'dominan'} yang sama dengan garis Fibonacci di chart — bukan dari tertinggi/terendah 50 bar, yang mengabaikan mana yang lebih dulu.">Fibonacci .382/.5/.618 ${d.fib_arah?`<span class="muted">(${d.fib_arah})</span>`:''}</div><div class="v" style="font-size:13px">${fmt(d.fib_382)} / ${fmt(d.fib_500)} / ${fmt(d.fib_618)}</div></div>`
+        :`<div class="cell"><div class="k">Fibonacci</div><div class="v muted" style="font-size:13px" title="Tidak ada ayunan yang cukup besar untuk ditarik Fibonacci sekarang. Angka dari ayunan yang terlalu kecil menggambar garis yang lebih rapat daripada gerak sehari.">belum ada ayunan</div></div>`}
       <div class="cell"><div class="k">Zona Entry</div><div class="v" style="font-size:13px">${d.entry_zone||'–'}</div></div>
       <div class="cell"><div class="k">Stop Loss (acuan)</div><div class="v">${fmt(d.stop_loss)}</div></div>
       ${d.potensi_naik_pct!=null?`<div class="cell"><div class="k">Potensi Naik (ke R1 ${fmt(d.resistance_1)})</div><div class="v" style="color:var(--bull)">+${fmt(d.potensi_naik_pct,1)}%</div></div>`:''}
@@ -6282,8 +6298,20 @@ function _buildPolaChart(d){
       ukur = '<span class="muted" style="font-size:11px">belum diukur</span>';
     }else{
       const goyah = p.status==='goyah';
-      ukur = `<b style="color:${goyah?'var(--muted)':(p.unggul_pct>0?'var(--bull)':'var(--bear)')};font-size:13px"
-        title="${goyah?`Tandanya BERBALIK antar-periode (2 thn ${fmt(p.unggul_pct,2)}%, 5 thn ${fmt(p.unggul_5y,2)}%). Belum bisa dipercaya.`:`Tandanya sama di 2 dan 5 tahun (5 thn ${fmt(p.unggul_5y,2)}%).`}">${p.unggul_pct>0?'+':''}${fmt(p.unggul_pct,2)}%${goyah?' ⚠':''}</b>`;
+      // SEPIHAK dipisahkan dari "stabil", dan itu bukan kerewelan istilah.
+      // Sebelum ini semua yang BUKAN goyah diberi keterangan "Tandanya
+      // sama di 2 dan 5 tahun" -- termasuk baris sepihak, yang justru
+      // berarti satu periodenya TIDAK punya cukup sampel untuk dibandingkan.
+      // Jadi layarnya mengklaim kesepakatan dua periode yang tidak pernah
+      // ada, pada baris yang buktinya paling tipis.
+      const sepihak = p.status==='sepihak';
+      const ket = goyah
+        ? `Tandanya BERBALIK antar-periode (2 thn ${fmt(p.unggul_pct,2)}%, 5 thn ${fmt(p.unggul_5y,2)}%). Belum bisa dipercaya.`
+        : sepihak
+          ? `Cuma cukup sampel di SATU periode (n=${p.n_ukur}). Belum diuji kestabilannya.`
+          : `Tandanya sama di 2 dan 5 tahun (5 thn ${fmt(p.unggul_5y,2)}%).`;
+      ukur = `<b style="color:${(goyah||sepihak)?'var(--muted)':(p.unggul_pct>0?'var(--bull)':'var(--bear)')};font-size:13px"
+        title="${ket}">${p.unggul_pct>0?'+':''}${fmt(p.unggul_pct,2)}%${goyah?' ⚠':''}${sepihak?' ·':''}</b>`;
     }
     const lvl=(typeof _rpRingkas==='function')?_rpRingkas(p.level_kunci):('Rp'+fmt(p.level_kunci));
     return `<div style="border-left:3px solid ${w};padding:7px 0 7px 10px;margin-bottom:7px">
@@ -6950,7 +6978,7 @@ const EDU_TERMS=[
   {cat:'Dasar Teknikal',t:'Volume',d:`Jumlah lembar/transaksi yang diperdagangkan. Lonjakan volume menandakan partisipasi tinggi; pergerakan harga dengan volume besar dianggap lebih meyakinkan.`},
   {cat:'Dasar Teknikal',t:'Support & Resistance',d:`Support = area yang cenderung menahan penurunan (banyak permintaan). Resistance = area yang menahan kenaikan (banyak penawaran).`,n:`Bukan garis pasti, melainkan ZONA — sering ditembus.`},
   {cat:'Dasar Teknikal',t:'Pivot Point',d:`Level acuan dari high/low/close periode sebelumnya, dengan turunan S1–S3 (support) & R1–R3 (resistance). Alat bantu klasik, terutama intraday.`},
-  {cat:'Dasar Teknikal',t:'Fibonacci Retracement',d:`Level koreksi (38,2%, 50%, 61,8%) untuk menaksir area pullback dalam tren.`,n:`Bersifat heuristik populer, bukan hukum pasti.`},
+  {cat:'Dasar Teknikal',t:'Fibonacci Retracement',d:`Level koreksi (38,2%, 50%, 61,8%) untuk menaksir area pullback dalam tren. Di chart emiten, aplikasi ini menariknya dari <b>ayunan dominan</b> — ayunan terbesar yang sudah selesai — bukan dari dua pivot terakhir, karena itu yang ditarik manusia.`,n:`Diukur di aplikasi ini pada dua periode (786 emiten/2 tahun, 634/5 tahun): menyentuh level Fibonacci <b>tidak memberi keunggulan</b>. Dari tujuh kombinasi rasio-arah yang tandanya bertahan di kedua periode, <b>4 negatif dan 3 positif</b> — tandanya campur aduk dan rata-ratanya −0,19%, yaitu tidak membedakan apa pun. Yang paling buruk 23,6% dalam ayunan turun (−2,12%). Jadi garisnya dipakai sebagai acuan tempat harga pernah berbalik, bukan sebagai alasan membeli.`},
   // Sinyal & Skor
   {cat:'Sinyal & Skor',t:'AI Score',d:`Skor 0–100 yang merangkum kondisi teknikal saham (gabungan tren, momentum, volume, dll) jadi satu angka untuk orientasi cepat.`,n:`Ini RINGKASAN kondisi saat ini — bukan prediksi harga & bukan jaminan.`},
   {cat:'Sinyal & Skor',t:'Rating / Rekomendasi',d:`Label kualitatif turunan dari skor (mis. kuat / netral / lemah) untuk orientasi cepat.`,n:`Untuk orientasi, bukan ajakan transaksi.`},
@@ -7580,7 +7608,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v88';
+const APP_VERSION='v89';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

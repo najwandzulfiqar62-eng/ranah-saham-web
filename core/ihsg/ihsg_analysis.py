@@ -97,7 +97,8 @@ def _calculate_target_move(atr: float, current_price: float, confidence: str, is
     return f"{sign}{target_pct:.1f}%"
 
 
-def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> dict | None:
+def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame,
+                          df_fibo: pd.DataFrame | None = None) -> dict | None:
     """Analisis IHSG multi-teknik. df_daily dan df_weekly harus sudah
     didownload & dibersihkan oleh caller (period 3mo/1d dan 1y/1wk).
 
@@ -121,25 +122,83 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
     else:
         weekly_trend_bullish = None
 
-    # ===== 2. FIBONACCI =====
-    high_50 = df_daily["High"].tail(50).max() if len(df_daily) >= 50 else df_daily["High"].tail(20).max()
-    low_50 = df_daily["Low"].tail(50).min() if len(df_daily) >= 50 else df_daily["Low"].tail(20).min()
+    # ===== 2. FIBONACCI, DARI AYUNAN BERARAH =====
+    #
+    # SEBELUM INI: High.tail(50).max() dan Low.tail(50).min() -- tertinggi
+    # dan terendah dalam 50 bar, TANPA memedulikan mana yang lebih dulu.
+    # Itu persis cacat yang sudah diperbaiki untuk chart emiten: kalau
+    # puncaknya terjadi SEBELUM lembahnya, level "38,2% dari low ke high"
+    # mengukur gerakan yang tidak pernah terjadi ke arah itu.
+    #
+    # Akibatnya satu layar IHSG menampilkan DUA jawaban Fibonacci yang
+    # berbeda -- garis di chart (berarah, dari core/fibo.py) dan angka di
+    # panel "Level Kunci" (buta arah) -- dan yang buta arah itu yang
+    # menyumbang +-10 poin ke skor di bawah.
+    #
+    # Sekarang keduanya memakai mesin yang SAMA.
+    fib_arah = None
+    fib_382 = fib_500 = fib_618 = None
+    # HISTORI PANJANG kalau tersedia. df_daily cuma 3 bulan (~62 bar),
+    # sementara core/fibo.py dirancang mencari pivot dalam JENDELA=180
+    # bar -- diberi 62 bar ia bekerja pada sepertiga jendelanya, jadi
+    # ayunan dominan IHSG dicari di rentang yang jauh lebih pendek
+    # daripada yang dipakai emiten mana pun. Histori panjangnya sudah
+    # diambil endpoint-nya untuk backtest; ini tidak menambah satu pun
+    # pengambilan data.
+    _src = df_fibo if (df_fibo is not None
+                       and len(df_fibo) > len(df_daily)) else df_daily
+    try:
+        from core.fibo import hitung as _fibo_hitung
+        _fb = _fibo_hitung(
+            [str(x)[:10] for x in _src.index],
+            _src["High"].tolist(), _src["Low"].tolist(),
+            _src["Close"].tolist())
+    except Exception:
+        _fb = None
+    if _fb:
+        fib_arah = _fb.arah
+        _per = {round(L["rasio"], 3): L["harga"] for L in _fb.level
+                if L["jenis"] == "retracement"}
+        fib_382, fib_500, fib_618 = (_per.get(0.382), _per.get(0.5),
+                                     _per.get(0.618))
 
-    fib_range = high_50 - low_50
-    fib_382 = low_50 + fib_range * 0.382
-    fib_500 = low_50 + fib_range * 0.5
-    fib_618 = low_50 + fib_range * 0.618
+    # ===== 2b. POSISI DALAM RENTANG 50 BAR -- bukan Fibonacci =====
+    #
+    # Ini masukan untuk SKOR, dan ia dipisah dari level Fibonacci di atas
+    # karena keduanya mengukur hal yang BERBEDA.
+    #
+    # Namanya "fib_position" sejak versi bot Telegram lama, tapi yang
+    # dihitungnya adalah posisi harga dalam rentang 50 bar -- lebih mirip
+    # Stochastic atas rentang harga daripada kedalaman retracement.
+    # Rumusnya (low + range*rasio) memang memakai angka Fibonacci, tapi
+    # jangkarnya tertinggi/terendah satu jendela, bukan ayunan.
+    #
+    # KENAPA TIDAK DISATUKAN DENGAN LEVEL DI ATAS: keduanya tidak bisa
+    # dipetakan satu ke satu. Koreksi "dalam" pada ayunan NAIK berada di
+    # BAWAH rentang, sedangkan pada ayunan TURUN berada di ATAS-nya. Satu
+    # percobaan menyatukannya sudah membalik tanda skor ini tanpa satu pun
+    # error: ember di bawah mengandaikan rasio besar = harga tinggi, yang
+    # hanya benar untuk rumus rentang, bukan untuk retracement berarah.
+    #
+    # Hitungan dan bobotnya SENGAJA tidak diubah -- lihat catatan di
+    # bagian skor soal asumsi pembalikan-ke-rata-rata yang belum terukur.
+    _hi50 = (df_daily["High"].tail(50).max() if len(df_daily) >= 50
+             else df_daily["High"].tail(20).max())
+    _lo50 = (df_daily["Low"].tail(50).min() if len(df_daily) >= 50
+             else df_daily["Low"].tail(20).min())
+    _rg = _hi50 - _lo50
+    _r382, _r500, _r618 = (_lo50 + _rg * 0.382, _lo50 + _rg * 0.5,
+                           _lo50 + _rg * 0.618)
 
-    # CATATAN: nilai fib_position pakai "-" sbg pemisah (mis. "BELOW-382"),
-    # bukan underscore -- konvensi ini dipertahankan dari versi bot
-    # Telegram lama (underscore ganjil bikin parse_mode='Markdown' gagal
-    # total), tidak ada alasan diubah krn format ini tetap valid & sudah
-    # dipakai konsisten oleh frontend web saat ini.
-    if current_price > fib_618:
+    # Nilainya pakai "-" sbg pemisah (mis. "BELOW-382"), bukan underscore
+    # -- konvensi dari versi bot Telegram lama (underscore ganjil bikin
+    # parse_mode='Markdown' gagal total), dan sudah dipakai konsisten oleh
+    # frontend web saat ini.
+    if current_price > _r618:
         fib_position = "ABOVE-618"
-    elif current_price > fib_500:
+    elif current_price > _r500:
         fib_position = "BETWEEN-500-618"
-    elif current_price > fib_382:
+    elif current_price > _r382:
         fib_position = "BETWEEN-382-500"
     else:
         fib_position = "BELOW-382"
@@ -314,6 +373,17 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
     elif weekly_trend_bullish is False:
         bearish_score += 10
 
+    # ASUMSI YANG BELUM TERUKUR, dicatat supaya tidak lupa: "harga di
+    # bagian bawah rentang 50 bar" dibaca BULLISH, yaitu pembalikan ke
+    # rata-rata. Itu belum pernah diukur di tingkat indeks, dan
+    # pengukuran Fibonacci PER EMITEN di proyek ini justru mengarah
+    # sebaliknya -- menyentuh level retracement dalam ayunan turun
+    # berkinerja di bawah pasar (-2,12% pada 23,6%; lihat UNGGUL_FIBO di
+    # core/fibo.py).
+    #
+    # Tidak diubah di sini karena mengubahnya menggeser SETIAP vonis
+    # IHSG, dan itu keputusan yang harus diambil dengan angka di tangan,
+    # bukan disisipkan bersama perbaikan lain.
     if fib_position == "BELOW-382":
         bullish_score += 10
     elif fib_position == "BETWEEN-382-500":
@@ -477,9 +547,16 @@ def analyze_ihsg_advanced(df_daily: pd.DataFrame, df_weekly: pd.DataFrame) -> di
         "bb_position": round(_safe_float(bb_position, 50.0), 1),
         "bb_squeeze": is_bb_squeeze,
         "fib_position": fib_position,
-        "fib_382": round(fib_382, 0),
-        "fib_500": round(fib_500, 0),
-        "fib_618": round(fib_618, 0),
+        # Arah ayunannya ikut dikirim: "38,2%" pada ayunan naik dan pada
+        # ayunan turun adalah dua keadaan yang sama sekali berbeda, dan
+        # angka tanpa arah tidak bisa dibaca.
+        "fib_arah": fib_arah,
+        # None DITERUSKAN apa adanya, tidak dibulatkan dan tidak diganti
+        # nol: "tidak ada ayunan yang cukup besar" adalah pernyataan yang
+        # benar, sementara nol adalah harga yang salah.
+        "fib_382": None if fib_382 is None else round(fib_382, 0),
+        "fib_500": None if fib_500 is None else round(fib_500, 0),
+        "fib_618": None if fib_618 is None else round(fib_618, 0),
         "poc": round(poc, 0),
         "support_1": support_display[0],
         "support_2": support_display[1],
@@ -529,7 +606,11 @@ def analyze_ihsg_with_backtest(df_daily: pd.DataFrame, df_weekly: pd.DataFrame,
         backtest_condition, condition_ihsg_bullish_strong, condition_ihsg_bearish_strong,
     )
 
-    analysis = analyze_ihsg_advanced(df_daily, df_weekly)
+    # df_longer_history ikut diteruskan UNTUK FIBONACCI saja. Analisis
+    # teknikal utamanya tetap memakai df_daily, persis seperti sebelumnya
+    # -- yang berubah cuma jendela pencarian ayunan Fibonacci, yang pada
+    # 3 bulan terpotong jadi sepertiga dari yang dirancang.
+    analysis = analyze_ihsg_advanced(df_daily, df_weekly, df_longer_history)
     if analysis is None:
         return None
 

@@ -188,11 +188,18 @@ def nadi():
 
     import core.wa_alert as al
     al.ensure_alert_tables()
+    # wa_alert_kirim IKUT dibersihkan, dan itu bukan kerapian belaka.
+    # Tanpa ini, uji ujung-ke-ujung kedua yang mengirim peringatan yang
+    # SAMA akan ditahan oleh penjaga anti-ulang milik uji sebelumnya --
+    # keadaan yang sempat terbaca sebagai "nadinya tidak mencatat
+    # kiriman", padahal penjaganya yang justru sedang bekerja benar.
     with get_db() as c:
         c.execute("DELETE FROM wa_alert_nadi")
+        c.execute("DELETE FROM wa_alert_kirim")
     yield al
     with get_db() as c:
         c.execute("DELETE FROM wa_alert_nadi")
+        c.execute("DELETE FROM wa_alert_kirim")
 
 
 def test_nadi_kosong_sebelum_putaran_pertama(nadi):
@@ -320,3 +327,86 @@ def test_skrip_tetap_hanya_membaca():
     for bahaya in ("rm ", "DELETE", "DROP", "UPDATE ", "INSERT ",
                    "systemctl restart", "systemctl stop", "> $DB", "chmod"):
         assert bahaya not in kode, bahaya
+
+
+# ---------------------------------------------------------------------------
+# Ujung ke ujung: putaran sungguhan, bukan cuma bentuk panggilannya
+# ---------------------------------------------------------------------------
+# Penjaga AST di atas memastikan `sl` DIPASOK. Ia tidak memastikan bahwa
+# memasoknya benar-benar menghasilkan peringatan -- dan cacat aslinya
+# justru jenis yang lolos dari semua uji satuan: tiap bagian benar,
+# sambungannya tidak ada.
+#
+# Uji ini menjalankan _jalankan_alert_posisi() sungguhan, dengan satu
+# anggota, satu posisi, dan satu sinyal OPEN yang stopnya di atas harga
+# sekarang. Kalau peringatan "sl" tidak keluar, sambungannya putus lagi
+# di suatu tempat -- di mana pun itu.
+
+
+def _jalankan(monkeypatch, harga, sl_entry, sl_pct, posisi=None):
+    import asyncio
+
+    import core.access as access
+    import core.portofolio as porto
+    import core.whatsapp_notify as notify
+    import web.app as app_module
+
+    terkirim = []
+
+    monkeypatch.setattr(access, "list_users", lambda status="pending": [
+        {"id": 901, "name": "Uji", "phone": "628000000000"}])
+    monkeypatch.setattr(porto, "posisi_user", lambda uid: posisi or [
+        {"kode": "ZZG", "harga_avg": 1000.0, "lot": 10, "modal": 1_000_000}])
+
+    async def _baris(p):
+        return {**p, "harga": harga, "level": None}
+    monkeypatch.setattr(app_module, "_porto_baris", _baris)
+
+    async def _kirim(teks, to=None):
+        terkirim.append((teks, to))
+        return True
+    monkeypatch.setattr(notify, "send_wa_text", _kirim)
+
+    if sl_entry:
+        _rekam("ZZG", sl_entry, sl_pct)
+    asyncio.run(app_module._jalankan_alert_posisi())
+    return terkirim
+
+
+def test_putaran_penuh_menghasilkan_peringatan_stop(monkeypatch, sinyal, nadi):
+    """Entry 1000, stop 5% -> 950. Harga sekarang 940: di bawah stop.
+
+    Inilah keadaan yang selama ini TIDAK pernah menghasilkan apa pun."""
+    terkirim = _jalankan(monkeypatch, harga=940.0, sl_entry=1000.0, sl_pct=5.0)
+    assert len(terkirim) == 1, "peringatan stop tidak keluar"
+    teks, ke = terkirim[0]
+    assert ke == "628000000000", "harus JAPRI, bukan grup"
+    assert "stop" in teks.lower()
+    assert "Audit Sinyal" in teks
+
+
+def test_harga_di_atas_stop_tidak_memicu_apa_pun(monkeypatch, sinyal, nadi):
+    """Penjaga arah. Peringatan yang menyala saat harga AMAN jauh lebih
+    merusak daripada yang tidak menyala: bot yang salah bunyi akan
+    di-mute, dan sesudah di-mute yang benar pun tidak sampai."""
+    terkirim = _jalankan(monkeypatch, harga=990.0, sl_entry=1000.0, sl_pct=5.0)
+    assert terkirim == []
+
+
+def test_tanpa_sinyal_OPEN_tidak_ada_peringatan_stop(monkeypatch, sinyal, nadi):
+    """Tanpa rencana, tidak ada stop. Posisi -6% saja bukan alasan: itu
+    cuma kerugian berjalan, bukan batas yang pernah ditetapkan."""
+    terkirim = _jalankan(monkeypatch, harga=940.0, sl_entry=None, sl_pct=None)
+    assert terkirim == []
+
+
+def test_nadi_terisi_sesudah_putaran_sungguhan(monkeypatch, sinyal, nadi):
+    """Pertanyaan yang memulai semua ini -- "peringatan posisi pernah
+    berbunyi?" -- sekarang punya jawaban yang bisa dibaca dari basis
+    data, bukan disimpulkan dari ada-tidaknya sebuah tabel."""
+    _jalankan(monkeypatch, harga=940.0, sl_entry=1000.0, sl_pct=5.0)
+    r = nadi.baca_nadi()
+    assert r is not None, "putaran berjalan tapi tidak tercatat"
+    assert r["n_user"] == 1 and r["n_posisi"] == 1
+    assert r["n_berharga"] == 1 and r["n_ber_sl"] == 1
+    assert r["n_kirim"] == 1

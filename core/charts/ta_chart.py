@@ -26,7 +26,7 @@ from matplotlib.patches import Rectangle
 
 from core.indicators import (
     calculate_macd, calculate_stochastic, calculate_adx,
-    calculate_fibonacci_levels, calculate_support_resistance_deep,
+    calculate_support_resistance_deep,
 )
 from core.ai_score import calculate_ai_score_from_df
 from core.charts.chart_symbols import to_chart_safe
@@ -65,7 +65,35 @@ def generate_ta_chart(df, ticker: str, output_path: str = None) -> str | None:
         macd_line, signal_line, histogram = calculate_macd(df["Close"])
         stoch_k, stoch_d = calculate_stochastic(df)
         adx, plus_di, minus_di = calculate_adx(df)
-        fib = calculate_fibonacci_levels(df, lookback=min(90, len(df)))
+        # FIBONACCI BERARAH, mesin yang SAMA dengan chart interaktif.
+        #
+        # calculate_fibonacci_levels() mengambil High.max() dan Low.min()
+        # dalam 90 bar TANPA memedulikan mana yang lebih dulu -- kalau
+        # puncaknya terjadi sebelum lembahnya, level "38,2% dari low ke
+        # high" mengukur gerakan yang tidak pernah terjadi ke arah itu.
+        #
+        # Gambar ini dikirim lewat bot, jadi sebelum perbaikan ini satu
+        # saham pada satu hari punya DUA jawaban Fibonacci yang berbeda:
+        # satu di WhatsApp, satu di website.
+        #
+        # Tanpa ayunan yang cukup besar, `fib` jadi None dan garisnya
+        # tidak digambar -- gambar tanpa garis menyatakan "tidak ada
+        # ayunan", sementara garis dari jendela lama menyatakan sesuatu
+        # yang tidak benar.
+        fib = None
+        try:
+            from core.fibo import hitung as _fibo_hitung
+            _fb = _fibo_hitung([str(t)[:10] for t in df.index],
+                               df["High"].tolist(), df["Low"].tolist(),
+                               df["Close"].tolist())
+            if _fb:
+                _per = {round(L["rasio"], 3): L["harga"] for L in _fb.level
+                        if L["jenis"] == "retracement"}
+                if _per.get(0.382) is not None and _per.get(0.618) is not None:
+                    fib = {"fib_382": _per[0.382], "fib_618": _per[0.618],
+                           "arah": _fb.arah}
+        except Exception:
+            fib = None
         sr = calculate_support_resistance_deep(df)
         ai = calculate_ai_score_from_df(df)
 
@@ -111,9 +139,11 @@ def generate_ta_chart(df, ticker: str, output_path: str = None) -> str | None:
             series = df[ma_name]
             ax1.plot(x, series, color=color, linewidth=1.3, label=ma_name, alpha=0.95)
 
-        # Fibonacci levels (garis putus-putus tipis)
-        ax1.axhline(y=fib["fib_382"], color="#a29bfe", linestyle=":", linewidth=0.8, alpha=0.6)
-        ax1.axhline(y=fib["fib_618"], color="#a29bfe", linestyle=":", linewidth=0.8, alpha=0.6)
+        # Fibonacci levels (garis putus-putus tipis). Tidak ada ayunan =
+        # tidak ada garis.
+        if fib:
+            ax1.axhline(y=fib["fib_382"], color="#a29bfe", linestyle=":", linewidth=0.8, alpha=0.6)
+            ax1.axhline(y=fib["fib_618"], color="#a29bfe", linestyle=":", linewidth=0.8, alpha=0.6)
 
         # Support & Resistance (garis putus-putus, label di kanan).
         # CATATAN: kalau dua level berdekatan secara harga (bisa terjadi
@@ -170,12 +200,18 @@ def generate_ta_chart(df, ticker: str, output_path: str = None) -> str | None:
             f"Trend: {trend_label}",
             f"Stoch: K {last_stoch_k:.0f} D {last_stoch_d:.0f}",
             f"ADX: {last_adx:.0f}",
-            f"Fib 0.382: {fib['fib_382']:,.0f}",
-            f"Fib 0.618: {fib['fib_618']:,.0f}",
+            # Arah ayunannya DISEBUT. "38,2%" pada ayunan naik dan pada
+            # ayunan turun adalah dua keadaan yang berbeda, dan angka
+            # tanpa arah tidak bisa dibaca.
+            (f"Fib .382: {fib['fib_382']:,.0f} ({fib['arah']})" if fib
+             else "Fib: belum ada ayunan"),
+            (f"Fib .618: {fib['fib_618']:,.0f}" if fib else None),
             f"Skor: {skor_text}",
             f"Rekom: {rekom_text}",
         ]
-        info_text = "\n".join(info_lines)
+        # None dibuang: baris Fibonacci kedua tidak ada saat ayunannya
+        # tidak ada, dan "None" tercetak di gambar adalah kebocoran.
+        info_text = "\n".join(b for b in info_lines if b)
         ax1.text(0.98, 0.97, info_text, transform=ax1.transAxes,
                   fontsize=10, color="white", va="top", ha="right",
                   linespacing=1.7,

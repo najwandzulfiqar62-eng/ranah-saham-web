@@ -2266,7 +2266,7 @@ def _chart_overlay_payload(kode: str, df) -> dict:
     hari ini, dan kunci tanpa versi berarti kolom diam-diam kosong
     sesudah deploy, tanpa satu pun error.
     """
-    kunci = f"chartovl:v6:{(kode or '').upper()}"
+    kunci = f"chartovl:v7:{(kode or '').upper()}"
     hangat = _cache_get(kunci)
     if hangat is not None:
         return hangat
@@ -2605,7 +2605,7 @@ async def _analyze_payload(kode: str):
     # medan itu sampai TTL-nya habis -- dan gejalanya bukan error,
     # melainkan panel yang diam-diam kosong untuk sebagian pengunjung.
     # Kelas bug ini sudah tercatat di memori proyek.
-    cache_key = f"analyze:v7:{kode}"
+    cache_key = f"analyze:v8:{kode}"
     cached = _cache_get(cache_key)
 
     if cached is None:
@@ -3381,7 +3381,7 @@ async def report(kode: str):
 
 @app.get("/api/ihsg")
 async def ihsg():
-    cached = _cache_get("ihsg:analyze")
+    cached = _cache_get("ihsg:analyze:v2")
 
     if cached is None:
         try:
@@ -3438,6 +3438,7 @@ async def ihsg():
             "volume_trend": analysis.get("volume_trend"),
             "volume_ratio": analysis.get("volume_ratio"),
             "fib_position": analysis.get("fib_position"),
+            "fib_arah": analysis.get("fib_arah"),
             "fib_382": analysis.get("fib_382"), "fib_500": analysis.get("fib_500"),
             "fib_618": analysis.get("fib_618"),
             "poc": analysis.get("poc"),
@@ -3459,7 +3460,7 @@ async def ihsg():
             },
         }
         cached = _py(payload)
-        _cache_set("ihsg:analyze", cached)
+        _cache_set("ihsg:analyze:v2", cached)
 
     # Override harga IHSG dengan real-time setiap request (60-detik cache)
     rt = await _realtime_price("^JKSE")
@@ -3491,7 +3492,12 @@ async def ihsg_report():
         dl = await _clean("^JKSE", period="2y")
     except Exception:
         raise HTTPException(502, "Gagal mengambil data IHSG.")
-    analysis = analyze_ihsg_with_backtest(dd, dw, dl)
+    # DI WORKER THREAD. /api/ihsg (saudara endpoint ini) sudah begitu
+    # sejak lama; yang ini terlewat, dan ia memanggil hitungan yang sama
+    # beratnya -- analisis 10 teknik ditambah backtest 2 tahun -- langsung
+    # di event loop. Satu permintaan laporan IHSG karenanya menahan
+    # SELURUH pengunjung lain, bukan cuma dirinya sendiri.
+    analysis = await asyncio.to_thread(analyze_ihsg_with_backtest, dd, dw, dl)
     if not analysis:
         raise HTTPException(422, "Gagal menganalisis IHSG.")
 

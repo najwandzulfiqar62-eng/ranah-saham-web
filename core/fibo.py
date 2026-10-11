@@ -45,76 +45,118 @@ EXTENSION = (1.272, 1.618)
 JENDELA = 180
 
 # ===========================================================================
-# HASIL PENGUKURAN -- dan ia membenarkan perbaikan arahnya
+# HASIL PENGUKURAN -- DUA PERIODE, dan ia TIDAK mendukung Fibonacci
+# sebagai sinyal
 # ===========================================================================
-# Diukur 20 hari ke depan, jalan maju, per kejadian, 786 emiten,
-# dasar setanggal +3.35%. "Menyentuh" = dalam 2.0% dari levelnya.
+# Jalan maju, per kejadian, jeda antar-sampel sepanjang horizon, dasar
+# pembanding per TANGGAL. "Menyentuh" = dalam 2,0% dari levelnya, lalu
+# diukur 20 hari bursa ke depan.
 #
-#     Fibo 38,2% ayunan NAIK      +0.67%  (n=1,927)
-#     Fibo 38,2% ayunan TURUN     -1.24%  (n=1,578)
-#     Fibo 38,2% GABUNGAN ARAH    +0.04%  (n=2,940)   <- NOL
+#   2 tahun : 786 emiten, 220 bar terakhir, dasar pasar +3,35%
+#   5 tahun : 634 emiten, 900 bar terakhir, dasar pasar +1,61%
 #
-# DUA ARAHNYA BERLAWANAN, jadi menggabungkannya saling meniadakan. Dan
-# "gabungan arah" itu persis yang dihasilkan calculate_fibonacci_levels()
-# yang lama -- ia mengambil High.max() dan Low.min() tanpa memedulikan
-# mana yang lebih dulu.
+#   RASIO  ARAH     2 THN      n      5 THN      n    STATUS
+#   23,6%  naik     +0,61   1.459     +0,16   4.652   stabil
+#   23,6%  turun    -2,12   1.684     -0,85   6.019   stabil
+#   38,2%  naik     -1,06   1.828     -0,64   5.245   stabil
+#   38,2%  turun    -0,64     988     -0,51   4.051   stabil
+#   50%    naik     -0,60   1.517     -0,61   4.060   stabil
+#   50%    turun    +1,59     517     +0,53   2.292   stabil
+#   61,8%  naik     -0,19   1.273     +0,04   3.512   GOYAH
+#   61,8%  turun        -     360     -0,48   1.726   sepihak
+#   78,6%  naik     +0,90     534     +0,35   1.489   stabil
+#   78,6%  turun        -     135     +1,21     681   sepihak
 #
-# Artinya memperbaiki arahnya BUKAN kosmetik: ia selisih antara sinyal
-# (selisih 1,91 poin antara dua arah) dan derau (nol). Ini salah satu
-# selisih terbesar yang terukur di proyek ini.
+# KESIMPULANNYA BERTAHAN, dan sekarang lebih kuat daripada waktu cuma ada
+# satu periode: menyentuh level Fibonacci TIDAK memberi keunggulan.
 #
-# Rasio yang sampelnya di bawah 500 TIDAK dimasukkan -- 50% pada ayunan
-# turun cuma 109 kejadian, dan angka dari sampel sekecil itu tidak bisa
-# dibedakan dari kebetulan.
-# Kuncinya RASIO PECAHAN (0.382), sama dengan yang dipakai daftar
-# level di bawah. Sempat tersimpan sbg 38.2 -- pencariannya tidak
-# pernah cocok, dan layar diam-diam menulis "belum diukur" untuk
-# level yang sebenarnya SUDAH diukur.
-# ===========================================================================
-# HASIL PENGUKURAN -- dan ia TIDAK mendukung Fibonacci sbg sinyal
-# ===========================================================================
-# Diukur 20 hari ke depan, jalan maju, per kejadian, 786 emiten,
-# dasar setanggal +3.35%. "Menyentuh" = dalam 2.0% dari levelnya.
+# Dari tujuh sel yang tandanya bertahan di kedua periode, EMPAT negatif
+# dan TIGA positif -- tanda yang campur aduk, bukan arah. Rata-ratanya
+# -0,19% (2 thn) dan -0,22% (5 thn); ditimbang jumlah sampel, -0,57%.
+# Jadi bukan "umumnya merugikan", melainkan "tidak membedakan apa pun,
+# dengan kecenderungan tipis ke bawah".
 #
-#     23,6% naik   +0.61%   38,2% naik  -1.06%
-#     50%   naik   -0.60%   61,8% naik  -0.19%
-#     78,6% naik   +0.90%
-#     23,6% turun  -2.12%   38,2% turun -0.64%
-#     50%   turun  +1.59%
+# Satu sel memang buruk dan bukan kecil: 23,6% dalam ayunan turun,
+# -2,12% (2 thn) dan -0,85% (5 thn).
 #
-# TIDAK ADA POLA. Tandanya berganti-ganti antar-rasio tanpa urutan yang
-# masuk akal (23,6 positif, 38,2 negatif, 50 negatif, 61,8 negatif, 78,6
-# positif pada sisi naik). Itu sebaran acak, bukan struktur.
+# SATU HAL YANG MEMANG BERTAHAN, dan ia layak disebut apa adanya: 78,6%
+# satu-satunya rasio yang POSITIF di kedua arah pada kedua periode (naik
+# +0,90/+0,35, turun +3,58/+1,21 -- empat sel, satu tanda). 78,6% adalah
+# retracement TERDALAM, nyaris seluruh ayunan dikembalikan; secara teori
+# itu memang tempat orang yang masih percaya arah ayunannya menunggu.
 #
-# DAN INI MEMBATALKAN TEMUAN SEBELUMNYA. Pengukuran pertama -- waktu
-# ayunannya masih diambil dari pivot TERAKHIR -- memberi 38,2% naik
-# +0,67% dan turun -1,24%, dan selisih 1,91 poin itu sempat disebut
-# salah satu yang terbesar di proyek ini. Sesudah penjangkarannya
-# diperbaiki ke ayunan DOMINAN (perbaikan yang benar, karena itu yang
-# ditarik manusia), selisihnya LENYAP. Jadi selisih itu artefak
-# penjangkaran, bukan sifat pasar. Klaim lamanya batal, dan dicatat di
-# sini supaya tidak dipungut lagi dari riwayat commit.
+# TAPI BESARNYA MENGECIL SEPARUH dari 2 ke 5 tahun di keempat selnya, dan
+# satu selnya (78,6% turun, 2 thn) cuma 135 kejadian. Jadi yang bertahan
+# ARAHNYA, bukan ukurannya -- dan "arah yang bertahan" bukan angka yang
+# bisa dipakai menyusun rencana. Ia tidak dipajang sebagai keunggulan.
+#
+# 61,8% NAIK GOYAH: -0,19% jadi +0,04%. Keduanya praktis nol, dan itu
+# justru bacaan yang benar -- bukan "kadang untung kadang rugi",
+# melainkan tidak bisa dibedakan dari pasar.
+#
+# TEMUAN YANG BATAL, dicatat supaya tidak dipungut lagi dari riwayat
+# commit: pengukuran PERTAMA -- waktu ayunannya masih diambil dari pivot
+# TERAKHIR, bukan ayunan dominan -- memberi 38,2% naik +0,67% dan turun
+# -1,24%, dan selisih 1,91 poin itu sempat disebut salah satu yang
+# terbesar di proyek ini. Sesudah penjangkarannya dibetulkan (perbaikan
+# yang BENAR: ayunan dominan itu yang ditarik manusia), selisihnya
+# LENYAP -- kedua arah jadi negatif. Satu perbaikan metode menghapus
+# seluruh temuan. Selisih itu artefak penjangkaran, bukan sifat pasar.
+#
+# DUA BATAS YANG HARUS IKUT DIBACA:
+#
+#   1. 5 tahun MEMUAT 2 tahun. Jadi ini bukan dua sampel yang saling
+#      bebas, dan "tandanya sama" berarti "tambahan tiga tahun tidak
+#      membalikkannya" -- lebih lemah daripada dua periode terpisah,
+#      tapi cukup untuk menyingkirkan temuan yang hidup hanya karena
+#      satu rentang pendek tertentu. Pola chart dan SMC diukur dengan
+#      tumpang tindih yang sama, jadi ketiganya setara cara bacanya.
+#
+#   2. 5 tahun cuma memakai 634 dari 786 emiten, karena memindai 900 bar
+#      menuntut riwayat ~4 tahun. Yang tersisih emiten yang BARU
+#      tercatat -- jadi periode panjangnya sedikit berpihak pada
+#      perusahaan yang sudah lama bertahan. Arah temuannya tidak berubah
+#      karenanya (semua tanda yang stabil sudah stabil di 2 tahun, yang
+#      memakai 786 emiten), tapi besarnya di kolom 5 tahun tidak boleh
+#      dibaca sebagai angka seluruh bursa.
 #
 # AKIBATNYA untuk layar: garis Fibonacci tetap digambar sebagai ACUAN --
 # orang memang memakainya, dan ia menandai tempat yang bisa diperiksa
-# sendiri -- tapi TIDAK BOLEH disajikan sebagai sesuatu yang terukur
-# menguntungkan. Angkanya ditempel apa adanya, termasuk yang negatif.
+# sendiri -- tapi TIDAK disajikan sebagai sesuatu yang terukur
+# menguntungkan. Angkanya ditempel apa adanya, termasuk yang negatif,
+# dan yang GOYAH diberi tanda "⚠" di judul garisnya.
 #
-# Rasio bersampel < 500 tidak dimasukkan. "78,6% turun +3,58%" cuma 135
-# kejadian; dari lima belas sel yang diuji sekaligus, satu yang terlihat
-# luar biasa itu yang diharapkan muncul karena kebetulan.
+# Kuncinya RASIO PECAHAN (0.382), sama dengan yang dipakai daftar level
+# di bawah. Sempat tersimpan sbg 38.2 -- pencariannya tidak pernah
+# cocok, dan layar diam-diam menulis "belum diukur" untuk level yang
+# sebenarnya SUDAH diukur.
 UNGGUL_FIBO: dict[tuple[float, str], dict] = {
-    (0.236, "naik"): {"unggul_pct": 0.61, "n": 1459, "pct_positif": 42.5},
-    (0.236, "turun"): {"unggul_pct": -2.12, "n": 1684, "pct_positif": 38.4},
-    (0.382, "naik"): {"unggul_pct": -1.06, "n": 1828, "pct_positif": 41.0},
-    (0.382, "turun"): {"unggul_pct": -0.64, "n": 988, "pct_positif": 40.4},
-    (0.500, "naik"): {"unggul_pct": -0.6, "n": 1517, "pct_positif": 43.0},
-    (0.500, "turun"): {"unggul_pct": 1.59, "n": 517, "pct_positif": 41.4},
-    (0.618, "naik"): {"unggul_pct": -0.19, "n": 1273, "pct_positif": 42.5},
-    (0.786, "naik"): {"unggul_pct": 0.9, "n": 534, "pct_positif": 48.5},
+    (0.236, "naik"): {"unggul_pct": 0.61, "n": 1459, "pct_positif": 42.5, "status": "stabil", "unggul_5y": 0.16, "n_5y": 4652},
+    (0.236, "turun"): {"unggul_pct": -2.12, "n": 1684, "pct_positif": 38.4, "status": "stabil", "unggul_5y": -0.85, "n_5y": 6019},
+    (0.382, "naik"): {"unggul_pct": -1.06, "n": 1828, "pct_positif": 41.0, "status": "stabil", "unggul_5y": -0.64, "n_5y": 5245},
+    (0.382, "turun"): {"unggul_pct": -0.64, "n": 988, "pct_positif": 40.4, "status": "stabil", "unggul_5y": -0.51, "n_5y": 4051},
+    (0.5, "naik"): {"unggul_pct": -0.6, "n": 1517, "pct_positif": 43.0, "status": "stabil", "unggul_5y": -0.61, "n_5y": 4060},
+    (0.5, "turun"): {"unggul_pct": 1.59, "n": 517, "pct_positif": 41.4, "status": "stabil", "unggul_5y": 0.53, "n_5y": 2292},
+    (0.618, "naik"): {"unggul_pct": -0.19, "n": 1273, "pct_positif": 42.5, "status": "goyah", "unggul_5y": 0.04, "n_5y": 3512},
+    (0.618, "turun"): {"unggul_pct": -0.48, "n": 1726, "pct_positif": 40.8, "status": "sepihak", "unggul_5y": -0.48, "n_5y": 1726},
+    (0.786, "naik"): {"unggul_pct": 0.9, "n": 534, "pct_positif": 48.5, "status": "stabil", "unggul_5y": 0.35, "n_5y": 1489},
+    (0.786, "turun"): {"unggul_pct": 1.21, "n": 681, "pct_positif": 43.2, "status": "sepihak", "unggul_5y": 1.21, "n_5y": 681},
 }
+# Sampel di bawah ini tidak diberi angka. Lima rasio x dua arah diuji
+# sekaligus; dari sebanyak itu, satu sel yang terlihat luar biasa memang
+# DIHARAPKAN muncul karena kebetulan.
 MIN_N_FIBO = 500
-TANGGAL_UKUR_FIBO = "2026-10-12"
+TANGGAL_UKUR_FIBO = "2026-10-11"
+# Uji kestabilan: 2y (786 emiten, 220 bar)
+# vs 5y (634 emiten, 900 bar).
+# Dasar pasar 20 hari: +3.35% (2 thn),
+# +1.61% (5 thn).
+#
+# `status` tiap baris: "stabil" tandanya sama di kedua periode (satu-satunya
+# yang layak dibaca sebagai angka), "goyah" tandanya BERBALIK, "sepihak"
+# cuma cukup sampel di satu periode. 5 tahun MEMUAT 2 tahun, jadi "sama"
+# di sini berarti "tambahan tiga tahun tidak membalikkannya" -- bukan dua
+# sampel yang saling bebas.
 
 
 def unggul(rasio: float, arah: str) -> dict | None:
@@ -272,7 +314,13 @@ def hitung(tanggal: list, tinggi: list, rendah: list, tutup: list) -> Fibo | Non
                       "nama": f"Fibo {r * 100:.1f}%".replace(".0%", "%"),
                       # None = belum cukup sampel, BUKAN nol.
                       "unggul_pct": (u or {}).get("unggul_pct"),
-                      "n_ukur": (u or {}).get("n")})
+                      "n_ukur": (u or {}).get("n"),
+                      # "stabil" | "goyah" | "sepihak". Ikut dikirim karena
+                      # angka yang tandanya BERBALIK antar-periode tidak
+                      # boleh terbaca sama dengan angka yang bertahan --
+                      # dan di layar keduanya cuma selisih beberapa persen,
+                      # tidak ada yang membedakannya kalau tidak disebut.
+                      "status": (u or {}).get("status")})
     for r in EXTENSION:
         # Extension diukur MAJU dari ujung ayunan, searah ayunannya.
         harga = (h_akhir + rentang * (r - 1)) if arah == "naik" \

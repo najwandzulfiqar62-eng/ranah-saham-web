@@ -185,3 +185,168 @@ def test_angka_lama_tidak_boleh_kembali_tanpa_diukur_ulang():
     for k, v in lama.items():
         if k in fibo.UNGGUL_FIBO:
             assert fibo.UNGGUL_FIBO[k].get("unggul_pct") != v, k
+
+
+# ---------------------------------------------------------------------------
+# Uji kestabilan dua periode
+# ---------------------------------------------------------------------------
+# Fibonacci adalah yang TERAKHIR di aplikasi ini yang angkanya masih
+# berdiri di atas satu pengukuran. Pola chart dan SMC sudah lulus uji dua
+# periode sejak 11 Okt 2026; Fibonacci menyusul di sini.
+#
+# Dan justru Fibonacci yang punya riwayat paling buruk soal itu:
+# pengukuran pertamanya memberi selisih arah 1,91 poin yang LENYAP
+# seluruhnya begitu penjangkaran ayunannya dibetulkan (lihat
+# test_fibonacci_TIDAK_diklaim_punya_keunggulan di atas). Satu perbaikan
+# metode menghapus seluruh temuan. Uji di bawah ini menjaga agar angka
+# yang dipajang selalu menyatakan sendiri seberapa jauh ia bisa dipercaya.
+
+
+def test_tiap_baris_menyatakan_statusnya():
+    """Angka tanpa status terbaca sama kuat dengan angka yang bertahan di
+    dua periode. Itu perbedaan yang paling penting dan paling tidak
+    terlihat -- di layar keduanya cuma selisih beberapa persen."""
+    assert fibo.UNGGUL_FIBO, "tabel kosong; pengukuran belum digabung"
+    for k, v in fibo.UNGGUL_FIBO.items():
+        assert v.get("status") in ("stabil", "goyah", "sepihak"), (k, v)
+
+
+def test_stabil_berarti_tandanya_memang_sama():
+    """Bukan label yang ditempel tangan: "stabil" harus bisa dibuktikan
+    dari dua angka yang ada di baris itu sendiri."""
+    for k, v in fibo.UNGGUL_FIBO.items():
+        if v["status"] != "stabil":
+            continue
+        assert v["unggul_5y"] is not None, k
+        assert (v["unggul_pct"] > 0) == (v["unggul_5y"] > 0), k
+
+
+def test_goyah_berarti_tandanya_memang_berbalik():
+    for k, v in fibo.UNGGUL_FIBO.items():
+        if v["status"] != "goyah":
+            continue
+        assert v["unggul_5y"] is not None, k
+        assert (v["unggul_pct"] > 0) != (v["unggul_5y"] > 0), k
+
+
+def test_sampel_di_bawah_ambang_tidak_diberi_angka():
+    """Lima rasio x dua arah diuji sekaligus. Dari sepuluh sel, satu yang
+    terlihat luar biasa memang DIHARAPKAN muncul karena kebetulan --
+    "78,6% turun +3,58%" dengan n=135 adalah sel seperti itu."""
+    for k, v in fibo.UNGGUL_FIBO.items():
+        assert v["n"] >= fibo.MIN_N_FIBO, (k, v["n"])
+
+
+def test_level_membawa_status_ke_layar():
+    """Tanpa ini layar tidak punya cara membedakan keduanya, dan penandanya
+    tidak akan pernah muncul -- diam-diam, tanpa error."""
+    f = fibo.hitung(*_ayun(naik=True, besar=0.60))
+    ret = [x for x in f.level if x["jenis"] == "retracement"]
+    assert ret
+    for x in ret:
+        assert "status" in x
+
+
+def test_layar_menandai_angka_yang_goyah_DAN_yang_sepihak():
+    """Garis chart tidak bisa membawa tooltip, jadi penandanya harus ada
+    di TEKSNYA sendiri. Lencana yang sama dipakai panel pola:
+
+        ⚠ = tandanya BERBALIK antara 2 dan 5 tahun
+        · = cuma cukup sampel di SATU periode
+
+    Sepihak ikut ditandai. Tanpa itu baris yang cuma punya satu periode
+    terbaca sama dengan baris yang bertahan di dua periode -- kebalikan
+    dari yang seharusnya, karena buktinya paling tipis. Cacat yang sama
+    baru ditutup di panel pola hari ini."""
+    js = open("web/static/app.js", encoding="utf-8").read()
+    i = js.index("function _gambarFibo(")
+    # Sampai fungsi BERIKUTNYA, bukan sampai pemanggilan pertama
+    # _renderPolaChips: pemanggilan itu ada di jalur pulang-awal yang
+    # berdiri SEBELUM loop levelnya, jadi potongannya berhenti tepat
+    # sebelum bagian yang dijaga. Dan anggaran karakter tetap bukan
+    # gantinya -- itu kerapuhan yang sudah pecah di test_wa_alert.py.
+    blok = js[i:js.index("\nfunction ", i + 1)]
+    assert "status==='goyah'" in blok
+    assert "status==='sepihak'" in blok
+
+
+def test_gabungan_arah_dibuang_dari_tabel():
+    """Dua arah terukur BERLAWANAN, jadi "gabungan arah" saling
+    meniadakan dan angkanya tidak mengukur apa pun. Ia berguna cuma
+    sebagai pembanding di berkas hasil, bukan untuk dipajang."""
+    import io
+    import os
+    akar = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = io.open(os.path.join(akar, "tools", "gabung_ukur_fibo.py"),
+                  encoding="utf-8").read()
+    assert '"gabungan" in nama' in src and "continue" in src
+
+
+def test_kunci_cache_overlay_berversi():
+    """Medan `status` BARU di tiap level. Tanpa versi cache yang naik,
+    server yang masih memegang overlay lama menyajikan level TANPA medan
+    itu sampai TTL habis -- jadi tanda "⚠" tidak muncul untuk sebagian
+    pengunjung saja, tanpa error, dan selisihnya justru pada baris yang
+    paling perlu peringatan.
+
+    Ini jebakan yang sudah berulang di proyek ini: mengubah bentuk
+    payload tanpa menaikkan versi kuncinya bukan menghasilkan error,
+    melainkan kolom yang diam-diam kosong sesudah deploy."""
+    import re
+
+    import web.app as app_module
+    src = inspect.getsource(app_module._chart_overlay_payload)
+    m = re.search(r'f"chartovl:v(\d+):', src)
+    assert m, "kunci overlay tidak berversi"
+    assert int(m.group(1)) >= 7, (
+        f"versi masih v{m.group(1)}; medan `status` ditambahkan pada v7")
+
+
+def test_hitungan_di_catatan_cocok_dengan_tabelnya():
+    """KESALAHAN NYATA 12 Okt 2026: catatan di core/fibo.py dan dua teks
+    di layar menulis "LIMA negatif" dari tujuh baris stabil. Yang benar
+    EMPAT negatif dan TIGA positif.
+
+    Angka di kalimat penjelasan tidak punya penjaga apa pun -- ia
+    dihitung tangan sekali lalu tidak pernah diperiksa lagi, sementara
+    tabelnya diperbarui tiap pengukuran. Uji ini membuat kalimatnya ikut
+    terikat pada datanya."""
+    stabil = [v for v in fibo.UNGGUL_FIBO.values() if v["status"] == "stabil"]
+    n_neg = sum(1 for v in stabil if v["unggul_pct"] < 0)
+    n_pos = len(stabil) - n_neg
+    src = open("core/fibo.py", encoding="utf-8").read()
+    i = src.index("KESIMPULANNYA BERTAHAN")
+    blok = src[i:src.index("SATU HAL YANG MEMANG BERTAHAN", i)]
+    # Jumlahnya disebut dengan ANGKA atau dengan kata, keduanya diterima
+    # -- yang dijaga kebenarannya, bukan ejaannya.
+    kata = {4: "EMPAT", 3: "TIGA", 5: "LIMA", 2: "DUA", 6: "ENAM"}
+    assert (str(n_neg) in blok or kata.get(n_neg, "~") in blok), (
+        f"catatan tidak menyebut {n_neg} sel negatif")
+    assert (str(n_pos) in blok or kata.get(n_pos, "~") in blok), (
+        f"catatan tidak menyebut {n_pos} sel positif")
+    # Dan jumlah yang SALAH tidak boleh muncul.
+    assert "LIMA negatif" not in blok
+
+
+def test_angka_di_layar_cocok_dengan_tabelnya():
+    """Teks edukasi dan tooltip chart mengutip hasil pengukuran. Kalau
+    tabelnya berubah tapi kalimatnya tidak, layarnya membohongi pembaca
+    dengan angka yang dulu benar."""
+    stabil = [v for v in fibo.UNGGUL_FIBO.values() if v["status"] == "stabil"]
+    n_neg = sum(1 for v in stabil if v["unggul_pct"] < 0)
+    n_pos = len(stabil) - n_neg
+    rata = sum(v["unggul_pct"] for v in stabil) / len(stabil)
+    js = open("web/static/app.js", encoding="utf-8").read()
+    for penanda in ("DIUKUR DUA PERIODE", "Fibonacci Retracement"):
+        i = js.index(penanda)
+        blok = js[i:i + 1200]
+        assert f"{n_neg} negatif" in blok, (penanda, n_neg)
+        assert f"{n_pos} positif" in blok, (penanda, n_pos)
+        # Rata-rata disebut dengan koma desimal gaya Indonesia. Tanda
+        # minusnya dinormalkan: layar memakai minus tipografis (U+2212),
+        # sementara f-string Python menghasilkan hyphen ASCII. Keduanya
+        # sah, dan membedakannya cuma akan membuat penjaga ini menyala
+        # karena pilihan tipografi.
+        def _norm(t):
+            return t.replace("−", "-").replace(",", ".")
+        assert _norm(f"{rata:.2f}") in _norm(blok), (penanda, rata)

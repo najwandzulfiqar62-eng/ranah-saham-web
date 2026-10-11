@@ -28,17 +28,37 @@ from core.stock_data import load_tickers  # noqa: E402
 
 
 HORIZON = 20
-SCAN_BAR = 220
+# Periode, jendela pindai, dan berkas keluaran diatur lewat env supaya
+# pengukuran periode PANJANG bisa dijalankan tanpa menimpa hasil yang
+# sedang dipakai layar. Dua periode dipakai bersama sebagai UJI
+# KESTABILAN -- aturan yang sama dengan pola chart dan SMC:
+#
+#     stabil  = tandanya SAMA di kedua periode, sampel keduanya memadai
+#     goyah   = tandanya BERBALIK antar-periode
+#     sepihak = cuma cukup sampel di satu periode
+#
+# Fibonacci adalah yang TERAKHIR di aplikasi ini yang angkanya masih
+# berdiri di atas satu periode saja, dan sejarah proyek ini menunjukkan
+# itu persis keadaan yang paling sering menipu: pengukuran Fibonacci
+# yang PERTAMA memberi selisih arah 1,91 poin yang lenyap seluruhnya
+# begitu penjangkaran ayunannya dibetulkan.
+PERIODE = os.getenv("UKUR_PERIODE", "2y")
+# Berapa bar TERAKHIR yang dipindai per emiten. Pada periode 5 tahun
+# jendela ini dilebarkan -- memindai cuma 220 bar terakhir dari data 5
+# tahun membuang justru tiga tahun tambahan yang menjadi alasan
+# periode itu diukur.
+SCAN_BAR = int(os.getenv("UKUR_SCAN_BAR", "220"))
 EKOR = 320
 AMBANG_PCT = 2.0      # "menyentuh" = dalam jarak ini dari levelnya
 KELUARAN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "hasil_ukur_fibo.json")
+                        os.getenv("UKUR_KELUARAN", "hasil_ukur_fibo.json"))
 
 
 def main():
     tk = load_tickers()
     print(f"universe: {len(tk)}", flush=True)
-    raw = yf.download(tk, period="2y", interval="1d", progress=False,
+    print(f"periode {PERIODE} | pindai {SCAN_BAR} bar terakhir", flush=True)
+    raw = yf.download(tk, period=PERIODE, interval="1d", progress=False,
                       auto_adjust=False, threads=True, group_by="ticker")
 
     deret = {}
@@ -114,7 +134,8 @@ def main():
         })
     ringkas.sort(key=lambda r: -r["unggul_pct"])
     dasar_rata = sum(dasar.values()) / len(dasar)
-    json.dump({"horizon_hari": HORIZON, "n_emiten": len(deret),
+    json.dump({"horizon_hari": HORIZON, "periode": PERIODE,
+               "scan_bar": SCAN_BAR, "n_emiten": len(deret),
                "ambang_pct": AMBANG_PCT, "dasar_pct": round(dasar_rata, 2),
                "aturan": ringkas},
               open(KELUARAN, "w", encoding="utf-8"), ensure_ascii=False, indent=1)

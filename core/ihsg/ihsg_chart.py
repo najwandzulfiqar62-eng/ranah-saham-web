@@ -164,16 +164,37 @@ def generate_ihsg_advanced_chart(ihsg: pd.DataFrame, output_path: str = None) ->
         ax1.plot(x, ma50, color='#6bcb77', linewidth=1.5, label='MA50', alpha=0.9)
         ax1.fill_between(x, lower_bb, upper_bb, color='#4d4d4d', alpha=0.2)
 
-        high_50 = ihsg['High'].tail(50).max()
-        low_50 = ihsg['Low'].tail(50).min()
-        fib_range = high_50 - low_50
-        fib_382 = low_50 + fib_range * 0.382
-        fib_500 = low_50 + fib_range * 0.5
-        fib_618 = low_50 + fib_range * 0.618
-
-        ax1.axhline(y=fib_618, color='#ff6b6b', linestyle='--', alpha=0.5, label='Fib 61.8%')
-        ax1.axhline(y=fib_500, color='#ffd93d', linestyle='--', alpha=0.5, label='Fib 50%')
-        ax1.axhline(y=fib_382, color='#00d2ff', linestyle='--', alpha=0.5, label='Fib 38.2%')
+        # FIBONACCI BERARAH, mesin yang SAMA dengan chart interaktif dan
+        # analisis IHSG (core/fibo.py).
+        #
+        # Sebelum ini: High.tail(50).max() dan Low.tail(50).min() -- tanpa
+        # memedulikan mana yang lebih dulu. Gambar ini dikirim ke
+        # WhatsApp, jadi orang yang meminta chart lewat bot mendapat
+        # garis yang BERBEDA dari yang dilihatnya di website untuk hari
+        # yang sama -- dan yang dari bot dihitung dengan cara yang sudah
+        # diketahui salah.
+        #
+        # Tanpa ayunan yang cukup besar, garisnya TIDAK digambar. Gambar
+        # tanpa garis menyatakan "tidak ada ayunan"; garis yang salah
+        # menyatakan sesuatu yang tidak benar.
+        try:
+            from core.fibo import hitung as _fibo_hitung
+            _fb = _fibo_hitung([str(t)[:10] for t in ihsg.index],
+                               ihsg['High'].tolist(), ihsg['Low'].tolist(),
+                               ihsg['Close'].tolist())
+        except Exception:
+            _fb = None
+        if _fb:
+            _warna = {0.382: '#00d2ff', 0.5: '#ffd93d', 0.618: '#ff6b6b'}
+            for _L in _fb.level:
+                if _L['jenis'] != 'retracement':
+                    continue
+                _c = _warna.get(round(_L['rasio'], 3))
+                if not _c:
+                    continue
+                ax1.axhline(y=_L['harga'], color=_c, linestyle='--',
+                            alpha=0.5,
+                            label=f"Fib {_L['rasio'] * 100:.1f}% ({_fb.arah})")
 
         # Overlay SMC (BOS/CHoCH/OB/FVG) -- PURE VISUAL, lihat catatan
         # lengkap di awal file soal kenapa ini tidak masuk ke perhitungan

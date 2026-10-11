@@ -1,5 +1,7 @@
 {
  "horizon_hari": 20,
+ "periode": "2y",
+ "scan_bar": 220,
  "n_emiten": 786,
  "ambang_pct": 2.0,
  "dasar_pct": 3.35,

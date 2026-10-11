@@ -210,3 +210,30 @@ def test_wedge_akhirnya_bicara_arahnya():
     assert rw is not None, "Rising Wedge tembus hilang dari tabel"
     assert rw.get("arah_terukur") == "turun", (
         "rising wedge itu pola BEARISH; arah terukurnya harus turun")
+
+
+def test_baris_sepihak_tidak_mengklaim_kesepakatan_dua_periode():
+    """CACAT YANG DITUTUP 12 Okt 2026.
+
+    Layarnya memberi keterangan "Tandanya sama di 2 dan 5 tahun" kepada
+    SEMUA baris yang bukan 'goyah' -- termasuk 'sepihak', yang justru
+    berarti satu periodenya TIDAK punya cukup sampel untuk dibandingkan.
+
+    Jadi baris yang buktinya paling tipis adalah baris yang paling
+    meyakinkan keterangannya. Itu kebalikan dari yang seharusnya, dan ia
+    tidak terlihat dari mana pun: angkanya benar, tandanya benar, cuma
+    kalimat di belakangnya yang mengklaim lebih."""
+    js = open("web/static/app.js", encoding="utf-8").read()
+    i = js.index("const goyah = p.status==='goyah';")
+    # Batasnya PENANDA KODE, bukan anggaran karakter. Potongan sepanjang
+    # n karakter kebetulan cukup saat ditulis lalu pecah begitu fungsinya
+    # bertambah panjang -- kerapuhan yang sudah menggigit test_wa_alert.py
+    # pada hari yang sama dengan uji ini ditulis.
+    blok = js[i:js.index("ukur = `<b", i) + 400]
+    assert "p.status==='sepihak'" in blok, (
+        "baris sepihak tidak dibedakan; ia akan mengklaim kesepakatan "
+        "dua periode yang tidak pernah diuji")
+    # Cabang sepihak harus diputuskan SEBELUM keterangan kesepakatan,
+    # kalau tidak kesepakatan itu jadi jawaban bawaan untuk apa pun yang
+    # bukan goyah -- yaitu cacat yang baru saja ditutup.
+    assert blok.index("sepihak") < blok.index("Tandanya sama di 2 dan 5 tahun")

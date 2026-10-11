@@ -1,0 +1,115 @@
+{
+ "horizon_hari": 20,
+ "periode": "5y",
+ "scan_bar": 900,
+ "n_emiten": 634,
+ "ambang_pct": 2.0,
+ "dasar_pct": 1.61,
+ "aturan": [
+  {
+   "aturan": "Fibo 78.6% ayunan turun",
+   "n": 681,
+   "unggul_pct": 1.21,
+   "return_pct": 3.53,
+   "pct_positif": 43.2
+  },
+  {
+   "aturan": "Fibo 78.6% (gabungan arah)",
+   "n": 2160,
+   "unggul_pct": 0.62,
+   "return_pct": 2.12,
+   "pct_positif": 42.7
+  },
+  {
+   "aturan": "Fibo 50% ayunan turun",
+   "n": 2292,
+   "unggul_pct": 0.53,
+   "return_pct": 2.4,
+   "pct_positif": 43.1
+  },
+  {
+   "aturan": "Fibo 78.6% ayunan naik",
+   "n": 1489,
+   "unggul_pct": 0.35,
+   "return_pct": 1.48,
+   "pct_positif": 42.6
+  },
+  {
+   "aturan": "Fibo 23.6% ayunan naik",
+   "n": 4652,
+   "unggul_pct": 0.16,
+   "return_pct": 2.48,
+   "pct_positif": 42.9
+  },
+  {
+   "aturan": "Fibo 61.8% ayunan naik",
+   "n": 3512,
+   "unggul_pct": 0.04,
+   "return_pct": 1.53,
+   "pct_positif": 44.2
+  },
+  {
+   "aturan": "Fibo 61.8% (gabungan arah)",
+   "n": 5039,
+   "unggul_pct": -0.09,
+   "return_pct": 1.63,
+   "pct_positif": 43.1
+  },
+  {
+   "aturan": "Fibo 50% (gabungan arah)",
+   "n": 6167,
+   "unggul_pct": -0.17,
+   "return_pct": 1.72,
+   "pct_positif": 42.9
+  },
+  {
+   "aturan": "Fibo 23.6% (gabungan arah)",
+   "n": 10474,
+   "unggul_pct": -0.38,
+   "return_pct": 1.5,
+   "pct_positif": 41.9
+  },
+  {
+   "aturan": "Fibo 61.8% ayunan turun",
+   "n": 1726,
+   "unggul_pct": -0.48,
+   "return_pct": 1.57,
+   "pct_positif": 40.8
+  },
+  {
+   "aturan": "Fibo 38.2% ayunan turun",
+   "n": 4051,
+   "unggul_pct": -0.51,
+   "return_pct": 1.25,
+   "pct_positif": 43.1
+  },
+  {
+   "aturan": "Fibo 50% ayunan naik",
+   "n": 4060,
+   "unggul_pct": -0.61,
+   "return_pct": 1.28,
+   "pct_positif": 42.6
+  },
+  {
+   "aturan": "Fibo 38.2% (gabungan arah)",
+   "n": 8906,
+   "unggul_pct": -0.64,
+   "return_pct": 1.36,
+   "pct_positif": 42.6
+  },
+  {
+   "aturan": "Fibo 38.2% ayunan naik",
+   "n": 5245,
+   "unggul_pct": -0.64,
+   "return_pct": 1.53,
+   "pct_positif": 42.3
+  },
+  {
+   "aturan": "Fibo 23.6% ayunan turun",
+   "n": 6019,
+   "unggul_pct": -0.85,
+   "return_pct": 0.72,
+   "pct_positif": 41.0
+  }
+ ]
+}
