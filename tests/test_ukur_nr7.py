@@ -124,8 +124,22 @@ def test_ambangnya_DIBACA_dari_produksi_bukan_ditulis_ulang():
     dari produksi tanpa ada yang tahu -- dan yang terukur lalu bukan
     saringan yang dipajang."""
     src = _src()
-    assert "from core.screening_pro import (NR7_52W_LONGGAR_PCT" in src
-    assert "NR7_52W_NEAR_PCT, detect_nr7_52w" in src
+    # Diperiksa lewat IMPOR SUNGGUHAN, bukan bentuk barisnya: daftar impor
+    # bertambah panjang seiring harness berkembang (NR7_52W_WINDOW masuk
+    # saat kaki "52W tanpa NR7" ditambahkan), dan penjaga yang mengunci
+    # tata letak satu baris akan gagal karena pembungkusan baris -- bukan
+    # karena ada yang salah.
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(
+        "ukur_nr7_impor", os.path.join(AKAR, "tools", "ukur_nr7.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["ukur_nr7_impor"] = mod
+    spec.loader.exec_module(mod)
+    from core import screening_pro as sp
+    assert mod.NR7_52W_NEAR_PCT == sp.NR7_52W_NEAR_PCT
+    assert mod.NR7_52W_LONGGAR_PCT == sp.NR7_52W_LONGGAR_PCT
+    assert mod.NR7_52W_WINDOW == sp.NR7_52W_WINDOW
     kode = _kode_saja()
     for angka in ("0.98", "0.90"):
         assert angka not in kode, (
@@ -202,3 +216,108 @@ def test_detektor_menerima_range_tersempit_di_area_puncak():
                     "yang diuji di sini cuma arah penolakannya")
     assert r["is_nr7_52w"] is True
     assert r["nr7_sl_pct"] > 0
+
+
+def test_kaki_KEDEKATAN_52W_TANPA_NR7_ikut_diukur():
+    """KAKI YANG SEMPAT HILANG, dan ia yang menentukan nama teorinya.
+
+    Hasil jalan kedua: NR7 sendirian -0,13% dari 6.910 sampel -- sampel
+    sebesar itu dengan angka sedekat itu ke nol adalah pernyataan yang
+    kuat, bukan ketidaktahuan. Yang membawa angkanya justru kedekatan ke
+    puncak 52 minggu, dan ia menanjak rapi: <90% negatif, >=90% +1,16,
+    >=98% +2,13.
+
+    Tapi tanpa sel "52W >=98% TANPA NR7", tidak ada cara tahu apakah NR7
+    menyumbang apa pun. Kalau kedekatan saja sudah memberi +2%, maka
+    teori ini sebenarnya "beli yang dekat puncak 52 minggu" dan NR7 cuma
+    mengurangi jumlah sinyalnya.
+
+    detect_nr7_52w TIDAK bisa memberi kaki ini -- ia mengembalikan None
+    pada hari yang bukan NR7 -- jadi kedekatannya wajib dihitung
+    terpisah."""
+    src = _src()
+    assert "H. 52W >=98% SAJA (tanpa syarat NR7)" in src
+    assert "NR7 MENAMBAH PADA 52W" in src
+    kode = _kode_saja()
+    # Dihitung dari maksimum bergulir sendiri, bukan dari detektornya.
+    assert "rolling(NR7_52W_WINDOW, min_periods=1)" in kode
+
+
+def test_sel_A_benar_benar_tanpa_syarat_52W():
+    """CACAT YANG DITUTUP, dan ia terlihat dari angkanya sendiri: sel A
+    ("NR7 saja") dan sel D ("NR7 + 52W >=90%") sempat memberi hasil
+    IDENTIK -- +1,36% dengan n=594 keduanya. Dua sel yang seharusnya
+    berbeda mengukur himpunan yang sama.
+
+    Sebabnya detect_nr7_52w MENOLAK bar di bawah `dekat_pct`, dan
+    harness memanggilnya dengan 0,90. Jadi "NR7 saja" sebenarnya "NR7
+    DAN >=90%", dan labelnya mengklaim yang tidak dikerjakan kodenya."""
+    kode = _kode_saja()
+    assert "dekat_pct=0.0" in kode, (
+        "detektor masih menyaring kedekatan; sel A tidak akan pernah "
+        "berisi NR7 yang jauh dari puncak")
+    assert "A. NR7 saja (tanpa syarat 52W)" in _src()
+
+
+# ---------------------------------------------------------------------------
+# Hasilnya, dan klaim yang TIDAK boleh disandang
+# ---------------------------------------------------------------------------
+
+def test_angka_nr7_lulus_uji_dua_periode():
+    from core.screening_pro import UNGGUL_NR7_52W as U
+    assert U["stabil"] is True
+    assert (U["unggul_pct"] > 0) == (U["unggul_2y"] > 0), "tanda berbalik"
+    from core.screening_pro import MIN_N_NR7
+    assert U["n"] >= MIN_N_NR7, "sel yang dicatat sampelnya kurang"
+
+
+def test_kaki_52W_tercatat_JAUH_lebih_kuat_daripada_persilangannya():
+    """TEMUAN UTAMANYA, dan ia harus bisa dibuktikan dari angka di baris
+    itu sendiri -- bukan dari kalimat di komentarnya.
+
+    'Dekat puncak 52 minggu' TANPA NR7 memberi +5,07% (n=2.538);
+    ditambah syarat NR7 ia jatuh ke +0,71% (n=500). NR7 memotong sekitar
+    85% keunggulannya."""
+    from core.screening_pro import UNGGUL_NR7_52W as U
+    assert U["dekat52w_saja_pct"] > U["unggul_pct"]
+    assert abs((U["unggul_pct"] - U["dekat52w_saja_pct"])
+               - U["nr7_menambah_poin"]) < 0.02
+    assert U["nr7_menambah_poin"] < 0, "temuannya justru bahwa NR7 mengurangi"
+
+
+def test_nr7_sendirian_terukur_nol_dengan_sampel_besar():
+    """-0,37% dari 25.074 sampel. Sampel sebesar itu dengan angka sedekat
+    itu ke nol adalah pernyataan yang KUAT, bukan ketidaktahuan."""
+    from core.screening_pro import UNGGUL_NR7_52W as U
+    assert U["nr7_saja_n"] > 10_000
+    assert abs(U["nr7_saja_pct"]) < 1.0
+
+
+def test_premis_stop_ketat_TIDAK_diklaim():
+    """Premis NR7 adalah kontraksi volatilitas -> stop ketat. Diuji dua
+    periode, tandanya BERBALIK:
+        2 thn: stop <=4% +2,62% (n=93)  vs >4% -11,42% (n=4)
+        5 thn: stop <=4% +0,15% (n=475) vs >4%  +7,46% (n=44)
+    Dan sel yang mendukung premisnya di 2 tahun cuma n=4.
+
+    Saya sempat mengutipnya sebagai dukungan dari satu periode saja. Uji
+    ini mencegah klaim itu kembali -- ke tabelnya maupun ke layar."""
+    from core.screening_pro import UNGGUL_NR7_52W as U
+    assert U["stop_ketat_stabil"] is False
+    from core import lencana as lc
+    x = [y for y in lc.susun("X", nr7_aktif=True)["lencana"]
+         if y["kunci"] == "nr7"][0]
+    assert "stop ketat" not in x["catatan"], (
+        "layar mengklaim 'stop ketat' padahal premisnya tidak bertahan "
+        "di uji dua periode")
+
+
+def test_lencana_nr7_memajang_kakinya():
+    """+0,71% sendirian terbaca 'lumayan'. Di sebelah kakinya (+5,07%),
+    yang terbaca adalah bahwa syarat NR7 memotong 85% keunggulannya. Di
+    situlah maknanya, dan tanpa dipajang maknanya hilang."""
+    from core import lencana as lc
+    x = [y for y in lc.susun("X", nr7_aktif=True)["lencana"]
+         if y["kunci"] == "nr7"][0]
+    assert "TANPA syarat NR7" in x["catatan"]
+    assert "MENGURANGI" in x["catatan"]

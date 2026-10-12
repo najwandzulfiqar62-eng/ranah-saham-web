@@ -49,8 +49,12 @@ def test_lencana_membawa_angka_terukurnya():
     per = {x["kunci"]: x for x in r["lencana"]}
     assert per["vonis"]["unggul_pct"] == 0.8
     assert per["pemulihan"]["unggul_pct"] == 4.01
-    # NR7 belum diukur terpisah -> None, dan itu pernyataan yang benar.
-    assert per["nr7"]["unggul_pct"] is None
+    # NR7 SUDAH diukur sejak 12 Okt 2026. Baris ini sebelumnya menuntut
+    # None, dan itu benar SAAT ITU -- yang berubah buktinya, bukan
+    # prinsipnya. Sekarang angkanya wajib cocok dengan tabelnya.
+    from core.screening_pro import unggul_nr7_52w
+    assert per["nr7"]["unggul_pct"] == unggul_nr7_52w()["unggul_pct"]
+    assert per["nr7"]["n_ukur"] == unggul_nr7_52w()["n"]
 
 
 def test_vonis_tengah_tidak_dapat_lencana():

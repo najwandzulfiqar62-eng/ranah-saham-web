@@ -1,0 +1,75 @@
+{
+ "horizon_hari": 20,
+ "periode": "2y",
+ "n_emiten": 786,
+ "ketat_pct": 0.98,
+ "longgar_pct": 0.9,
+ "entry": "close sesi BERIKUTNYA sesudah bar NR7",
+ "dasar_pct": 3.34,
+ "aturan": [
+  {
+   "aturan": "A. NR7 saja (tanpa syarat 52W)",
+   "n": 6910,
+   "unggul_pct": -0.13,
+   "return_pct": 1.07,
+   "pct_positif": 44.1,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "B. NR7 + 52W >=98% (KETAT, yang dicatat)",
+   "n": 96,
+   "unggul_pct": 2.13,
+   "return_pct": 2.8,
+   "pct_positif": 44.8,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "C. NR7 + 52W <98%",
+   "n": 6880,
+   "unggul_pct": -0.15,
+   "return_pct": 1.04,
+   "pct_positif": 44.0,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "D. NR7 + 52W >=90% (longgar, tampilan)",
+   "n": 586,
+   "unggul_pct": 1.16,
+   "return_pct": 2.42,
+   "pct_positif": 43.9,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "E. KETAT, stop <=4%",
+   "n": 93,
+   "unggul_pct": 2.62,
+   "return_pct": 3.28,
+   "pct_positif": 46.2,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "F. KETAT, stop >4%",
+   "n": 4,
+   "unggul_pct": -11.42,
+   "return_pct": -11.78,
+   "pct_positif": 0.0,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "G. NR7 + 52W <90% (jauh dari puncak)",
+   "n": 6613,
+   "unggul_pct": -0.2,
+   "return_pct": 1.0,
+   "pct_positif": 43.9,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "H. 52W >=98% SAJA (tanpa syarat NR7)",
+   "n": 605,
+   "unggul_pct": 6.58,
+   "return_pct": 7.34,
+   "pct_positif": 45.1,
+   "cukup_sampel": true
+  }
+ ]
+}

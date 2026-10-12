@@ -139,10 +139,32 @@ def susun(kode: str, *, audit_aktif: bool = False, audit_sumber: tuple = (),
             n_ukur=(u or {}).get("n")))
 
     if nr7_aktif:
+        # ANGKANYA ADA sejak 12 Okt 2026, dan ia positif TAPI jauh lebih
+        # kecil daripada kakinya sendiri.
+        #
+        # Catatan lamanya berbunyi "stop ketat, breakout bisa gagal". Bagian
+        # "stop ketat" DICABUT: premis itu tidak bertahan saat diuji dua
+        # periode -- tandanya berbalik (2 thn mendukung dengan n=4, 5 thn
+        # justru sebaliknya). Menyebutnya sebagai sifat teori ini berarti
+        # mengklaim yang belum terukur.
+        #
+        # Yang dipajang: angkanya DAN kakinya. +0,71% sendirian terbaca
+        # "lumayan"; di sebelah "dekat puncak 52 minggu TANPA NR7 +5,07%",
+        # yang terbaca adalah bahwa syarat NR7 memotong sekitar 85%
+        # keunggulannya. Di situlah maknanya.
+        try:
+            from core.screening_pro import unggul_nr7_52w
+            n7 = unggul_nr7_52w()
+        except Exception:
+            n7 = {}
         out.append(Lencana(
             "nr7", "NR7 + 52W", True, "naik",
-            "kontraksi volatilitas di area tertinggi 52 minggu — "
-            "stop ketat, breakout bisa gagal"))
+            "kontraksi volatilitas di area tertinggi 52 minggu — terukur "
+            f"{n7.get('unggul_pct', 0):+.2f}%, sementara 'dekat puncak 52 "
+            f"minggu' TANPA syarat NR7 {n7.get('dekat52w_saja_pct', 0):+.2f}%: "
+            f"syarat NR7 MENGURANGI {abs(n7.get('nr7_menambah_poin', 0)):.2f} "
+            "poin. Breakout bisa gagal",
+            unggul_pct=n7.get("unggul_pct"), n_ukur=n7.get("n")))
 
     if minervini_harmonic_aktif:
         # ANGKANYA SUDAH ADA sejak 12 Okt 2026, dan ia negatif. Sebelumnya

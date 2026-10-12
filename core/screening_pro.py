@@ -471,6 +471,97 @@ NR7_52W_MIN_BARS = 240
 NR7_52W_WINDOW = 252
 
 
+# ===========================================================================
+# HASIL PENGUKURAN -- dan ia MEMBALIK nama teori ini
+# ===========================================================================
+# Diukur 12 Okt 2026, 786 emiten, dua periode, jalan maju, per setup dengan
+# jeda sepanjang horizon, dasar pembanding per TANGGAL ENTRY. Entry di sesi
+# BERIKUTNYA sesudah bar NR7 (begitu teorinya, dan begitu pula pencatat
+# sinyalnya). Harness: tools/ukur_nr7.py.
+#
+#                               2 TAHUN              5 TAHUN
+#   NR7 saja (tanpa 52W)        -0,13% (n=6.910)     -0,37% (n=25.074)
+#   NR7 + 52W <90%              -0,20% (n=6.613)     -0,44% (n=23.465)
+#   NR7 + 52W >=90%             +1,16% (n=  586)     +0,32% (n= 2.881)
+#   NR7 + 52W >=98%  <- dicatat +2,13% (n=   96)     +0,71% (n=   500)
+#   52W >=98% SAJA, tanpa NR7   +6,58% (n=  605)     +5,07% (n= 2.538)
+#
+# TIGA HAL, ketiganya bertahan di kedua periode:
+#
+# 1. NR7 SENDIRIAN TIDAK BERARTI APA-APA. -0,13% dan -0,37% dari 6.910 dan
+#    25.074 sampel. Sampel sebesar itu dengan angka sedekat itu ke nol
+#    adalah pernyataan yang KUAT, bukan ketidaktahuan: hari ber-range
+#    tersempit, dengan sendirinya, tidak memberi keunggulan apa pun.
+#
+# 2. KEDEKATAN KE PUNCAK 52 MINGGU YANG MEMBAWA SEGALANYA, dan ia menanjak
+#    BERJENJANG: <90% negatif, >=90% positif kecil, >=98% lebih besar.
+#    Tanjakan dosis-respons jauh lebih meyakinkan daripada satu ambang yang
+#    kebetulan bagus.
+#
+# 3. DAN NR7 JUSTRU MENGURANGINYA: -4,36 poin (5 thn), -4,45 poin (2 thn).
+#    Kedekatan 52W sendirian +5,07%; ditambah syarat NR7 ia jatuh ke
+#    +0,71%. NR7 memotong sekitar 85% keunggulannya.
+#
+# Jadi teori "NR7 + 52W High" sebenarnya "BELI YANG DEKAT PUNCAK 52
+# MINGGU", dan NR7-nya menumpang sambil merugikan.
+#
+# Kesimpulan itu TIDAK MUNGKIN didapat tanpa sel "52W saja" -- dan sel itu
+# sempat tidak ada di harness-nya. Mengukur persilangan dan SATU kakinya
+# lalu menyimpulkan tentang kaki yang lain adalah cara paling mudah salah
+# di seluruh pengukuran proyek ini; sudah terjadi dua kali dalam satu hari.
+#
+# PREMIS "STOP KETAT" TIDAK BERTAHAN, dan ini perlu disebut karena sempat
+# dikutip dari satu periode saja:
+#   2 thn: stop <=4% +2,62% (n=93)  vs  stop >4% -11,42% (n=4)
+#   5 thn: stop <=4% +0,15% (n=475) vs  stop >4%  +7,46% (n=44)
+# Tandanya BERBALIK antar-periode, dan sel yang mendukung premisnya di 2
+# tahun cuma n=4. Jadi premis itu BELUM TERUKUR, bukan terbukti.
+UNGGUL_NR7_52W = {
+    # Teori sebagaimana DICATAT (NR7 + 52W >= 98%).
+    "unggul_pct": 0.71, "n": 500,
+    "unggul_2y": 2.13, "n_2y": 96,
+    "stabil": True,                  # tandanya sama di 2 & 5 tahun
+    # KAKI-KAKINYA, dan di sinilah temuannya.
+    "nr7_saja_pct": -0.37, "nr7_saja_n": 25074,
+    "dekat52w_saja_pct": 5.07, "dekat52w_saja_n": 2538,
+    # Persilangan MINUS kaki 52W: seberapa banyak NR7 MENGURANGI.
+    "nr7_menambah_poin": -4.36,
+    # Premis stop ketat: tandanya berbalik antar-periode.
+    "stop_ketat_stabil": False,
+}
+
+# KAKI YANG TERNYATA PALING KUAT DI SELURUH APLIKASI INI, dicatat terpisah
+# karena ia bukan milik teori NR7 dan tidak boleh hilang bersamanya:
+# close >= 98% dari tertinggi 52 minggu, TANPA syarat lain apa pun.
+#
+#   +5,07% (5 thn, n=2.538)   +6,58% (2 thn, n=605)
+#
+# Bandingkan dengan yang lain di aplikasi ini: SMC BOS bullish +4,31%/
+# +3,30%, Bull Flag TEMBUS +4,93%/+3,26%, Minervini saja +0,78%/+0,69%.
+#
+# Ia BUKAN sumber sinyal (sumbernya TOP_PICK, SMART_MONEY, NR7_52W,
+# MINERVINI_HARMONIC) dan bukan pula tab saringan sendiri. Apakah ia layak
+# jadi salah satunya adalah keputusan produk, bukan kesimpulan pengukuran,
+# jadi tidak diputuskan di sini.
+UNGGUL_DEKAT_52W_SAJA = {
+    "unggul_pct": 5.07, "n": 2538,
+    "unggul_2y": 6.58, "n_2y": 605,
+    "ambang": NR7_52W_NEAR_PCT,
+    "stabil": True,
+}
+MIN_N_NR7 = 100
+
+
+def unggul_nr7_52w() -> dict:
+    """Angka terukur teori NR7 + 52W, beserta kaki-kakinya.
+
+    Selalu dict (bukan None): teori ini SUDAH diukur. "Belum diukur" dan
+    "diukur, dan kakinya sendiri jauh lebih baik" adalah dua pernyataan
+    yang sangat berbeda.
+    """
+    return dict(UNGGUL_NR7_52W)
+
+
 def detect_nr7_52w(df: pd.DataFrame, dekat_pct: float = NR7_52W_NEAR_PCT,
                    abaikan_bar_terakhir: bool = False) -> dict | None:
     """Deteksi setup NR7 + 52W High pada bar TERAKHIR df (harian). Return

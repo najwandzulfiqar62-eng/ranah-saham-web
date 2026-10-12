@@ -71,7 +71,8 @@ sys.path.insert(0, os.path.abspath("."))
 import yfinance as yf  # noqa: E402
 
 from core.screening_pro import (NR7_52W_LONGGAR_PCT, NR7_52W_MIN_BARS,  # noqa: E402
-                                NR7_52W_NEAR_PCT, detect_nr7_52w)
+                                NR7_52W_NEAR_PCT, NR7_52W_WINDOW,
+                                detect_nr7_52w)
 from core.stock_data import load_tickers  # noqa: E402
 
 HORIZON = 20
@@ -134,14 +135,48 @@ def main():
         n = len(cl)
         jeda = defaultdict(lambda: -999)
 
+        # KEDEKATAN 52W untuk SETIAP bar, lepas dari NR7. Dipakai mengukur
+        # kaki yang tidak bisa didapat dari detect_nr7_52w: fungsi itu
+        # mengembalikan None pada hari yang bukan NR7, jadi "dekat puncak
+        # TANPA NR7" tidak mungkin terbaca darinya.
+        #
+        # Jendelanya NR7_52W_WINDOW supaya definisinya sama dengan
+        # detektornya; min_periods=1 meniru tail(252).max() yang mengambil
+        # apa adanya kalau barisnya kurang dari 252.
+        hi52 = (df["High"].rolling(NR7_52W_WINDOW, min_periods=1)
+                .max().tolist())
+
         # i = bar NR7 (sudah tutup). Entry di bar i+1, jadi batasnya
         # dikurangi satu lagi.
         for i in range(MIN_RIWAYAT, n - HORIZON - 1):
+            # KAKI KEDUA diukur lebih dulu, karena ia TIDAK menuntut NR7.
+            # Tanpa sel ini, "NR7 + 52W" bisa terbaca sebagai temuan
+            # tentang NR7 padahal seluruh angkanya milik kedekatan 52W.
+            if hi52[i] > 0 and cl[i] >= hi52[i] * NR7_52W_NEAR_PCT:
+                j2 = i + 1
+                d2 = dasar.get(tg[j2])
+                if d2 is not None and cl[j2]:
+                    nm = "H. 52W >=98% SAJA (tanpa syarat NR7)"
+                    if i >= jeda[nm]:
+                        jeda[nm] = i + HORIZON
+                        r2 = (cl[j2 + HORIZON] - cl[j2]) / cl[j2] * 100
+                        hasil[nm].append((r2 - d2, r2))
+
             # abaikan_bar_terakhir=False: bar i di data historis SUDAH
             # tutup. Memakai True di sini akan menilai bar i-1 dan
             # menggeser seluruh pengukurannya satu hari.
+            # dekat_pct=0.0 -> detektor TIDAK menyaring kedekatan 52W
+            # sama sekali, jadi sel "NR7 saja" benar-benar tanpa syarat itu.
+            #
+            # CACAT YANG DITUTUP: harness ini sempat memanggilnya dengan
+            # NR7_52W_LONGGAR_PCT (0,90), dan detect_nr7_52w MENOLAK bar di
+            # bawah ambang itu. Jadi "NR7 saja" sebenarnya "NR7 DAN >=90%",
+            # dan pertanyaan "apakah syarat 52W menambah apa pun" tidak
+            # pernah terjawab. Terlihat dari hasilnya: sel A dan sel D
+            # memberi angka IDENTIK (+1,36%, n=594) -- dua sel yang
+            # seharusnya berbeda mengukur himpunan yang sama.
             try:
-                r = detect_nr7_52w(df.iloc[:i + 1], dekat_pct=NR7_52W_LONGGAR_PCT,
+                r = detect_nr7_52w(df.iloc[:i + 1], dekat_pct=0.0,
                                    abaikan_bar_terakhir=False)
             except Exception:
                 continue
@@ -159,16 +194,24 @@ def main():
             ret = (cl[j + HORIZON] - cl[j]) / cl[j] * 100
             lebih = ret - d
 
-            # Seberapa dekat 52W high pada bar NR7-nya. detect_nr7_52w
-            # dipanggil dengan ambang LONGGAR, jadi r selalu lolos >= 90%;
-            # ketatnya dibaca dari medan yang disediakannya sendiri supaya
-            # definisinya tidak diduplikasi di sini.
+            # KETAT dibaca dari medan yang disediakan detektornya sendiri
+            # -- definisinya miliknya, dan menghitungnya ulang di sini
+            # berarti dua definisi untuk satu aturan.
             ketat = bool(r.get("nr7_ketat"))
+            # LONGGAR dihitung dari jarak yang juga sudah dikembalikannya.
+            # pct_from_52w_high = (close/high52w - 1) * 100, jadi ">= 90%
+            # dari 52W high" berarti jaraknya >= -10 persen.
+            jarak = r.get("pct_from_52w_high")
+            longgar = (jarak is not None
+                       and jarak >= (NR7_52W_LONGGAR_PCT - 1) * 100)
 
-            sel = ["A. NR7 saja"]
+            sel = ["A. NR7 saja (tanpa syarat 52W)"]
             sel.append("B. NR7 + 52W >=98% (KETAT, yang dicatat)" if ketat
                        else "C. NR7 + 52W <98%")
-            sel.append("D. NR7 + 52W >=90% (longgar, tampilan)")
+            if longgar:
+                sel.append("D. NR7 + 52W >=90% (longgar, tampilan)")
+            else:
+                sel.append("G. NR7 + 52W <90% (jauh dari puncak)")
             # Lebar stop teorinya ikut dicatat: premis NR7 adalah "stop
             # ketat", dan kalau yang untung justru yang stopnya lebar maka
             # premisnya yang keliru, bukan angkanya.
@@ -216,7 +259,24 @@ def main():
         return next((r for r in ringkas if r["aturan"].startswith(awalan)), None)
 
     print()
-    b, c, d = _ambil("B."), _ambil("C."), _ambil("D.")
+    a, b, c, d = _ambil("A."), _ambil("B."), _ambil("C."), _ambil("D.")
+    h = _ambil("H.")
+    if a and b and a["cukup_sampel"] and b["cukup_sampel"]:
+        print(f"SYARAT 52W MENAMBAH PADA NR7: "
+              f"{b['unggul_pct'] - a['unggul_pct']:+.2f} poin "
+              f"(B {b['unggul_pct']:+.2f} vs A-tanpa-syarat "
+              f"{a['unggul_pct']:+.2f})")
+    if h and b and h["cukup_sampel"] and b["cukup_sampel"]:
+        beda = b["unggul_pct"] - h["unggul_pct"]
+        print(f"NR7 MENAMBAH PADA 52W: {beda:+.2f} poin "
+              f"(B {b['unggul_pct']:+.2f} vs H-tanpa-NR7 "
+              f"{h['unggul_pct']:+.2f})")
+        if beda <= 0:
+            print("  -> NR7 TIDAK menambah apa pun. Teori ini sebenarnya")
+            print("     'beli yang dekat puncak 52 minggu', dan NR7 cuma")
+            print("     mengurangi jumlah sinyalnya.")
+    elif h and not h["cukup_sampel"]:
+        print("H sampelnya kurang; sumbangan NR7 belum bisa dinilai.")
     if b and c and b["cukup_sampel"] and c["cukup_sampel"]:
         beda = b["unggul_pct"] - c["unggul_pct"]
         print(f"SYARAT 'DEKAT PUNCAK' MENAMBAH: {beda:+.2f} poin "
