@@ -221,15 +221,58 @@ def test_sinyal_mvh_yang_sudah_terbuka_tetap_diaudit():
     assert "source =" not in src and "source IN" not in src
 
 
-def test_lencana_mvh_menyebut_jedanya():
+def test_lencana_mvh_menyebut_jedanya_DAN_angkanya():
     """Lencana ini muncul dari sinyal MVH yang masih terbuka. Tanpa
     keterangan jedanya, ia terlihat seaktual lencana lain dan pembaca
     wajar mengira teorinya masih berjalan -- padahal yang ia lihat sisa
-    sinyal lama."""
+    sinyal lama.
+
+    VERSI PERTAMA UJI INI MENUNTUT unggul_pct IS NONE, dan itu benar
+    SAAT ITU: persilangannya belum diukur. Yang berubah buktinya, bukan
+    prinsipnya. Sejak 12 Okt 2026 angkanya ada (-0,37%, n=232, stabil di
+    dua periode), dan "belum diukur" jadi pernyataan yang SALAH.
+
+    Perbedaan keduanya penting: "belum diukur" mengundang pembaca
+    menebak, "diukur, hasilnya negatif" tidak."""
+    from core.harmonic import unggul_mvh
     r = lc.susun("X", minervini_harmonic_aktif=True)
     x = [y for y in r["lencana"] if y["kunci"] == "minervini_harmonic"][0]
     assert "DIJEDA" in x["catatan"]
-    assert x["unggul_pct"] is None, "jangan beri angka pada yang belum diukur"
+    u = unggul_mvh()
+    assert x["unggul_pct"] == u["unggul_pct"]
+    assert x["n_ukur"] == u["n"]
+
+
+def test_lencana_mvh_memajang_PELENGKAPNYA_bukan_cuma_angkanya():
+    """-0,37% sendirian masih bisa dibaca "ya sudah, kecil".
+
+    Dibandingkan dengan Minervini TANPA harmonic (+0,73%), yang terbaca
+    adalah bahwa syarat harmonic MENGURANGI 1,10 poin -- ia bukan filter
+    yang ketat, ia filter yang salah. Pembandingnya itu yang membawa
+    maknanya, dan tanpa dipajang maknanya hilang."""
+    r = lc.susun("X", minervini_harmonic_aktif=True)
+    x = [y for y in r["lencana"] if y["kunci"] == "minervini_harmonic"][0]
+    assert "TANPA harmonic" in x["catatan"]
+    assert "MENGURANGI" in x["catatan"]
+
+
+def test_angka_mvh_lulus_uji_dua_periode():
+    """Tandanya harus SAMA di 2 dan 5 tahun, dan sel pembandingnya pun.
+    Kalau pengukuran ulang suatu hari membalikkan salah satunya, klaim
+    "stabil" di core/harmonic.py tidak boleh lagi disandang."""
+    from core.harmonic import UNGGUL_MVH as U
+    assert U["stabil"] is True
+    assert (U["unggul_pct"] > 0) == (U["unggul_2y"] > 0), "tanda berbalik"
+    # Persilangannya harus LEBIH BURUK dari pelengkapnya -- itu seluruh
+    # temuannya, dan angkanya harus konsisten dengan selisih yang dicatat.
+    assert U["unggul_pct"] < U["tanpa_harmonic_pct"]
+    assert abs((U["unggul_pct"] - U["tanpa_harmonic_pct"])
+               - U["selisih_poin"]) < 0.02
+    # Dan kedua sel bersampel memadai di periode panjang; tanpa itu ini
+    # cuma arah, bukan angka.
+    from core.harmonic import MIN_N_HARMONIC
+    assert U["n"] >= MIN_N_HARMONIC
+    assert U["tanpa_harmonic_n"] >= MIN_N_HARMONIC
 
 
 def test_harness_pengukur_mvh_ada_dan_mengukur_PELENGKAPNYA():
@@ -255,3 +298,27 @@ def test_harness_pengukur_mvh_ada_dan_mengukur_PELENGKAPNYA():
     # diukur bukan teori yang dijalankan.
     assert 'os.getenv("MINERVINI_MIN_KRITERIA", "7")' in src
     assert "MAKS_UMUR_D = 10" in src
+
+
+def test_layar_saringan_minervini_memajang_angka_terukurnya():
+    """Minervini SENDIRIAN adalah keunggulan terukur terbesar bersampel
+    terbanyak di aplikasi ini: +0,78% (5 thn, n=2.438) dan +0,69%
+    (2 thn, n=570), tandanya sama di kedua periode.
+
+    Ia muncul dari pengukuran MVH -- sebagai sel pembanding -- dan
+    hampir hilang bersama kesimpulan tentang harmonic. Angka sebesar itu
+    yang tidak dipajang di layarnya sendiri adalah pengukuran yang
+    terbuang."""
+    import re
+    js = open("web/static/app.js", encoding="utf-8").read()
+    i = js.index("Trend template Minervini")
+    blok = js[i:i + 2200]
+    from core.harmonic import UNGGUL_MINERVINI_SAJA as U
+    # Angkanya DIBACA dari blok itu lalu dibandingkan dengan tabelnya --
+    # kalau pengukuran ulang menggeser angkanya, kalimat di layar ikut
+    # harus berubah. Kalimat yang mengutip angka tanpa penjaga akan
+    # menyimpang diam-diam; itu sudah terjadi pada "LIMA negatif" hari ini.
+    assert f"+{U['unggul_pct']:.2f}".replace(".", ",") in blok
+    assert f"{U['n']:,}".replace(",", ".") in blok
+    assert f"+{U['unggul_2y']:.2f}".replace(".", ",") in blok
+    assert re.search(r"dua periode|kedua periode", blok)

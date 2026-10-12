@@ -145,21 +145,33 @@ def susun(kode: str, *, audit_aktif: bool = False, audit_sumber: tuple = (),
             "stop ketat, breakout bisa gagal"))
 
     if minervini_harmonic_aktif:
-        # "dijeda" DISEBUT, dan itu bukan basa-basi. Lencana ini muncul
-        # dari sinyal MVH yang masih terbuka, dan sejak 12 Okt 2026 teori
-        # itu BERHENTI menerbitkan sinyal baru -- syaratnya harmonic
-        # bullish, sisi yang terukur -0,12% (di bawah pasar), sementara
-        # persilangannya dengan Minervini belum pernah diukur.
+        # ANGKANYA SUDAH ADA sejak 12 Okt 2026, dan ia negatif. Sebelumnya
+        # lencana ini mengirim unggul_pct=None ("belum diukur"); itu kini
+        # pernyataan yang SALAH, dan dua hal yang dibedakannya penting:
+        # "belum diukur" mengundang pembaca menebak, "diukur, hasilnya
+        # negatif" tidak.
         #
-        # Tanpa kalimat ini, pembaca melihat lencana yang terlihat
-        # seaktual lencana lain dan wajar mengira teorinya masih berjalan.
-        # Yang sedang ia lihat adalah sisa sinyal lama yang masih diaudit
-        # sampai selesai.
+        # Dan yang dipajang adalah PELENGKAPNYA, bukan cuma angkanya
+        # sendiri. -0,37% saja masih bisa dibaca "ya sudah, kecil".
+        # Dibandingkan dengan Minervini TANPA harmonic (+0,73%), yang
+        # terbaca adalah bahwa syarat harmonic MENGURANGI 1,10 poin --
+        # ia bukan filter yang ketat, ia filter yang salah.
+        #
+        # Lencana ini cuma muncul dari sinyal yang masih terbuka; teorinya
+        # sendiri sudah berhenti menerbitkan yang baru.
+        try:
+            from core.harmonic import unggul_mvh
+            u = unggul_mvh()
+        except Exception:
+            u = {}
         out.append(Lencana(
             "minervini_harmonic", "Minervini × Harmonic", True, "naik",
-            "lolos saringan tren Minervini DAN pola harmonic — "
-            "teori ini DIJEDA sejak 12 Okt 2026, belum terukur; "
-            "ini sinyal lama yang masih diaudit"))
+            "DIJEDA 12 Okt 2026 — terukur "
+            f"{u.get('unggul_pct', 0):+.2f}% sementara Minervini TANPA "
+            f"harmonic {u.get('tanpa_harmonic_pct', 0):+.2f}%: syarat "
+            f"harmonic MENGURANGI {abs(u.get('selisih_poin', 0)):.2f} poin. "
+            "Ini sinyal lama yang masih diaudit",
+            unggul_pct=u.get("unggul_pct"), n_ukur=u.get("n")))
 
     # Pasangan yang benar-benar MUNCUL BERSAMA di emiten ini -- bukan
     # seluruh daftar teori, cuma yang relevan sekarang.

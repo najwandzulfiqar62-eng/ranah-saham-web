@@ -2395,6 +2395,7 @@ async function loadScreenerPro(){
       : '<span class="muted">\u2014</span>'}</td></tr>`}).join('');
   body.innerHTML=`<section class="panel">
     <p class="insight muted" style="font-size:13px;margin-bottom:10px">Trend template Minervini: 8 kriteria struktur (MA, jarak dari 52W high/low) + RS vs IHSG + momentum. Dari ±178 saham likuid, yang masuk harus skor ≥65 <b>dan</b> minimal ${minKriteria} dari 8 kriteria terpenuhi. Tap baris untuk analisis.</p>
+    <p class="insight" style="font-size:12.5px;margin-bottom:10px" title="Diukur jalan maju di 249 emiten likuid, per setup dengan jeda 20 hari, dibanding rata-rata pasar pada TANGGAL YANG SAMA. Dua periode: +0,69% di 2 tahun (570 setup) dan +0,78% di 5 tahun (2.438 setup) — tandanya sama, sampelnya besar.&#10;&#10;Catatan penting: menambahkan syarat pola harmonic di atas saringan ini justru MENURUNKANNYA jadi −0,37%. Karena itu sumber sinyal 'Minervini × Harmonic' dijeda sejak 12 Okt 2026.">Terukur <b style="color:var(--bull)">+0,78%</b> di atas pasar dalam 20 hari bursa <span class="muted">(5 tahun, 2.438 setup; +0,69% di 2 tahun — tandanya sama di kedua periode)</span>. Ini saringan dengan sampel terukur terbesar di aplikasi ini.</p>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
       <span class="muted" style="font-size:12px;margin-right:2px">Potensi naik:</span>
       ${[0,10,15,20].map(v=>`<button class="chip ${mvMinPotensi===v?'active':''}" data-mvpot="${v}">${v?'≥'+v+'%':'Semua'}</button>`).join('')}
@@ -7608,7 +7609,7 @@ function _toggleNotifPanel(){
 // gagal kalau keduanya berbeda, supaya menaikkan satu tanpa yang lain tidak
 // mungkin lolos diam-diam. Ditampilkan di footer supaya "sudah deploy tapi
 // tampilan masih sama" bisa dibedakan dari "perbaikannya memang gagal".
-const APP_VERSION='v89';
+const APP_VERSION='v90';
 (()=>{ const el=document.getElementById('appVer'); if(el) el.textContent='Versi '+APP_VERSION; })();
 
 if('serviceWorker' in navigator){

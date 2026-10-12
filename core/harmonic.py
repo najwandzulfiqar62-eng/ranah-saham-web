@@ -328,6 +328,88 @@ UNGGUL_HARMONIC = {
 MIN_N_HARMONIC = 100
 
 
+# ===========================================================================
+# PERSILANGAN DENGAN MINERVINI (sumber sinyal MINERVINI_HARMONIC)
+# ===========================================================================
+# Diukur 12 Okt 2026, 249 emiten likuid, dua periode, jalan maju, per setup
+# dengan jeda sepanjang horizon, dasar pembanding per tanggal. Harness:
+# tools/ukur_mvh.py.
+#
+# PERTANYAANNYA BUKAN "apakah MVH untung". MVH menuntut DUA syarat, jadi
+# angka positif pada persilangannya tidak membuktikan apa pun tentang
+# harmonic -- bisa jadi seluruhnya datang dari Minervini sementara harmonic
+# cuma MENGURANGI JUMLAH sinyal. Pengurangan jumlah sinyal selalu terlihat
+# seperti penyaringan yang ketat. Karena itu PELENGKAPNYA ikut diukur pada
+# sampel yang sama.
+#
+#                           2 TAHUN            5 TAHUN
+#   Minervini >=7/8 saja    +0,69% (n=570)     +0,78% (n=2438)
+#   + harmonic bullish      -2,57% (n=45)      -0,37% (n=232)
+#   TANPA harmonic          +0,65% (n=565)     +0,73% (n=2415)
+#   selisih                 -3,22 poin         -1,10 poin
+#
+# TANDANYA SAMA DI KEDUA PERIODE, dan pada 5 tahun KEDUA sel bersampel
+# memadai (232 dan 2415). Jadi ini bukan arah saja -- ia angka.
+#
+# KESIMPULANNYA: syarat harmonic bullish MENGURANGI Minervini, bukan
+# menyaringnya. Minervini sendirian unggul +0,73%; ditambah syarat harmonic
+# ia jadi -0,37%. Harmonic bukan filter yang ketat, ia filter yang SALAH --
+# membuang sinyal secara sistematis merugikan.
+#
+# Konsisten dengan tabel di atas: sisi bullish harmonic diukur sendiri juga
+# negatif (-0,12%, n=414), dan sub-pola yang menanggung sebagian besar
+# sampelnya (ABCD, n=180) -0,41%.
+#
+# SEL BERSAMPEL KECIL TIDAK DIKUTIP, dan contoh paling jelas kenapa ada di
+# data ini sendiri: B/Butterfly 2 tahun memberi +11,94% dari n=2 -- padahal
+# return mentahnya -0,24%, jadi seluruh angka besar itu dari ketepatan
+# tanggal, bukan dari polanya.
+#
+# AKIBATNYA: pencatatan sinyal MVH DIJEDA (MVH_CATAT_AKTIF=0 di web/app.py,
+# keputusan penulis 12 Okt 2026) dan angka di bawah ini yang menjelaskan
+# kenapa ia sebaiknya tetap dijeda.
+UNGGUL_MVH = {
+    "unggul_pct": -0.37,          # 5 tahun; sampel memadai di kedua sel
+    "n": 232,
+    "unggul_2y": -2.57,
+    "n_2y": 45,
+    # Pelengkapnya -- inilah pembandingnya yang sesungguhnya.
+    "tanpa_harmonic_pct": 0.73,
+    "tanpa_harmonic_n": 2415,
+    "minervini_saja_pct": 0.78,
+    "minervini_saja_n": 2438,
+    "selisih_poin": -1.10,         # persilangan MINUS pelengkapnya
+    "stabil": True,                # tandanya sama di 2 & 5 tahun
+}
+
+# Angka terukur SATU KAKI yang ternyata justru kuat, dicatat di sini karena
+# ia muncul dari pengukuran yang sama dan tidak boleh hilang: saringan tren
+# Minervini SENDIRIAN unggul +0,78% (5 thn, n=2438) dan +0,69% (2 thn,
+# n=570) -- stabil, bersampel besar, dan lebih baik daripada persilangan
+# mana pun yang diuji di atas.
+#
+# Ia BUKAN sumber sinyal di aplikasi ini (sumbernya TOP_PICK, SMART_MONEY,
+# NR7_52W, MINERVINI_HARMONIC); ia cuma tab saringan. Apakah ia layak jadi
+# sumber sendiri adalah keputusan produk, bukan kesimpulan pengukuran, jadi
+# tidak diputuskan di sini.
+UNGGUL_MINERVINI_SAJA = {
+    "unggul_pct": 0.78, "n": 2438,
+    "unggul_2y": 0.69, "n_2y": 570,
+    "stabil": True,
+}
+
+
+def unggul_mvh() -> dict:
+    """Angka terukur persilangan Minervini x Harmonic.
+
+    Selalu mengembalikan dict (bukan None): persilangan ini SUDAH diukur,
+    dan hasilnya negatif. "Belum diukur" dan "diukur, hasilnya negatif"
+    adalah dua pernyataan yang sangat berbeda, dan yang kedua tidak boleh
+    tersaji sebagai yang pertama.
+    """
+    return dict(UNGGUL_MVH)
+
+
 def unggul_harmonic(pola: str, arah: str) -> dict | None:
     """Angka terukur pola harmonic, atau None kalau belum cukup sampel."""
     r = UNGGUL_HARMONIC.get((pola, arah)) or UNGGUL_HARMONIC.get(("SEMUA", arah))

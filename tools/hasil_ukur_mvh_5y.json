@@ -1,0 +1,84 @@
+{
+ "horizon_hari": 20,
+ "periode": "5y",
+ "n_emiten": 249,
+ "min_kriteria": 7,
+ "maks_umur_d": 10,
+ "ekor_bar": 245,
+ "hanya_likuid": true,
+ "dasar_pct": 1.19,
+ "aturan": [
+  {
+   "aturan": "A. Minervini saja",
+   "n": 2438,
+   "unggul_pct": 0.78,
+   "return_pct": 1.84,
+   "pct_positif": 39.5,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "B/Shark",
+   "n": 7,
+   "unggul_pct": 5.31,
+   "return_pct": 6.53,
+   "pct_positif": 42.9,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "B/Gartley",
+   "n": 23,
+   "unggul_pct": 2.42,
+   "return_pct": 4.49,
+   "pct_positif": 43.5,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "B/Butterfly",
+   "n": 9,
+   "unggul_pct": 1.2,
+   "return_pct": -0.83,
+   "pct_positif": 55.6,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "B. Minervini x Harmonic bullish",
+   "n": 232,
+   "unggul_pct": -0.37,
+   "return_pct": 0.87,
+   "pct_positif": 40.9,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "B/ABCD",
+   "n": 180,
+   "unggul_pct": -0.41,
+   "return_pct": 0.81,
+   "pct_positif": 41.7,
+   "cukup_sampel": true
+  },
+  {
+   "aturan": "B/Bat",
+   "n": 4,
+   "unggul_pct": -2.03,
+   "return_pct": -3.04,
+   "pct_positif": 25.0,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "B/Cypher",
+   "n": 11,
+   "unggul_pct": -8.74,
+   "return_pct": -6.38,
+   "pct_positif": 18.2,
+   "cukup_sampel": false
+  },
+  {
+   "aturan": "C. Minervini TANPA harmonic",
+   "n": 2415,
+   "unggul_pct": 0.73,
+   "return_pct": 1.77,
+   "pct_positif": 39.6,
+   "cukup_sampel": true
+  }
+ ]
+}
