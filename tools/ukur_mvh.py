@@ -208,16 +208,22 @@ def main():
         km = kriteria.tolist()
         n = len(cl)
 
-        # SATU jeda, dipakai bersama seluruh sel -- bukan satu jeda per
-        # sel. Versi pertama menyimpannya per sel, sehingga satu gerakan
-        # harga bisa menyumbang sampel B pada bar 100 dan sampel C pada
-        # bar 105: return 20 hari yang SEBAGIAN BESAR SAMA, dihitung di
-        # kedua sisi perbandingan yang justru sedang diuji. Itu merusak
-        # tepat angka yang dicari.
-        jeda = -999
+        # JEDA PER SEL -- metode baku di proyek ini (ukur_pola, ukur_smc,
+        # ukur_fibo ketiganya begini). Tiap sel internal tak-bertindih;
+        # tumpang tindih ANTAR-sel membuat kedua sampel berkorelasi, dan
+        # itu soal uji keberartian, bukan bias. Rata-rata tiap selnya
+        # tetap tak berbias.
+        #
+        # SATU JEDA BERSAMA PERNAH DICOBA DI SINI DAN ITU SALAH, dicatat
+        # supaya tidak dipungut lagi: dalam satu jendela 20 bar, bar
+        # PERTAMA yang lolos Minervini yang menang. Kalau bar itu tidak
+        # punya harmonic, ia tercatat sebagai C dan jendelanya melompat
+        # 20 bar -- maka kemunculan harmonic tiga bar kemudian tidak
+        # pernah tersampel. B kekurangan sampel secara sistematis, bukan
+        # karena pasar melainkan karena aturan pengambilannya. Hasilnya
+        # B cuma n=15: artefak harness, bukan pengukuran.
+        jeda = defaultdict(lambda: -999)
         for i in range(MIN_RIWAYAT, n - HORIZON):
-            if i < jeda:
-                continue
             if km[i] < MIN_KRITERIA:
                 continue
             d = dasar.get(tg[i])
@@ -225,13 +231,14 @@ def main():
                 continue
             ret = (cl[i + HORIZON] - cl[i]) / cl[i] * 100
             lebih = ret - d
-            jeda = i + HORIZON
 
-            # HARMONIC hanya dihitung di sini -- pada bar yang sudah lolos
-            # Minervini DAN sudah lewat jedanya. Potongannya berhenti di
-            # i: tidak ada satu bar masa depan yang terlihat. Awalnya
-            # dipotong EKOR bar ke belakang, jendela yang sama dengan
-            # yang dilihat produksi.
+            # HARMONIC dihitung di TIAP bar yang lolos Minervini. Harus
+            # begitu: kalau cuma dihitung pada bar yang lolos jeda, sel B
+            # kehilangan kemunculan yang jatuh di dalam jendela sel C.
+            #
+            # Potongannya berhenti di i (tidak satu bar masa depan yang
+            # terlihat) dan dimulai EKOR bar ke belakang -- jendela yang
+            # SAMA dengan yang dilihat produksi.
             awal = max(0, i - EKOR + 1)
             n_panggil_harmonic += 1
             try:
@@ -251,6 +258,9 @@ def main():
                 sel.append(f"B/{hm.get('pola')}")
 
             for nama in sel:
+                if i < jeda[nama]:
+                    continue
+                jeda[nama] = i + HORIZON
                 hasil[nama].append((lebih, ret))
 
     ringkas = []

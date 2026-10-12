@@ -138,32 +138,49 @@ def test_jendela_harmonic_sama_dengan_yang_dilihat_produksi():
     assert "awal = max(0, i - EKOR + 1)" in _src()
 
 
-def test_jeda_antar_sampel_sepanjang_horizon_dan_DIPAKAI_BERSAMA():
+def test_jeda_antar_sampel_PER_SEL():
     """PER SETUP, bukan per hari. Satu keadaan yang bertahan dua minggu
     harus dihitung SEKALI.
 
-    DAN SATU JEDA UNTUK SEMUA SEL, bukan satu per sel. Versi pertama
-    menyimpannya per sel, sehingga satu gerakan harga bisa menyumbang
-    sampel B pada bar 100 dan sampel C pada bar 105 -- return 20 hari
-    yang SEBAGIAN BESAR SAMA, dihitung di kedua sisi perbandingan yang
-    justru sedang diuji. Itu merusak tepat angka yang dicari."""
+    DAN JEDANYA PER SEL -- metode baku di proyek ini; ukur_pola,
+    ukur_smc, dan ukur_fibo ketiganya begini.
+
+    SATU JEDA BERSAMA PERNAH DICOBA DI SINI DAN ITU SALAH. Alasan yang
+    dipakai waktu itu ("tumpang tindih antar-sel membuat return yang
+    sama dihitung di kedua sisi") keliru menilai akibatnya: tumpang
+    tindih antar-sel membuat kedua sampel BERKORELASI, dan itu soal uji
+    keberartian, bukan bias -- rata-rata tiap selnya tetap tak berbias.
+
+    Sementara jeda bersama JUSTRU membiaskan, dan membiaskan tepat sel
+    yang paling sedikit sampelnya: dalam satu jendela 20 bar, bar
+    PERTAMA yang lolos Minervini yang menang; kalau bar itu tidak punya
+    harmonic ia tercatat C dan jendelanya melompat 20 bar, maka
+    kemunculan harmonic tiga bar kemudian tidak pernah tersampel.
+    Hasilnya B cuma n=15 -- artefak harness, bukan pengukuran."""
     src = _src()
-    assert "jeda = i + HORIZON" in src
-    assert "if i < jeda:" in src
-    # Bentuk per-sel tidak boleh kembali.
-    assert "jeda[nama]" not in src, (
-        "jeda per sel membuat sampel B dan C bisa bertindih")
+    assert "jeda = defaultdict(lambda: -999)" in src
+    assert "jeda[nama] = i + HORIZON" in src
+    assert "if i < jeda[nama]" in src
+    # Bentuk jeda-bersama tidak boleh kembali.
+    assert "\n        jeda = -999" not in src, (
+        "jeda bersama membiaskan sel B ke bawah; lihat docstring")
 
 
-def test_harmonic_dipanggil_SESUDAH_jedanya_bukan_sebelum():
-    """Bukan soal kecepatan saja. Memanggilnya sebelum jeda berarti
-    menghitung harmonic pada bar yang hasilnya memang akan dibuang --
-    dan pada 117 ms per panggilan, itulah yang membuat versi pertama
-    tidak selesai dalam dua jam."""
+def test_harmonic_dihitung_di_TIAP_bar_yang_lolos_minervini():
+    """Harus di tiap bar, bukan cuma di bar yang lolos jeda.
+
+    Kalau detect_harmonic cuma dipanggil sesudah jeda, sel B kehilangan
+    setiap kemunculan yang jatuh di dalam jendela sel C -- dan itu
+    bukan penghematan, itu kehilangan data pada sel yang paling tipis.
+
+    Yang menyelesaikan masalah 2 jam bukan ini, melainkan jendela 245
+    bar dan universe 250 emiten."""
     src = _src()
-    i_jeda = src.index("jeda = i + HORIZON")
     i_hm = src.index("detect_harmonic(df.iloc")
-    assert i_jeda < i_hm, "detect_harmonic dipanggil sebelum jedanya diperiksa"
+    i_jeda = src.index("jeda[nama] = i + HORIZON")
+    assert i_hm < i_jeda, (
+        "detect_harmonic dipanggil sesudah jeda; sel B akan kehilangan "
+        "kemunculan yang jatuh di dalam jendela sel C")
 
 
 def test_hasilnya_menyebut_bahwa_universenya_dibatasi():
