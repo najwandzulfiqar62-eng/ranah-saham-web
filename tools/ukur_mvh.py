@@ -89,6 +89,28 @@ MAKS_UMUR_D = 10
 # terdefinisi, dan memaksanya menghasilkan "lolos" yang palsu.
 MIN_RIWAYAT = 285
 
+# Jendela yang diberikan ke detect_harmonic. 245 ~ satu tahun bursa,
+# SAMA dengan yang dilihat produksi (api_screener_harmonic mengunduh
+# period="1y").
+#
+# Versi pertama mengirim SELURUH riwayat sampai bar i -- pada periode 2
+# tahun itu ~490 bar. Akibatnya bukan cuma lambat: pola yang butuh 400
+# bar untuk terbentuk tidak akan PERNAH terlihat produksi, tapi
+# terhitung di pengukuran. Yang terukur jadi bukan teori yang
+# dijalankan.
+EKOR = 245
+
+# Universe dibatasi, dan batasnya disebut di hasilnya. detect_harmonic
+# memakan ~117 ms per bar karena ia menelusuri kombinasi lima pivot,
+# bukan menghitung satu rumus. Batas yang SAMA dengan
+# tools/ukur_harmonic.py, supaya angkanya bisa dibandingkan dengan tabel
+# harmonic yang sudah ada.
+#
+# Angkanya HANYA berlaku untuk emiten likuid. Saham sepi punya harga
+# penutupan yang tidak mencerminkan harga yang bisa didapat, dan
+# menyebut hasilnya berlaku umum akan menjanjikan yang tidak diuji.
+N_EMITEN = int(os.getenv("UKUR_N_EMITEN", "250"))
+
 
 def _minervini_vektor(df: pd.DataFrame, pasar: pd.Series) -> pd.Series:
     """criteria_met (0-8) untuk SETIAP bar, dihitung vektor.
@@ -127,8 +149,9 @@ def _minervini_vektor(df: pd.DataFrame, pasar: pd.Series) -> pd.Series:
 
 
 def main():
-    tk = load_tickers()
-    print(f"universe: {len(tk)} | periode {PERIODE} | "
+    tk = load_tickers()[:N_EMITEN]
+    print(f"universe: {len(tk)} (dibatasi; HANYA emiten likuid) | "
+          f"periode {PERIODE} | "
           f"Minervini >= {MIN_KRITERIA}/8 | harmonic <= {MAKS_UMUR_D} bar",
           flush=True)
 
@@ -185,8 +208,16 @@ def main():
         km = kriteria.tolist()
         n = len(cl)
 
-        jeda = defaultdict(lambda: -999)
+        # SATU jeda, dipakai bersama seluruh sel -- bukan satu jeda per
+        # sel. Versi pertama menyimpannya per sel, sehingga satu gerakan
+        # harga bisa menyumbang sampel B pada bar 100 dan sampel C pada
+        # bar 105: return 20 hari yang SEBAGIAN BESAR SAMA, dihitung di
+        # kedua sisi perbandingan yang justru sedang diuji. Itu merusak
+        # tepat angka yang dicari.
+        jeda = -999
         for i in range(MIN_RIWAYAT, n - HORIZON):
+            if i < jeda:
+                continue
             if km[i] < MIN_KRITERIA:
                 continue
             d = dasar.get(tg[i])
@@ -194,35 +225,32 @@ def main():
                 continue
             ret = (cl[i + HORIZON] - cl[i]) / cl[i] * 100
             lebih = ret - d
+            jeda = i + HORIZON
 
             # HARMONIC hanya dihitung di sini -- pada bar yang sudah lolos
-            # Minervini. Potongan df-nya berhenti di i: tidak ada satu bar
-            # masa depan yang terlihat.
+            # Minervini DAN sudah lewat jedanya. Potongannya berhenti di
+            # i: tidak ada satu bar masa depan yang terlihat. Awalnya
+            # dipotong EKOR bar ke belakang, jendela yang sama dengan
+            # yang dilihat produksi.
+            awal = max(0, i - EKOR + 1)
             n_panggil_harmonic += 1
             try:
-                pola = detect_harmonic(df.iloc[:i + 1]) or []
+                pola = detect_harmonic(df.iloc[awal:i + 1]) or []
             except Exception:
                 pola = []
-            ada_hm = any(p.get("arah") == "bullish"
-                         and (p.get("bar_sejak_d") or 99) <= MAKS_UMUR_D
-                         for p in pola)
+            hm = next((p for p in pola
+                       if p.get("arah") == "bullish"
+                       and (p.get("bar_sejak_d") or 99) <= MAKS_UMUR_D), None)
 
             sel = ["A. Minervini saja"]
-            sel.append("B. Minervini x Harmonic bullish" if ada_hm
+            sel.append("B. Minervini x Harmonic bullish" if hm
                        else "C. Minervini TANPA harmonic")
-            if ada_hm:
+            if hm:
                 # Per pola, supaya terlihat apakah salah satu bentuk yang
                 # menanggung seluruh angkanya.
-                for p in pola:
-                    if (p.get("arah") == "bullish"
-                            and (p.get("bar_sejak_d") or 99) <= MAKS_UMUR_D):
-                        sel.append(f"B/{p.get('pola')}")
-                        break
+                sel.append(f"B/{hm.get('pola')}")
 
             for nama in sel:
-                if i < jeda[nama]:
-                    continue
-                jeda[nama] = i + HORIZON
                 hasil[nama].append((lebih, ret))
 
     ringkas = []
@@ -241,7 +269,8 @@ def main():
     with open(KELUARAN, "w", encoding="utf-8") as f:
         json.dump({"horizon_hari": HORIZON, "periode": PERIODE,
                    "n_emiten": len(deret), "min_kriteria": MIN_KRITERIA,
-                   "maks_umur_d": MAKS_UMUR_D,
+                   "maks_umur_d": MAKS_UMUR_D, "ekor_bar": EKOR,
+                   "hanya_likuid": True,
                    "dasar_pct": round(dasar_rata, 2),
                    "aturan": ringkas}, f, ensure_ascii=False, indent=1)
 

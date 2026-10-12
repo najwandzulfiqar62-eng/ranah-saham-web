@@ -116,20 +116,63 @@ def _src():
 
 
 def test_tidak_mengintip_masa_depan():
-    """detect_harmonic harus menerima potongan yang berhenti DI BAR ITU.
-    Memberinya seluruh df akan membuat pola yang baru terbentuk minggu
-    depan terlihat sudah ada hari ini -- dan hasilnya akan tampak
-    cemerlang justru karena salah."""
-    assert "df.iloc[:i + 1]" in _src()
+    """Potongan yang diberikan ke detect_harmonic harus BERHENTI di bar
+    itu. Memberinya potongan yang melewati i akan membuat pola yang baru
+    terbentuk minggu depan terlihat sudah ada hari ini -- dan hasilnya
+    akan tampak cemerlang justru karena salah."""
+    assert "df.iloc[awal:i + 1]" in _src()
 
 
-def test_jeda_antar_sampel_sepanjang_horizon():
+def test_jendela_harmonic_sama_dengan_yang_dilihat_produksi():
+    """CACAT YANG DIPERBAIKI. Versi pertama mengirim SELURUH riwayat
+    sampai bar i -- pada periode 2 tahun itu ~490 bar. Produksi memberi
+    detect_harmonic period="1y" (~245 bar).
+
+    Akibatnya bukan cuma lambat (dan versi pertama memang tidak selesai
+    dalam 2 jam): pola yang butuh 400 bar untuk terbentuk tidak akan
+    PERNAH terlihat produksi, tapi terhitung di pengukuran. Yang terukur
+    jadi bukan teori yang dijalankan."""
+    mod = _muat_harness()
+    assert 220 <= mod.EKOR <= 260, (
+        f"EKOR={mod.EKOR}; produksi melihat ~245 bar (period='1y')")
+    assert "awal = max(0, i - EKOR + 1)" in _src()
+
+
+def test_jeda_antar_sampel_sepanjang_horizon_dan_DIPAKAI_BERSAMA():
     """PER SETUP, bukan per hari. Satu keadaan yang bertahan dua minggu
-    harus dihitung SEKALI. Jebakan ini sudah menggigit proyek ini
-    berkali-kali, dan ia selalu melebih-lebihkan."""
+    harus dihitung SEKALI.
+
+    DAN SATU JEDA UNTUK SEMUA SEL, bukan satu per sel. Versi pertama
+    menyimpannya per sel, sehingga satu gerakan harga bisa menyumbang
+    sampel B pada bar 100 dan sampel C pada bar 105 -- return 20 hari
+    yang SEBAGIAN BESAR SAMA, dihitung di kedua sisi perbandingan yang
+    justru sedang diuji. Itu merusak tepat angka yang dicari."""
     src = _src()
-    assert "jeda[nama] = i + HORIZON" in src
-    assert "if i < jeda[nama]" in src
+    assert "jeda = i + HORIZON" in src
+    assert "if i < jeda:" in src
+    # Bentuk per-sel tidak boleh kembali.
+    assert "jeda[nama]" not in src, (
+        "jeda per sel membuat sampel B dan C bisa bertindih")
+
+
+def test_harmonic_dipanggil_SESUDAH_jedanya_bukan_sebelum():
+    """Bukan soal kecepatan saja. Memanggilnya sebelum jeda berarti
+    menghitung harmonic pada bar yang hasilnya memang akan dibuang --
+    dan pada 117 ms per panggilan, itulah yang membuat versi pertama
+    tidak selesai dalam dua jam."""
+    src = _src()
+    i_jeda = src.index("jeda = i + HORIZON")
+    i_hm = src.index("detect_harmonic(df.iloc")
+    assert i_jeda < i_hm, "detect_harmonic dipanggil sebelum jedanya diperiksa"
+
+
+def test_hasilnya_menyebut_bahwa_universenya_dibatasi():
+    """Angkanya HANYA berlaku untuk emiten likuid. Saham sepi punya harga
+    penutupan yang tidak mencerminkan harga yang bisa didapat, dan
+    menyebut hasilnya berlaku umum akan menjanjikan yang tidak diuji."""
+    src = _src()
+    assert '"hanya_likuid": True' in src
+    assert "HANYA emiten likuid" in src
 
 
 def test_dasar_pembanding_per_tanggal():
